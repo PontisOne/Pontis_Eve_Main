@@ -1,6 +1,7 @@
 const path = require("path");
 const { defineConfig, transformWithEsbuild } = require("vite");
 const react = require("@vitejs/plugin-react");
+const { visualizer } = require("rollup-plugin-visualizer");
 
 const HEALTH_CHECK_ENABLED = "true";
 
@@ -38,7 +39,7 @@ function healthCheckPlugin(enabled) {
   };
 }
 
-module.exports = defineConfig(() => ({
+module.exports = defineConfig(({ mode }) => ({
   plugins: [
     healthCheckPlugin(isHealthCheckEnabled()),
     {
@@ -51,6 +52,16 @@ module.exports = defineConfig(() => ({
       },
     },
     react(),
+    ...(mode === "analyze"
+      ? [
+          visualizer({
+            filename: "build/bundle-analysis.html",
+            open: false,
+            gzipSize: true,
+            brotliSize: true,
+          }),
+        ]
+      : []),
   ],
   resolve: {
     alias: {

@@ -19,7 +19,7 @@ This inventory is cross-checked against `package.json`, the frontend configurati
 - **Forms and interaction:** The app uses Sonner notifications, Framer Motion, `react-resizable-panels`, and `lucide-react`. Shared UI components also import React Hook Form, Embla Carousel, `input-otp`, and `next-themes`; the latter is used by a reusable toast wrapper and does not mean the app uses Next.js.
 - **Product integrations:** Voice intake uses Vapi through the `useVapi` hook, which imports the Web SDK. `libphonenumber-js` supports phone input, DOMPurify sanitizes job-description content, and Dashboard uses PDF.js to render resume previews.
 - **Testing:** Vitest, JSDOM, and React Testing Library (`@testing-library/react`, `@testing-library/dom`, `@testing-library/user-event`, and `@testing-library/jest-dom`).
-- **Quality tooling:** The root pre-commit hooks run Biome on staged frontend source/config files, the explicitly scoped TypeScript check, Vitest, and Gitleaks. TypeScript currently checks only `src/lib/apiConfig.js`; the rest of the JavaScript/JSX application is not type-checked.
+- **Quality tooling:** Rollup Visualizer generates an opt-in bundle report through `yarn build:analyze`. The root pre-commit hooks run Biome on staged frontend source/config files, the explicitly scoped TypeScript check, Vitest, and Gitleaks. TypeScript currently checks only `src/lib/apiConfig.js`; the rest of the JavaScript/JSX application is not type-checked.
 
 `package.json` also declares dependencies for which no direct imports were found in `src/`, including `@hookform/resolvers`, `date-fns`, `dayjs`, `html2canvas`, `jspdf`, `lodash`, `recharts`, and `swr`. This does not rule out indirect use by dependencies.
 
@@ -39,6 +39,16 @@ VITE_BACKEND_URL=http://localhost:8000
 ```
 
 The checked-in `frontend/.env.production` supplies `VITE_BACKEND_URL` for production builds. `VITE_BACKEND_URL` is required and validated as an HTTP(S) URL when the API configuration module loads; the API client appends `/api`. Vite exposes variables beginning with `VITE_` in the client bundle, so do not put server secrets or OAuth client secrets in frontend environment files.
+
+## Bundle analysis
+
+The normal production build does not generate analysis output. To create an interactive Rollup bundle report, run:
+
+```bash
+yarn build:analyze
+```
+
+Open `frontend/build/bundle-analysis.html` in a browser. The report is generated only for that command and is not committed.
 
 Voice onboarding uses Vapi. To enable it in a local frontend, set the public Vapi key and assistant ID:
 
@@ -68,7 +78,7 @@ Routes are composed in `src/App.js`:
 
 The frontend falls back to the sign-in route for unknown paths.
 
-The route pages are imported directly by `src/App.js`; route-level lazy loading and chunk-load recovery are tracked separately in issue #23.
+The route pages are loaded with `React.lazy` inside a `Suspense` boundary. `RouteErrorBoundary` provides a reload action if a route chunk fails to load.
 
 - `src/pages/` contains route-level screens and coordinates larger flows.
 - `src/components/` contains shared product components, including the dashboard panels, profile, job cards, billing, and onboarding voice UI.
