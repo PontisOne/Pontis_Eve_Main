@@ -3,8 +3,6 @@ import axios from "axios";
 import { Panel, PanelGroup, PanelResizeHandle } from "react-resizable-panels";
 import { toast } from "sonner";
 import { Bell } from "lucide-react";
-import * as pdfjsLib from "pdfjs-dist/build/pdf";
-import pdfWorker from "pdfjs-dist/build/pdf.worker.entry";
 
 import Sidebar from "../components/Sidebar";
 import ChatHub from "../components/ChatHub";
@@ -27,10 +25,24 @@ import { API, BACKEND_URL } from "../lib/apiConfig";
 
 export { getVoiceIntakeCenterView };
 
-
-// Use PDF.js rather than the browser's native PDF plugin so the preview is
-// just the document pages, without browser-controlled viewer chrome.
-pdfjsLib.GlobalWorkerOptions.workerSrc = pdfWorker;
+// Keep PDF.js out of Dashboard's initial dependency graph. The shared promise
+// also prevents multiple previews mounting at once from loading the library
+// and worker more than once.
+let pdfJsPromise;
+function loadPdfJs() {
+  if (!pdfJsPromise) {
+    pdfJsPromise = Promise.all([
+      import("pdfjs-dist/build/pdf"),
+      import("pdfjs-dist/build/pdf.worker.entry"),
+    ]).then(([pdfModule, workerModule]) => {
+      const pdfjsLib = pdfModule.default || pdfModule;
+      const pdfWorker = workerModule.default || workerModule;
+      pdfjsLib.GlobalWorkerOptions.workerSrc = pdfWorker;
+      return pdfjsLib;
+    });
+  }
+  return pdfJsPromise;
+}
 
 function buildFallbackProfile(isOpenToMatches = true) {
   return {
@@ -98,18 +110,26 @@ function ResumePagePreview({ previewUrl, onError }) {
   const pagesRef = React.useRef(null);
 
   React.useEffect(() => {
-    let cancelled = false;
-    let loadingTask = null;
+    const lifecycle = { cancelled: false, loadingTask: null };
+    const abortController = new AbortController();
     const renderPages = async () => {
       try {
-        const response = await fetch(previewUrl);
+        const pdfjsLib = await loadPdfJs();
+        if (lifecycle.cancelled) return;
+        const response = await fetch(previewUrl, { signal: abortController.signal });
         const data = await response.arrayBuffer();
-        loadingTask = pdfjsLib.getDocument({ data });
-        const pdf = await loadingTask.promise;
+        if (lifecycle.cancelled) return;
+        lifecycle.loadingTask = pdfjsLib.getDocument({ data });
+        if (lifecycle.cancelled) {
+          lifecycle.loadingTask.destroy();
+          return;
+        }
+        const pdf = await lifecycle.loadingTask.promise;
 
         for (let pageNumber = 1; pageNumber <= pdf.numPages; pageNumber += 1) {
-          if (cancelled) return;
+          if (lifecycle.cancelled) return;
           const page = await pdf.getPage(pageNumber);
+          if (lifecycle.cancelled) return;
           const viewport = page.getViewport({ scale: 1.5 });
           const canvas = document.createElement("canvas");
           canvas.width = Math.ceil(viewport.width);
@@ -120,16 +140,18 @@ function ResumePagePreview({ previewUrl, onError }) {
           pagesRef.current?.appendChild(canvas);
           const context = canvas.getContext("2d");
           await page.render({ canvasContext: context, viewport }).promise;
+          if (lifecycle.cancelled) canvas.remove();
         }
       } catch (error) {
-        if (!cancelled) onError();
+        if (!lifecycle.cancelled && error?.name !== "AbortError") onError();
       }
     };
     renderPages();
 
     return () => {
-      cancelled = true;
-      loadingTask?.destroy();
+      lifecycle.cancelled = true;
+      abortController.abort();
+      lifecycle.loadingTask?.destroy();
     };
   }, [onError, previewUrl]);
 

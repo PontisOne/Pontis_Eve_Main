@@ -40,6 +40,16 @@ VITE_BACKEND_URL=http://localhost:8000
 
 The checked-in `frontend/.env.production` supplies `VITE_BACKEND_URL` for production builds. `VITE_BACKEND_URL` is required and validated as an HTTP(S) URL when the API configuration module loads; the API client appends `/api`. Vite exposes variables beginning with `VITE_` in the client bundle, so do not put server secrets or OAuth client secrets in frontend environment files.
 
+## Bundle analysis
+
+The normal production build does not generate analysis output. To create an interactive Rollup bundle report, run:
+
+```bash
+yarn build:analyze
+```
+
+Open `frontend/build/bundle-analysis.html` in a browser. The report is generated only for that command and is not committed.
+
 Voice onboarding uses Vapi. To enable it in a local frontend, set the public Vapi key and assistant ID:
 
 ```dotenv
