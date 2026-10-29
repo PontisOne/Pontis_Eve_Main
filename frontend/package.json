@@ -69,6 +69,7 @@
   "scripts": {
     "start": "vite",
     "build": "vite build",
+    "build:analyze": "vite build --mode analyze",
     "test": "vitest run"
   },
   "browserslist": {
@@ -85,6 +86,10 @@
   },
   "devDependencies": {
     "@eslint/js": "9.23.0",
+    "@testing-library/dom": "10.4.0",
+    "@testing-library/jest-dom": "6.6.3",
+    "@testing-library/react": "16.3.0",
+    "@testing-library/user-event": "14.6.1",
     "@types/lodash": "4.17.24",
     "@vitejs/plugin-react": "5.0.2",
     "autoprefixer": "10.4.20",
@@ -95,15 +100,12 @@
     "eslint-plugin-react": "7.37.4",
     "eslint-plugin-react-hooks": "5.2.0",
     "globals": "15.15.0",
+    "jsdom": "26.1.0",
     "postcss": "8.5.10",
+    "rollup-plugin-visualizer": "6.0.3",
     "tailwindcss": "3.4.17",
     "vite": "7.1.7",
-    "vitest": "3.2.4",
-    "jsdom": "26.1.0",
-    "@testing-library/jest-dom": "6.6.3",
-    "@testing-library/dom": "10.4.0",
-    "@testing-library/react": "16.3.0",
-    "@testing-library/user-event": "14.6.1"
+    "vitest": "3.2.4"
   },
   "resolutions": {
     "react-router": "7.15.1",
