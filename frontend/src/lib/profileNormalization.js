@@ -61,7 +61,14 @@ const IMMEDIATE_JOINER_PATTERN =
 
 function normalizeText(value) {
   if (value === null || value === undefined) return "";
-  return String(value).replace(/\s+/g, " ").trim();
+  return String(value)
+    .replace(/\u0393\u00c7\u00f4/g, "–")
+    .replace(/\u0393\u00c7\u00f6/g, "—")
+    .replace(/├óΓé¼ΓÇ¥/g, "—")
+    .replace(/Ã¢â‚¬â€\u009D/g, "—")
+    .replace(/â€”/g, "—")
+    .replace(/\s+/g, " ")
+    .trim();
 }
 
 // Profile experience_years is the persisted source of truth. Keep its display
@@ -181,7 +188,9 @@ function parseExperienceDate(value, role = "end") {
 function splitExperienceDateRange(value) {
   const text = normalizeText(value);
   if (!text) return null;
-  const parts = text.split(/\s+(?:[\u2013\u2014-]|├óΓé¼ΓÇ¥)\s+/, 2).map(normalizeText);
+  const parts = text
+    .split(/\s+[\u2013\u2014-]\s+/, 2)
+    .map(normalizeText);
   return parts.length === 2 ? parts : null;
 }
 
@@ -229,7 +238,7 @@ function _formatExperienceDateRange(exp) {
   }
 
   const startLabel = formatExperienceDateLabel(start);
-  // No valid start date ΓÇö if end is open-ended show just "Present", else nothing
+  // No valid start date — if end is open-ended show just "Present", else nothing
   if (!startLabel || startLabel === "Present") {
     const endLabel = formatExperienceDateLabel(end);
     if (endLabel === "Present" || isOpenEndedExperienceValue(normalizeText(start)))
@@ -239,9 +248,9 @@ function _formatExperienceDateRange(exp) {
 
   const endLabel = formatExperienceDateLabel(end);
   if (!endLabel || endLabel === "Present") {
-    return `${startLabel} ΓÇö Present`;
+    return `${startLabel} — Present`;
   }
-  return `${startLabel} ΓÇö ${endLabel}`;
+  return `${startLabel} — ${endLabel}`;
 }
 
 // Education does not inherit the work-history rule that assumes a missing end
@@ -318,7 +327,7 @@ export function formatEducationDateRange(education) {
 
   const startLabel = formatEducationDateLabel(start);
   const endLabel = formatEducationDateLabel(end);
-  if (startLabel && endLabel) return `${startLabel} ΓÇö ${endLabel}`;
+  if (startLabel && endLabel) return `${startLabel} — ${endLabel}`;
   return endLabel || startLabel;
 }
 
@@ -738,7 +747,7 @@ function formatWorkExperienceDateRange(exp) {
   const startLabel = formatWorkExperienceDateLabel(start);
   const endLabel = formatWorkExperienceDateLabel(end);
   if (!startLabel || startLabel === "Present") return endLabel === "Present" ? "Present" : "";
-  return `${startLabel} ΓÇô ${endLabel || "Present"}`;
+  return `${startLabel} – ${endLabel || "Present"}`;
 }
 
 function dedupeExperienceDescription(value) {
@@ -817,7 +826,7 @@ export function calculateExperienceYears(experience) {
   if (intervals.length === 0) return 0;
 
   // Use calendar months rather than day counts.  The profile intentionally
-  // displays month-only dates, so a Jan 2024ΓÇôMar 2025 role is 15 months,
+  // displays month-only dates, so a Jan 2024–Mar 2025 role is 15 months,
   // irrespective of the number of days in the intervening calendar years.
   const asMonth = (timestamp) => {
     const date = new Date(timestamp);
@@ -826,7 +835,7 @@ export function calculateExperienceYears(experience) {
   const monthIntervals = intervals
     // Completed-role end dates are interval boundaries, while an active role
     // extends through the current month. This avoids counting an extra month
-    // for ranges such as Jan 1ΓÇôJan 1.
+    // for ranges such as Jan 1–Jan 1.
     .map(([start, end]) => [asMonth(start), asMonth(Math.max(start, end - 1))])
     .sort((a, b) => a[0] - b[0]);
 

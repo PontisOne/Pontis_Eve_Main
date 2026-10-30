@@ -12,12 +12,14 @@ globalThis.IS_REACT_ACT_ENVIRONMENT = true;
 
 const mockNavigate = jest.fn();
 
-jest.mock("react-router-dom", () => ({
+vi.mock("react-router-dom", () => ({
   useNavigate: () => mockNavigate,
   useSearchParams: () => [new URLSearchParams(), jest.fn()],
 }), { virtual: true });
 
-jest.mock("../../components/onboarding/VoiceIntake", () => () => <div data-testid="voice-intake-mock" />);
+vi.mock("../../components/onboarding/VoiceIntake", () => ({
+  default: () => <div data-testid="voice-intake-mock" />,
+}));
 
 describe("Onboarding voice intake summary", () => {
   const mergedProfile = mergeProfilesForDisplay(
@@ -568,7 +570,6 @@ describe("checkVerificationErrors — email/mobile verification", () => {
 
 /* ---------- Regression tests: email/mobile mismatch on resume upload ---------- */
 
-jest.mock("axios", () => ({ post: jest.fn() }));
 const mockAxios = axios;
 
 describe("Resume upload — email/mobile mismatch regression", () => {

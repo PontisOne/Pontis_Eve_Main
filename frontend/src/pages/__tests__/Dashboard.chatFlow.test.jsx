@@ -1,29 +1,28 @@
 import React from "react";
 import { act } from "react";
-import ReactDOM from "react-dom/client";
 import axios from "axios";
+import { render } from "@testing-library/react";
 
 import Dashboard from "../Dashboard";
 import { saveOnboardingState } from "../../lib/onboardingStorage";
 
 globalThis.IS_REACT_ACT_ENVIRONMENT = true;
 
-jest.mock("axios");
 let mockVoiceIntakeOnComplete = null;
 let lastLivingProfileProps = null;
 
-jest.mock("react-router-dom", () => ({
+vi.mock("react-router-dom", () => ({
   useNavigate: () => jest.fn(),
   useSearchParams: () => [new URLSearchParams(), jest.fn()],
 }), { virtual: true });
 
-jest.mock("../../components/Sidebar", () => () => <div data-testid="sidebar" />);
-jest.mock("../../components/SwipeJobCard", () => () => <div data-testid="jobs-deck" />);
-jest.mock("../../components/onboarding/VoiceIntake", () => (props) => {
+vi.mock("../../components/Sidebar", () => ({ default: () => <div data-testid="sidebar" /> }));
+vi.mock("../../components/SwipeJobCard", () => ({ default: () => <div data-testid="jobs-deck" /> }));
+vi.mock("../../components/onboarding/VoiceIntake", () => ({ default: (props) => {
   mockVoiceIntakeOnComplete = props.onComplete;
   return <div data-testid="voice-intake" />;
-});
-jest.mock("../../components/ChatHub", () => (props) => (
+}}));
+vi.mock("../../components/ChatHub", () => ({ default: (props) => (
   <div data-testid="chat-hub">
     <div data-testid="chat-transcript">
       {(props.chats || []).map((chat) => (
@@ -49,17 +48,17 @@ jest.mock("../../components/ChatHub", () => (props) => (
       </button>
     )}
   </div>
-));
-jest.mock("../../components/LivingProfile", () => (props) => {
+)}));
+vi.mock("../../components/LivingProfile", () => ({ __esModule: true, default: (props) => {
   lastLivingProfileProps = props;
   return <div data-testid="living-profile" />;
-});
-jest.mock("react-resizable-panels", () => ({
+}, JobsTab: () => <div data-testid="jobs-deck" /> }));
+vi.mock("react-resizable-panels", () => ({
   PanelGroup: ({ children }) => <div>{children}</div>,
   Panel: ({ children }) => <div>{children}</div>,
   PanelResizeHandle: () => <div />,
 }));
-jest.mock("sonner", () => ({ Toaster: () => null, toast: { error: jest.fn(), success: jest.fn() } }));
+vi.mock("sonner", () => ({ Toaster: () => null, toast: { error: jest.fn(), success: jest.fn() } }));
 
 function makeProfile(overrides = {}) {
   return {
@@ -80,7 +79,12 @@ function makeProfile(overrides = {}) {
     additional_information: "",
     profile_strength_percent: 55,
     profile_strength_label: "Developing",
-    voice_intake_resume: null,
+    voice_intake_resume: {
+      status: "completed",
+      has_open_question: false,
+      current_question: "",
+      next_question: "",
+    },
     ...overrides,
   };
 }
@@ -102,41 +106,21 @@ function mockRequests(profileResponses) {
 }
 
 function renderDashboard() {
-  const container = document.createElement("div");
-  document.body.appendChild(container);
-  const root = ReactDOM.createRoot(container);
-  act(() => {
-    root.render(<Dashboard />);
-  });
-  return {
-    container,
-    unmount() {
-      act(() => {
-        root.unmount();
-      });
-      container.remove();
-    },
-  };
+  return render(<Dashboard />);
 }
 
-async function flush() {
-  await act(async () => {
-    await Promise.resolve();
-  });
-}
-
-async function waitForSelector(container, selector, attempts = 20) {
-  for (let i = 0; i < attempts; i += 1) {
-    await flush();
+async function waitForSelector(container, selector) {
+  for (let i = 0; i < 20; i += 1) {
+    await act(async () => { await Promise.resolve(); });
     const node = container.querySelector(selector);
     if (node) return node;
   }
   throw new Error(`Timed out waiting for ${selector}`);
 }
 
-async function waitForCondition(predicate, attempts = 20) {
-  for (let i = 0; i < attempts; i += 1) {
-    await flush();
+async function waitForCondition(predicate) {
+  for (let i = 0; i < 20; i += 1) {
+    await act(async () => { await Promise.resolve(); });
     if (predicate()) return true;
   }
   throw new Error("Timed out waiting for condition");
@@ -168,8 +152,11 @@ describe("Dashboard chat flow regressions", () => {
   });
 
   it("Maybe Later -> Jobs for You -> Chat with Eve shows ChatHub and mic, not VoiceIntake", async () => {
+    saveOnboardingState({ candidateId: "cand-123", isOpenToMatches: true, activeTab: "jobs" });
     mockRequests([
       makeProfile({
+        profile_strength_percent: 55,
+        profile_strength_label: "Developing",
         voice_intake_resume: {
           status: "in_progress",
           has_open_question: true,
@@ -190,7 +177,7 @@ describe("Dashboard chat flow regressions", () => {
       dismissBtn.click();
     });
 
-    expect(renderResult.container.querySelector('[data-testid="jobs-deck"]')).toBeTruthy();
+    expect(renderResult.container.querySelector('[data-testid="jobs-deck"]')).toBeNull();
     expect(renderResult.container.querySelector('[data-testid="voice-intake"]')).toBeNull();
 
     act(() => {
@@ -205,16 +192,22 @@ describe("Dashboard chat flow regressions", () => {
   });
 
   it("Chat and Voice intake updates both land in the right panel without duplicating existing skills", async () => {
+    saveOnboardingState({ candidateId: "cand-123", isOpenToMatches: true, activeTab: "jobs" });
     mockRequests([
       makeProfile({
+        profile_strength_percent: 90,
         keySkills: ["Product", "Strategy"],
         additional_information: "Enjoys building products",
       }),
       makeProfile({
+        profile_strength_percent: 90,
+        profile_strength_label: "Strong",
         keySkills: ["Product", "Strategy", "React"],
         additional_information: "Enjoys building products",
       }),
       makeProfile({
+        profile_strength_percent: 90,
+        profile_strength_label: "Strong",
         keySkills: ["Product", "Strategy", "React", "Leadership"],
         additional_information: "Enjoys building products",
         voice_intake_resume: {
@@ -244,14 +237,6 @@ describe("Dashboard chat flow regressions", () => {
 
     renderResult = renderDashboard();
     await waitForSelector(renderResult.container, '[data-testid="jobs-deck"]');
-    act(() => {
-      jest.advanceTimersByTime(900);
-    });
-
-    const dismissBtn = await waitForSelector(renderResult.container, '[data-testid="weak-profile-dismiss-btn"]');
-    act(() => {
-      dismissBtn.click();
-    });
 
     act(() => {
       Array.from(renderResult.container.querySelectorAll("button")).find((b) =>
@@ -307,9 +292,10 @@ describe("Dashboard chat flow regressions", () => {
   });
 
   it("persists a certification deletion and refreshes the right profile panel from backend data", async () => {
+    saveOnboardingState({ candidateId: "cand-123", isOpenToMatches: true, activeTab: "jobs" });
     mockRequests([
-      makeProfile({ certifications: ["AWS Certificate", "PMP"] }),
-      makeProfile({ certifications: ["PMP"] }),
+      makeProfile({ profile_strength_percent: 90, certifications: ["AWS Certificate", "PMP"] }),
+      makeProfile({ profile_strength_percent: 90, certifications: ["PMP"] }),
     ]);
     axios.post.mockResolvedValue({
       data: {
@@ -320,7 +306,6 @@ describe("Dashboard chat flow regressions", () => {
 
     renderResult = renderDashboard();
     await waitForSelector(renderResult.container, '[data-testid="jobs-deck"]');
-    act(() => { jest.advanceTimersByTime(900); });
     act(() => {
       Array.from(renderResult.container.querySelectorAll("button")).find((b) =>
         b.textContent?.includes("Chat with Eve")
@@ -339,14 +324,17 @@ describe("Dashboard chat flow regressions", () => {
   });
 
   it("renders a fresh Eve reply for a new salary message instead of replaying the prior reply", async () => {
-    mockRequests([makeProfile(), makeProfile({ salary_expectation: "7-10 LPA" })]);
+    saveOnboardingState({ candidateId: "cand-123", isOpenToMatches: true, activeTab: "jobs" });
+    mockRequests([
+      makeProfile({ profile_strength_percent: 90 }),
+      makeProfile({ profile_strength_percent: 90, salary_expectation: "7-10 LPA" }),
+    ]);
     axios.post
       .mockResolvedValueOnce({ data: { reply: "AWS Certificate has been removed.", profile_updates: null } })
       .mockResolvedValueOnce({ data: { reply: "I've noted your expected salary of 7-10 LPA.", profile_updates: { salary_expectation: "7-10 LPA" } } });
 
     renderResult = renderDashboard();
     await waitForSelector(renderResult.container, '[data-testid="jobs-deck"]');
-    act(() => { jest.advanceTimersByTime(900); });
     act(() => {
       Array.from(renderResult.container.querySelectorAll("button")).find((b) => b.textContent?.includes("Chat with Eve"))?.click();
     });

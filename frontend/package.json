@@ -71,7 +71,7 @@
     "start": "vite",
     "build": "vite build",
     "build:analyze": "vite build --mode analyze",
-    "serve:production": "serve -c ../serve.json build -l $PORT",
+    "serve:production": "node scripts/serve-production.js",
     "test": "vitest run"
   },
   "browserslist": {

@@ -1,6 +1,7 @@
 import {
   calculateExperienceYears,
   formatExperienceDuration,
+  formatEducationDateRange,
   mergeProfilesForDisplay,
   normalizeProfileForDisplay,
 } from "../profileNormalization";
@@ -137,6 +138,50 @@ describe("normalizeProfileForDisplay experience ordering", () => {
       "Current Co",
       "Previous Co",
     ]);
+  });
+
+  it("normalizes hyphen, en dash, em dash, and corrupted dash date ranges", () => {
+    const normalized = normalizeProfileForDisplay({
+      experience: [
+        { title: "Hyphen", company: "A", dates: "Jan 2020 - Mar 2021" },
+        { title: "En dash", company: "B", dates: "Jan 2020 – Mar 2021" },
+        { title: "Em dash", company: "C", dates: "Jan 2020 — Mar 2021" },
+        { title: "Corrupted", company: "D", dates: "Jan 2020 \u0393\u00c7\u00f4 Mar 2021" },
+        {
+          title: "Corrupted em dash",
+          company: "E",
+          dates: "Jan 2020 Ã¢â‚¬â€\u009D Mar 2021",
+        },
+      ],
+    });
+
+    expect(normalized.experience.map((entry) => entry.dates)).toEqual([
+      "Jan 2020 – Mar 2021",
+      "Jan 2020 – Mar 2021",
+      "Jan 2020 – Mar 2021",
+      "Jan 2020 – Mar 2021",
+      "Jan 2020 – Mar 2021",
+    ]);
+
+    const [hyphen, enDash, emDash, corrupted] = normalized.experience.map((entry) => entry.dates);
+    expect([...hyphen].map((character) => character.codePointAt(0))).toContain(0x2013);
+    expect([...enDash].map((character) => character.codePointAt(0))).toContain(0x2013);
+    expect([...emDash].map((character) => character.codePointAt(0))).toContain(0x2013);
+    expect([...corrupted].map((character) => character.codePointAt(0))).toContain(0x2013);
+    expect(normalized.experience.some((entry) => entry.dates.includes("\u0393\u00c7"))).toBe(false);
+
+    const educationDates = formatEducationDateRange({
+      start_date: "2020-01-01",
+      end_date: "2021-03-01",
+    });
+    expect(educationDates).toBe("01-20 — 03-21");
+    expect([...educationDates].map((character) => character.codePointAt(0))).toContain(0x2014);
+
+    const corruptedEducationDates = formatEducationDateRange({
+      dates: "2020 Ã¢â‚¬â€\u009D 2021",
+    });
+    expect(corruptedEducationDates).toBe("2020 — 2021");
+    expect([...corruptedEducationDates].map((character) => character.codePointAt(0))).toContain(0x2014);
   });
 
   it("deduplicates the same role and company using normalized values while keeping the most complete entry", () => {

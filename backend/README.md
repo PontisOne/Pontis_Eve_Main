@@ -72,7 +72,7 @@ uvicorn server:app --reload --host 0.0.0.0 --port 8000
 
 The API runs at `http://localhost:8000`; interactive FastAPI docs are available at `/docs` in development. In production, explicitly set `EVE_ENVIRONMENT`, `ENVIRONMENT`, or `RAILWAY_ENVIRONMENT` to `production`/`prod`; this disables docs endpoints and requires the candidate-session secret.
 
-Run the frontend separately from `frontend/`, set `REACT_APP_BACKEND_URL=http://localhost:8000`, and allow its origin in `CORS_ORIGINS`.
+Run the frontend separately from `frontend/`, set `VITE_BACKEND_URL=http://localhost:8000`, and allow its origin in `CORS_ORIGINS`.
 
 ## Configuration
 

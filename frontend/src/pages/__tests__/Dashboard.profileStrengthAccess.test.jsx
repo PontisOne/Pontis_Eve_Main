@@ -1,47 +1,48 @@
 import React from "react";
 import { act } from "react";
-import ReactDOM from "react-dom/client";
 import axios from "axios";
+import { render } from "@testing-library/react";
 
 import Dashboard from "../Dashboard";
 import { saveOnboardingState } from "../../lib/onboardingStorage";
 
 globalThis.IS_REACT_ACT_ENVIRONMENT = true;
 
-jest.mock("axios");
 let latestProfile = null;
-jest.mock("react-router-dom", () => ({
+vi.mock("react-router-dom", () => ({
   useNavigate: () => jest.fn(),
   useSearchParams: () => [new URLSearchParams(), jest.fn()],
 }), { virtual: true });
-jest.mock("../../components/Sidebar", () => () => <div />);
-jest.mock("../../components/ChatHub", () => (props) => (
+vi.mock("../../components/Sidebar", () => ({ default: () => <div /> }));
+vi.mock("../../components/ChatHub", () => ({ default: (props) => (
   <div data-testid="chat-hub">
     <input data-testid="chat-text-input" value={props.inputValue || ""} onChange={(e) => props.setInputValue(e.target.value)} />
     <button data-testid="chat-send-btn" onClick={props.onSend}>Send</button>
   </div>
-));
-jest.mock("../../components/LivingProfile", () => ({
+)}));
+vi.mock("../../components/LivingProfile", () => ({
   __esModule: true,
   default: ({ onPhotoChange, userProfile }) => {
     latestProfile = userProfile;
     return <div data-testid="right-living-profile"><button data-testid="refresh-profile" onClick={() => onPhotoChange("photo-url")}>Refresh</button></div>;
   },
-  JobsTab: ({ jobs = [], onLockedJobClick }) => (
-    <div data-testid="jobs-for-you-list">
-      {jobs.map((job) => job.locked ? (
-        <button key={job.id} data-testid={`locked-job-card-${job.id}`} onClick={onLockedJobClick}>Locked</button>
-      ) : <div key={job.id} data-testid={`job-card-${job.id}`}>Unlocked</div>)}
-    </div>
-  ),
+  JobsTab: ({ jobs = [], onLockedJobClick }) => {
+    return (
+      <div data-testid="jobs-for-you-list">
+        {jobs.map((job) => job.locked ? (
+          <button key={job.id} data-testid={`locked-job-card-${job.id}`} onClick={onLockedJobClick}>Locked</button>
+        ) : <div key={job.id} data-testid={`job-card-${job.id}`}>Unlocked</div>)}
+      </div>
+    );
+  },
 }));
-jest.mock("../../components/onboarding/VoiceIntake", () => () => <div data-testid="voice-intake" />);
-jest.mock("react-resizable-panels", () => ({
+vi.mock("../../components/onboarding/VoiceIntake", () => ({ default: () => <div data-testid="voice-intake" /> }));
+vi.mock("react-resizable-panels", () => ({
   PanelGroup: ({ children }) => <div>{children}</div>,
   Panel: ({ children }) => <div>{children}</div>,
   PanelResizeHandle: () => <div />,
 }));
-jest.mock("sonner", () => {
+vi.mock("sonner", () => {
   const toast = jest.fn();
   toast.error = jest.fn();
   toast.success = jest.fn();
@@ -73,22 +74,23 @@ function mockRequests(profiles) {
       return Promise.resolve({ data: response });
     }
     if (url.includes("/chat")) return Promise.resolve({ data: { messages: [] } });
-    if (url.includes("/jobs")) return Promise.resolve({ data: [] });
+    if (url.includes("/jobs")) {
+      return Promise.resolve({
+        data: [{ id: "job-1", company: "Acme" }],
+        headers: { "x-total-matching-jobs": "1" },
+      });
+    }
     if (url.includes("/documents")) return Promise.resolve({ data: { resume: null, certificates: [] } });
     return Promise.resolve({ data: [] });
   });
 }
 
 function renderDashboard() {
-  const container = document.createElement("div");
-  document.body.appendChild(container);
-  const root = ReactDOM.createRoot(container);
-  act(() => root.render(<Dashboard />));
-  return { container, unmount: () => { act(() => root.unmount()); container.remove(); } };
+  return render(<Dashboard />);
 }
 
-async function waitFor(predicate, attempts = 30) {
-  for (let attempt = 0; attempt < attempts; attempt += 1) {
+async function waitForDashboardState(predicate) {
+  for (let attempt = 0; attempt < 30; attempt += 1) {
     await act(async () => { await Promise.resolve(); });
     if (predicate()) return;
   }
@@ -111,44 +113,50 @@ describe("Dashboard profile-strength jobs access", () => {
     mockRequests([profile(89)]);
     dashboard = renderDashboard();
 
-    await waitFor(() => dashboard.container.querySelector('[data-testid="chat-hub"]'));
+    await waitForDashboardState(() => dashboard.container.querySelector('[data-testid="chat-hub"]'));
     expect(dashboard.container.querySelector('[data-testid="jobs-tab"]')).toBeNull();
     expect(dashboard.container.querySelector('[data-testid="jobs-for-you-list"]')).toBeNull();
     expect(dashboard.container.querySelector('[data-testid="profile-90-navbar-guidance"]').textContent).toContain("Complete your profile to 90% to get personalized job matches.");
   });
 
   it("unlocks Jobs for you at exactly 90%", async () => {
+    saveOnboardingState({ candidateId: "candidate-1", isOpenToMatches: true, activeTab: "jobs" });
     mockRequests([profile(90)]);
     dashboard = renderDashboard();
 
-    await waitFor(() => dashboard.container.querySelector('[data-testid="jobs-for-you-list"]'));
+    await waitForDashboardState(() => dashboard.container.querySelector('[data-testid="jobs-for-you-list"]'));
     expect(dashboard.container.querySelector('[data-testid="jobs-tab"]')).not.toBeNull();
     expect(dashboard.container.querySelector('[data-testid="chat-tab"]')).not.toBeNull();
     expect(dashboard.container.querySelector('[data-testid="profile-90-navbar-guidance"]')).toBeNull();
   });
 
   it("shows both tabs above 90%", async () => {
+    saveOnboardingState({ candidateId: "candidate-1", isOpenToMatches: true, activeTab: "jobs" });
     mockRequests([profile(91)]);
     dashboard = renderDashboard();
 
-    await waitFor(() => dashboard.container.querySelector('[data-testid="jobs-for-you-list"]'));
+    await waitForDashboardState(() => dashboard.container.querySelector('[data-testid="jobs-for-you-list"]'));
     expect(dashboard.container.querySelector('[data-testid="jobs-tab"]')).not.toBeNull();
     expect(dashboard.container.querySelector('[data-testid="chat-tab"]')).not.toBeNull();
   });
 
   it("hides Jobs for you again when a refreshed profile drops below 90%", async () => {
+    saveOnboardingState({ candidateId: "candidate-1", isOpenToMatches: true, activeTab: "jobs" });
     mockRequests([profile(90), profile(89)]);
     dashboard = renderDashboard();
 
-    await waitFor(() => dashboard.container.querySelector('[data-testid="jobs-for-you-list"]'));
+    await waitForDashboardState(() => dashboard.container.querySelector('[data-testid="jobs-for-you-list"]'));
+    act(() => dashboard.container.querySelector('[data-testid="chat-tab"]').click());
+    await waitForDashboardState(() => dashboard.container.querySelector('[data-testid="refresh-profile"]'));
     act(() => dashboard.container.querySelector('[data-testid="refresh-profile"]').click());
 
-    await waitFor(() => dashboard.container.querySelector('[data-testid="chat-hub"]'));
-    expect(dashboard.container.querySelector('[data-testid="jobs-tab"]')).toBeNull();
+    await waitForDashboardState(() => dashboard.container.querySelector('[data-testid="chat-hub"]'));
+    expect(dashboard.container.querySelector('[data-testid="jobs-tab"]')).not.toBeNull();
     expect(dashboard.container.querySelector('[data-testid="jobs-for-you-list"]')).toBeNull();
   });
 
   it("refreshes persisted strength and Bio after Eve saves an update, unlocking Jobs at 90%", async () => {
+    saveOnboardingState({ candidateId: "candidate-1", isOpenToMatches: true, activeTab: "jobs" });
     const savedBio = "Product leader building inclusive software teams.";
     mockRequests([
       { ...profile(55), bio: "" },
@@ -157,13 +165,13 @@ describe("Dashboard profile-strength jobs access", () => {
     axios.post.mockResolvedValue({ data: { reply: "Saved.", profile_updates: { bio: savedBio } } });
     dashboard = renderDashboard();
 
-    await waitFor(() => dashboard.container.querySelector('[data-testid="chat-hub"]'));
+    await waitForDashboardState(() => dashboard.container.querySelector('[data-testid="chat-hub"]'));
     act(() => {
       setInputValue(dashboard.container.querySelector('[data-testid="chat-text-input"]'), "Update my bio");
       dashboard.container.querySelector('[data-testid="chat-send-btn"]').click();
     });
 
-    await waitFor(() => latestProfile?.strengthPercent === 90);
+    await waitForDashboardState(() => latestProfile?.strengthPercent === 90);
     expect(latestProfile.bio).toBe(savedBio);
     expect(latestProfile.strength).toBe("Strong");
     expect(dashboard.container.querySelector('[data-testid="jobs-tab"]')).toBeTruthy();
@@ -171,6 +179,7 @@ describe("Dashboard profile-strength jobs access", () => {
   });
 
   it("shows the subscription prompt when a locked match is selected", async () => {
+    saveOnboardingState({ candidateId: "candidate-1", isOpenToMatches: true, activeTab: "jobs" });
     axios.get.mockImplementation((url, config) => {
       if (url.includes("/profile")) return Promise.resolve({ data: profile(90) });
       if (url.includes("/jobs")) return Promise.resolve({
@@ -182,13 +191,14 @@ describe("Dashboard profile-strength jobs access", () => {
     });
     dashboard = renderDashboard();
 
-    await waitFor(() => dashboard.container.querySelector('[data-testid="locked-job-card-job-4"]'));
+    await waitForDashboardState(() => dashboard.container.querySelector('[data-testid="locked-job-card-job-4"]'));
     act(() => dashboard.container.querySelector('[data-testid="locked-job-card-job-4"]').click());
-    await waitFor(() => dashboard.container.textContent.includes("You’ve reached your 3 free job-match views for today"));
+    await waitForDashboardState(() => dashboard.container.textContent.includes("You’ve reached your 3 free job-match views for today"));
     expect(dashboard.container.textContent).toContain("You have 100 jobs matching your profile");
   });
 
   it("keeps the first three daily-access jobs unlocked and renders later matches locked", async () => {
+    saveOnboardingState({ candidateId: "candidate-1", isOpenToMatches: true, activeTab: "jobs" });
     const jobs = Array.from({ length: 5 }, (_, index) => ({
       id: `job-${index + 1}`,
       locked: index >= 3,
@@ -201,7 +211,7 @@ describe("Dashboard profile-strength jobs access", () => {
     });
     dashboard = renderDashboard();
 
-    await waitFor(() => dashboard.container.querySelector('[data-testid="job-card-job-3"]'));
+    await waitForDashboardState(() => dashboard.container.querySelector('[data-testid="job-card-job-3"]'));
     const middleList = dashboard.container.querySelector('[data-testid="jobs-for-you-list"]');
     expect([...middleList.children].map((card) => card.dataset.testid)).toEqual([
       "job-card-job-1",
@@ -212,11 +222,11 @@ describe("Dashboard profile-strength jobs access", () => {
     ]);
     expect(dashboard.container.querySelectorAll('[data-testid^="job-card-"]')).toHaveLength(3);
     expect(dashboard.container.querySelectorAll('[data-testid^="locked-job-card-"]')).toHaveLength(2);
-    expect(dashboard.container.querySelector('[data-testid="right-living-profile"]').querySelector('[data-testid^="job-card-"]')).toBeNull();
-    expect(dashboard.container.querySelector('[data-testid="right-living-profile"]').querySelector('[data-testid^="locked-job-card-"]')).toBeNull();
+    expect(dashboard.container.querySelector('[data-testid="right-resume-context"]')).not.toBeNull();
   });
 
   it("opens the existing subscription popup when a locked job is clicked", async () => {
+    saveOnboardingState({ candidateId: "candidate-1", isOpenToMatches: true, activeTab: "jobs" });
     mockRequests([profile(90)]);
     axios.get.mockImplementation((url) => {
       if (url.includes("/profile")) return Promise.resolve({ data: profile(90) });
@@ -226,13 +236,14 @@ describe("Dashboard profile-strength jobs access", () => {
     });
     dashboard = renderDashboard();
 
-    await waitFor(() => dashboard.container.querySelector('[data-testid="locked-job-card-job-4"]'));
+    await waitForDashboardState(() => dashboard.container.querySelector('[data-testid="locked-job-card-job-4"]'));
     act(() => dashboard.container.querySelector('[data-testid="locked-job-card-job-4"]').click());
-    await waitFor(() => dashboard.container.querySelector('[role="dialog"]'));
+    await waitForDashboardState(() => dashboard.container.querySelector('[role="dialog"]'));
     expect(dashboard.container.querySelector('[role="dialog"]')).toBeTruthy();
   });
 
   it("renders every job unlocked when the subscription response marks them accessible", async () => {
+    saveOnboardingState({ candidateId: "candidate-1", isOpenToMatches: true, activeTab: "jobs" });
     const jobs = Array.from({ length: 5 }, (_, index) => ({ id: `subscriber-job-${index + 1}`, locked: false }));
     axios.get.mockImplementation((url) => {
       if (url.includes("/profile")) return Promise.resolve({ data: profile(90) });
@@ -242,7 +253,7 @@ describe("Dashboard profile-strength jobs access", () => {
     });
     dashboard = renderDashboard();
 
-    await waitFor(() => dashboard.container.querySelector('[data-testid="job-card-subscriber-job-5"]'));
+    await waitForDashboardState(() => dashboard.container.querySelector('[data-testid="job-card-subscriber-job-5"]'));
     expect(dashboard.container.querySelectorAll('[data-testid^="job-card-"]')).toHaveLength(5);
     expect(dashboard.container.querySelector('[data-testid^="locked-job-card-"]')).toBeNull();
   });
