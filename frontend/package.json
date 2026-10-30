@@ -59,6 +59,7 @@
     "react-resizable-panels": "3.0.1",
     "react-router-dom": "7.15.0",
     "recharts": "3.6.0",
+    "serve": "14.2.6",
     "sonner": "2.0.3",
     "swr": "2.3.8",
     "tailwind-merge": "3.2.0",
@@ -70,6 +71,7 @@
     "start": "vite",
     "build": "vite build",
     "build:analyze": "vite build --mode analyze",
+    "serve:production": "serve -c ../serve.json build -l $PORT",
     "test": "vitest run"
   },
   "browserslist": {
@@ -115,7 +117,6 @@
     "qs": "6.15.2",
     "diff": "4.0.4",
     "follow-redirects": "1.16.0",
-    "path-to-regexp": "0.1.13",
     "rollup": "4.52.5",
     "underscore": "1.13.8",
     "@babel/plugin-transform-modules-systemjs": "7.29.4",

@@ -154,4 +154,23 @@ The frontend currently stores the backend-issued candidate bearer token with onb
 
 ## Deployment
 
-Build with `yarn build` and deploy the contents of `build/` to the static hosting service. Set the configured Vite backend URL to the intended API origin in the build environment; frontend environment variables are baked into the static assets at build time. Configure the hosting service to serve the SPA entry point for application routes such as `/dashboard` and `/resume-editor`.
+Build with `yarn build` and deploy the contents of `build/` to the static hosting service. Set the configured Vite backend URL to the intended API origin in the build environment; frontend environment variables are baked into the static assets at build time.
+
+The production frontend uses Vercel's pinned `serve` package and the checked-in `serve.json` configuration. Railway's frontend service (`Pontis_Eve_Main`, root directory `/frontend`) should use:
+
+```text
+Build command: yarn build
+Start command: yarn serve:production
+```
+
+The production command is defined as `serve -c ../serve.json build -l $PORT` (the `../` is required because `serve` resolves its configuration relative to the directory being served). It deliberately does not use `serve -s`: only `/`, `/onboarding`, `/dashboard`, and `/resume-editor` rewrite to `index.html`, while unknown JavaScript, CSS, font, image, API, and health paths remain real 404s unless an actual file exists.
+
+`serve.json` sets `index.html` to `no-store`, fingerprinted JS/CSS and fonts to one-year immutable caching, and images to one-day caching. `serve` compresses eligible text responses when the request advertises gzip or Brotli support; verify this at the deployed Railway domain after each hosting change.
+
+For a local production verification, run `yarn build` followed by `yarn serve:production`, then inspect responses such as:
+
+```sh
+curl -i http://localhost:$PORT/dashboard
+curl -i http://localhost:$PORT/assets/missing.js
+curl -i -H 'Accept-Encoding: br, gzip' http://localhost:$PORT/
+```
