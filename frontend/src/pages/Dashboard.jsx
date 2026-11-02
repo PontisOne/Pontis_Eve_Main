@@ -16,6 +16,7 @@ import {
 } from "../lib/onboardingStorage";
 import { buildDashboardEveGreetingFromProfile } from "../lib/dashboardMessaging";
 import { hydrateProfileStrength } from "../lib/profileStrength";
+import { clearCandidateSessionCache } from "../lib/queryClient";
 import { mergeProfilesForDisplay, normalizeProfileForDisplay } from "../lib/profileNormalization";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import VoiceIntake from "../components/onboarding/VoiceIntake";
@@ -552,11 +553,13 @@ function Dashboard() {
   }, [refreshProfile]);
 
   const handleLogout = React.useCallback(() => {
+    clearCandidateSessionCache();
     clearOnboardingState();
     navigate("/");
   }, [navigate]);
 
   const handleDeleteSuccess = React.useCallback(() => {
+    clearCandidateSessionCache();
     clearOnboardingState();
     navigate("/");
   }, [navigate]);

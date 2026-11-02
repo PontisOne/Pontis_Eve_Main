@@ -14,4 +14,10 @@ export const queryClient = new QueryClient({
   },
 });
 
+// The application currently has no public TanStack Query consumers, so clearing
+// the shared client is the safest way to prevent candidate data crossing sessions.
+export function clearCandidateSessionCache() {
+  queryClient.clear();
+}
+
 export default queryClient;
