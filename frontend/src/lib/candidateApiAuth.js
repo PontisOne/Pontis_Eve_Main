@@ -1,6 +1,7 @@
 import axios from "axios";
 import { clearOnboardingState, loadOnboardingState } from "./onboardingStorage";
 import { notifyApiError } from "./apiError";
+import { clearCandidateSessionCache } from "./queryClient";
 
 function isCandidateApiRequest(config) {
   const url = String(config?.url || "");
@@ -39,6 +40,7 @@ axios.interceptors.response.use(
   (error) => {
     const config = error?.config;
     if (error?.response?.status === 401 && config?.__eveCandidateSessionRequest) {
+      clearCandidateSessionCache();
       clearOnboardingState();
       if (typeof window !== "undefined" && window.location.pathname !== "/") {
         window.location.replace("/");

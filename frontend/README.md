@@ -79,6 +79,10 @@ This repository currently uses React 19, Vite, JavaScript, and React Router. It 
 
 Application state is primarily implemented with component/page React hooks. `QueryClientProvider` is configured in `src/index.js` with TanStack Query, but current application data fetching is mostly manual Axios requests held in component state. When extending or refactoring server-data flows, use TanStack Query for cacheable backend state and keep transient UI state (dialogs, active tabs, drafts, and loading indicators) local to the owning component.
 
+### Candidate session storage boundary
+
+The `eve_onboarding_v1` localStorage payload is validated at read time with Zod. Invalid values are removed when possible and replaced with safe defaults; opaque backend profile data is intentionally not deeply validated. This protects against malformed or outdated storage values, but localStorage remains readable by JavaScript running in the origin and does not protect a Bearer token from XSS.
+
 The current onboarding storage helper persists workflow data and the candidate bearer token in `localStorage`. Treat persisted browser data as untrusted and validate/reconcile it with the backend. `localStorage` is accessible to JavaScript; moving candidate authentication to an `HttpOnly; Secure` cookie requires coordinated backend/frontend changes and appropriate CSRF and credentialed-CORS protections. Do not change only one side of the session contract.
 
 ## Frontend standards for new and refactored code

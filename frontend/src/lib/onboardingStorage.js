@@ -1,3 +1,5 @@
+import { z } from "zod";
+
 // Simple, resilient localStorage wrapper for onboarding progress.
 // File objects can't be serialized, so we only persist metadata + parsed profile.
 
@@ -24,14 +26,52 @@ const DEFAULT_STATE = {
   profile: null, // { name, email, picture, google_id }
 };
 
+const fileMetaSchema = z.object({
+  name: z.string(),
+  size: z.number().nonnegative(),
+}).nullable();
+
+const onboardingStateSchema = z.object({
+  step: z.number().int().positive().optional(),
+  countryCode: z.string().optional(),
+  phoneDigits: z.string().optional(),
+  resumeMeta: fileMetaSchema.optional(),
+  certsMeta: z.array(fileMetaSchema.unwrap()).optional(),
+  // Backend response shape is intentionally opaque at this browser boundary.
+  parsedProfile: z.unknown().nullable().optional(),
+  candidateId: z.string().nullable().optional(),
+  candidateToken: z.string().nullable().optional(),
+  googleRegistrationToken: z.string().nullable().optional(),
+  newlyOnboarded: z.boolean().optional(),
+  transcription: z.boolean().optional(),
+  muted: z.boolean().optional(),
+  voiceElapsedMs: z.number().nonnegative().optional(),
+  voiceIntakeCompleted: z.boolean().optional(),
+  voiceIntakeProgress: z.number().int().nonnegative().optional(),
+  isOpenToMatches: z.boolean().optional(),
+  authenticated: z.boolean().optional(),
+  profile: z.unknown().nullable().optional(),
+  activeTab: z.string().nullable().optional(),
+});
+
+function safeDefaults() {
+  return { ...DEFAULT_STATE, certsMeta: [] };
+}
+
 export function loadOnboardingState() {
   try {
     const raw = localStorage.getItem(KEY);
-    if (!raw) return { ...DEFAULT_STATE };
+    if (!raw) return safeDefaults();
     const parsed = JSON.parse(raw);
-    return { ...DEFAULT_STATE, ...parsed };
+    const result = onboardingStateSchema.safeParse(parsed);
+    if (!result.success) {
+      try { localStorage.removeItem(KEY); } catch { /* storage is optional */ }
+      return safeDefaults();
+    }
+    return { ...safeDefaults(), ...result.data };
   } catch {
-    return { ...DEFAULT_STATE };
+    try { localStorage.removeItem(KEY); } catch { /* storage is optional */ }
+    return safeDefaults();
   }
 }
 

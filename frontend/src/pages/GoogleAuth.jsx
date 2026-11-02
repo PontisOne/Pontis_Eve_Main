@@ -3,6 +3,7 @@ import { useNavigate, useSearchParams } from "react-router-dom";
 import { motion } from "framer-motion";
 import { loadOnboardingState, saveOnboardingState, clearOnboardingState } from "../lib/onboardingStorage";
 import { API } from "../lib/apiConfig";
+import { clearCandidateSessionCache } from "../lib/queryClient";
 
 export default function GoogleAuth() {
   const navigate = useNavigate();
@@ -31,7 +32,13 @@ export default function GoogleAuth() {
           clearOnboardingState();
           throw new Error("google_registration_blocked");
         }
-        const state = { ...loadOnboardingState(), authenticated: true,
+        const current = loadOnboardingState();
+        const identityChanged = current.candidateId && session.candidate_id && current.candidateId !== session.candidate_id;
+        if (identityChanged) {
+          clearCandidateSessionCache();
+          clearOnboardingState();
+        }
+        const state = { ...(identityChanged ? loadOnboardingState() : current), authenticated: true,
           candidateId: session.candidate_id || null, candidateToken: session.candidate_token || null,
           googleRegistrationToken: session.google_registration_token || null,
           profile: session.profile || session.linkedin_profile || null };

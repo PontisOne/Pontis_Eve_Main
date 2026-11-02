@@ -22,6 +22,7 @@ import {
   resumableStep,
   isVoiceIntakeCompleteStatus,
 } from "../lib/onboardingStorage";
+import { clearCandidateSessionCache } from "../lib/queryClient";
 import { mergeProfilesForDisplay, normalizeProfileForDisplay } from "../lib/profileNormalization";
 import { API, buildResumeParseUrl } from "../lib/apiConfig";
 
@@ -961,7 +962,13 @@ export default function Onboarding() {
       // so Dashboard always reads the correct ID even if it mounts before the effect runs
       if (candidate_id) {
         const current = loadOnboardingState();
-        saveOnboardingState({ ...current, candidateId: candidate_id, candidateToken: candidate_token || current.candidateToken || null, googleRegistrationToken: null });
+        const identityChanged = current.candidateId && current.candidateId !== candidate_id;
+        if (identityChanged) {
+          clearCandidateSessionCache();
+          clearOnboardingState();
+        }
+        const next = identityChanged ? loadOnboardingState() : current;
+        saveOnboardingState({ ...next, candidateId: candidate_id, candidateToken: candidate_token || next.candidateToken || null, googleRegistrationToken: null });
       }
       if (candidate_id) {
         setCandidateId(candidate_id);

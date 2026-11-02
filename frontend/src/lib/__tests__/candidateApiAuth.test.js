@@ -1,10 +1,12 @@
 import axios from "axios";
 import { candidateAuthHeaders } from "../candidateApiAuth";
 import { saveOnboardingState, loadOnboardingState } from "../onboardingStorage";
+import queryClient from "../queryClient";
 
 describe("candidate API authentication", () => {
   beforeEach(() => {
     localStorage.clear();
+    queryClient.clear();
     saveOnboardingState({ candidateId: "candidate-a", candidateToken: "session-token-a" });
   });
 
@@ -20,6 +22,7 @@ describe("candidate API authentication", () => {
   });
 
   it("clears an invalid candidate session after a protected 401", async () => {
+    queryClient.setQueryData(["candidate-a", "profile"], { name: "Candidate A" });
     const responseInterceptor = axios.interceptors.response.handlers.at(-1).rejected;
     const requestInterceptor = axios.interceptors.request.handlers.at(-1).fulfilled;
     window.history.replaceState({}, "", "/");
@@ -32,6 +35,7 @@ describe("candidate API authentication", () => {
     })).rejects.toMatchObject({ response: { status: 401 } });
 
     expect(loadOnboardingState().candidateToken).toBeNull();
+    expect(queryClient.getQueryData(["candidate-a", "profile"])).toBeUndefined();
   });
 
   it("does not clear a candidate session for an unrelated 401", async () => {
