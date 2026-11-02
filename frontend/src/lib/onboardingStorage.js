@@ -16,9 +16,6 @@ const DEFAULT_STATE = {
   candidateToken: null, // signed backend-issued candidate session token
   googleRegistrationToken: null, // short-lived credential for atomic Google registration
   newlyOnboarded: false,
-  transcription: false,
-  muted: false,
-  voiceElapsedMs: 0, // how long the candidate stayed on the voice-intake step
   voiceIntakeCompleted: false,
   voiceIntakeProgress: 0, // last answered question index (0 = not started)
   isOpenToMatches: true,
@@ -43,9 +40,6 @@ const onboardingStateSchema = z.object({
   candidateToken: z.string().nullable().optional(),
   googleRegistrationToken: z.string().nullable().optional(),
   newlyOnboarded: z.boolean().optional(),
-  transcription: z.boolean().optional(),
-  muted: z.boolean().optional(),
-  voiceElapsedMs: z.number().nonnegative().optional(),
   voiceIntakeCompleted: z.boolean().optional(),
   voiceIntakeProgress: z.number().int().nonnegative().optional(),
   isOpenToMatches: z.boolean().optional(),
@@ -54,8 +48,35 @@ const onboardingStateSchema = z.object({
   activeTab: z.string().nullable().optional(),
 });
 
+// Issue #14 workflow persistence is deliberately narrower than the legacy
+// onboarding payload. Authentication/session and dashboard fields remain
+// owned by the existing compatibility API below.
+export const onboardingWorkflowSchema = z.object({
+  step: z.number().int().positive().optional(),
+  countryCode: z.string().optional(),
+  phoneDigits: z.string().optional(),
+  resumeMeta: fileMetaSchema.optional(),
+  certsMeta: z.array(fileMetaSchema.unwrap()).optional(),
+  parsedProfile: z.unknown().nullable().optional(),
+  voiceIntakeCompleted: z.boolean().optional(),
+  voiceIntakeProgress: z.number().int().nonnegative().optional(),
+});
+
 function safeDefaults() {
   return { ...DEFAULT_STATE, certsMeta: [] };
+}
+
+function workflowDefaults() {
+  return {
+    step: 1,
+    countryCode: "US",
+    phoneDigits: "",
+    resumeMeta: null,
+    certsMeta: [],
+    parsedProfile: null,
+    voiceIntakeCompleted: false,
+    voiceIntakeProgress: 0,
+  };
 }
 
 export function loadOnboardingState() {
@@ -75,6 +96,22 @@ export function loadOnboardingState() {
   }
 }
 
+export function loadOnboardingWorkflow() {
+  const state = loadOnboardingState();
+  const result = onboardingWorkflowSchema.safeParse(state);
+  return result.success ? { ...workflowDefaults(), ...result.data } : workflowDefaults();
+}
+
+export function saveOnboardingWorkflow(patch) {
+  const current = loadOnboardingState();
+  const workflow = onboardingWorkflowSchema.parse({
+    ...loadOnboardingWorkflow(),
+    ...patch,
+  });
+  saveOnboardingState({ ...current, ...workflow });
+  return workflow;
+}
+
 export function saveOnboardingState(state) {
   try {
     // Only persist serializable slice
@@ -89,9 +126,6 @@ export function saveOnboardingState(state) {
       candidateToken: state.candidateToken ?? null,
       googleRegistrationToken: state.googleRegistrationToken ?? null,
       newlyOnboarded: state.newlyOnboarded ?? false,
-      transcription: state.transcription,
-      muted: state.muted,
-      voiceElapsedMs: state.voiceElapsedMs,
       voiceIntakeCompleted: state.voiceIntakeCompleted ?? false,
       voiceIntakeProgress: state.voiceIntakeProgress ?? 0,
       isOpenToMatches: state.isOpenToMatches ?? true,

@@ -8,7 +8,8 @@ import { motion } from "framer-motion";
 import { Mic, MicOff, Radio, PhoneOff, RotateCcw } from "lucide-react";
 import { toast } from "sonner";
 import useVapi, { VAPI_STATES, buildTranscriptText } from "../../hooks/useVapi";
-import { loadOnboardingState, saveOnboardingState, isVoiceIntakeCompleteStatus } from "../../lib/onboardingStorage";
+import { isVoiceIntakeCompleteStatus } from "../../lib/onboardingStorage";
+import { useOnboardingWorkflowStore } from "../../lib/onboardingWorkflowStore";
 import { API } from "../../lib/apiConfig";
 
 const PUBLIC_KEY = import.meta.env.VITE_VAPI_PUBLIC_KEY;
@@ -169,6 +170,7 @@ function recordVoiceTiming(update) {
 }
 
 export default function VoiceIntake({ firstName, candidateId, onComplete, candidateProfile }) {
+  const setVoiceProgress = useOnboardingWorkflowStore((state) => state.setVoiceProgress);
   const [showTranscript, setShowTranscript] = React.useState(true);
   const [submitting, setSubmitting] = React.useState(false);
   const [retryCount, setRetryCount] = React.useState(0);
@@ -186,11 +188,8 @@ export default function VoiceIntake({ firstName, candidateId, onComplete, candid
   // Persist progress (number of candidate turns answered) so it survives refresh/logout
   const persistProgress = React.useCallback((turns) => {
     const candidateTurns = turns.filter((t) => t.role === "user" && t.final !== false).length;
-    const s = loadOnboardingState();
-    if (candidateTurns > (s.voiceIntakeProgress ?? 0)) {
-      saveOnboardingState({ ...s, voiceIntakeProgress: candidateTurns });
-    }
-  }, []);
+    setVoiceProgress(candidateTurns);
+  }, [setVoiceProgress]);
 
   const assistantOverrides = React.useMemo(
     () => buildVoiceIntakeAssistantOverrides({ firstName, candidateId: resolvedCandidateId, candidateProfile }),
