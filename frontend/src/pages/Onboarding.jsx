@@ -22,6 +22,7 @@ import {
   resumableStep,
   isVoiceIntakeCompleteStatus,
 } from "../lib/onboardingStorage";
+import { useOnboardingWorkflowStore } from "../lib/onboardingWorkflowStore";
 import { clearCandidateSessionCache } from "../lib/queryClient";
 import { mergeProfilesForDisplay, normalizeProfileForDisplay } from "../lib/profileNormalization";
 import { API, buildResumeParseUrl } from "../lib/apiConfig";
@@ -741,6 +742,10 @@ function StepBridge({ profile, voiceIntakeCompleted }) {
 export default function Onboarding() {
   const [searchParams] = useSearchParams();
   const navigate = useNavigate();  
+  const workflowParsedProfile = useOnboardingWorkflowStore((state) => state.parsedProfile);
+  const setWorkflowStep = useOnboardingWorkflowStore((state) => state.setStep);
+  const setWorkflowParsedProfile = useOnboardingWorkflowStore((state) => state.setParsedProfile);
+  const updateWorkflow = useOnboardingWorkflowStore((state) => state.updateWorkflow);
 
   // Accept backend redirect profile data when present.
   // Process the OAuth param synchronously so storage is ready before any effect runs.
@@ -771,12 +776,16 @@ export default function Onboarding() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  const [step, setStep] = React.useState(() => {
+  const [step, setStepState] = React.useState(() => {
     const base = resumableStep(persisted);
     // If coming from dashboard "Chat with Eve" with incomplete voice intake, jump to step 4
     if (resumeVoiceParam && persisted.parsedProfile && !persisted.voiceIntakeCompleted) return 4;
     return base;
   });
+  const setStep = React.useCallback((nextStep) => {
+    setStepState(nextStep);
+    setWorkflowStep(nextStep);
+  }, [setWorkflowStep]);
 
   // Guard: must have gone through authentication.
   React.useEffect(() => {
@@ -828,37 +837,23 @@ export default function Onboarding() {
 
   const [resumeFile, setResumeFile] = React.useState(null); // real File, can't persist
   const [certsFiles, setCertsFiles] = React.useState([]);
-  const [parsedProfile, setParsedProfile] = React.useState(persisted.parsedProfile);
+  const [parsedProfile, setParsedProfileState] = React.useState(
+    () => persisted.parsedProfile ?? workflowParsedProfile,
+  );
+  const setParsedProfile = React.useCallback((nextProfile) => {
+    setParsedProfileState(nextProfile);
+    setWorkflowParsedProfile(nextProfile);
+  }, [setWorkflowParsedProfile]);
   const [candidateId, setCandidateId] = React.useState(persisted.candidateId ?? null);
   const [parsingReady, setParsingReady] = React.useState(!!persisted.parsedProfile);
   const [parsingError, setParsingError] = React.useState(null);
   const [verificationErrors, setVerificationErrors] = React.useState([]);
 
-  const [transcription, setTranscription] = React.useState(!!persisted.transcription);
-  const [muted, setMuted] = React.useState(!!persisted.muted);
-  const [voiceElapsedMs, setVoiceElapsedMs] = React.useState(
-    persisted.voiceElapsedMs || 0
-  );
   const [voiceIntakeCompleted, setVoiceIntakeCompleted] = React.useState(
     !!persisted.voiceIntakeCompleted
   );
 
-  // Track how long the candidate stays on the voice intake screen (Step 4).
-  const voiceStartRef = React.useRef(null);
-  React.useEffect(() => {
-    if (step === 4) {
-      voiceStartRef.current = Date.now();
-    } else {
-      voiceStartRef.current = null;
-    }
-  }, [step]);
-
   const finishVoiceIntake = React.useCallback((intakeResult) => {
-    const startedAt = voiceStartRef.current;
-    if (startedAt) {
-      const elapsed = Date.now() - startedAt;
-      setVoiceElapsedMs(elapsed);
-    }
     const completed = isVoiceIntakeCompleteStatus(intakeResult?.status);
     setVoiceIntakeCompleted(completed);
     const mergedProfile = mergeProfilesForDisplay(
@@ -907,9 +902,19 @@ export default function Onboarding() {
       candidateId,
       candidateToken: current.candidateToken ?? null,
       googleRegistrationToken: current.googleRegistrationToken ?? null,
-      transcription,
-      muted,
-      voiceElapsedMs,
+      voiceIntakeCompleted,
+    });
+    updateWorkflow({
+      step,
+      countryCode: phone.country.code,
+      phoneDigits: phone.digits,
+      resumeMeta: resumeFile
+        ? { name: resumeFile.name, size: resumeFile.size }
+        : persisted.resumeMeta,
+      certsMeta: certsFiles.length
+        ? certsFiles.map((f) => ({ name: f.name, size: f.size }))
+        : persisted.certsMeta,
+      parsedProfile,
       voiceIntakeCompleted,
     });
   }, [
@@ -920,12 +925,10 @@ export default function Onboarding() {
     certsFiles,
     parsedProfile,
     candidateId,
-    transcription,
-    muted,
-    voiceElapsedMs,
     voiceIntakeCompleted,
     persisted.resumeMeta,
     persisted.certsMeta,
+    updateWorkflow,
   ]);
 
   const firstName = (parsedProfile?.name || "there")
