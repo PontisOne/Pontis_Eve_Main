@@ -1837,15 +1837,105 @@ function DocumentsTab({
   const resumeInputRef = React.useRef(null);
   const certInputRef = React.useRef(null);
   const certReplaceRefs = React.useRef({});
-  const [busy, setBusy] = React.useState(false);
   const [deleteError, setDeleteError] = React.useState(null);
   const [confirmDelete, setConfirmDelete] = React.useState(null); // { type: 'resume' } | { type: 'cert', id, filename }
+  const queryClient = useQueryClient();
 
   const authHeaders = candidateToken ? { Authorization: `Bearer ${candidateToken}` } : {};
   const postDocument = (path, formData) =>
     candidateToken
       ? axios.post(`${API}${path}`, formData, { headers: authHeaders })
       : axios.post(`${API}${path}`, formData);
+
+  const invalidateDocuments = () =>
+    queryClient.invalidateQueries({ queryKey: candidateKeys.documents(candidateId), exact: true });
+
+  const clearInput = (inputRef) => {
+    if (inputRef?.current) inputRef.current.value = "";
+  };
+
+  const resumeReplaceMutation = useMutation({
+    mutationFn: async ({ file }) => {
+      const fd = new FormData();
+      fd.append("file", file);
+      const response = await postDocument(`/candidate/${candidateId}/resume/replace`, fd);
+      return { file, response };
+    },
+    retry: false,
+    onSuccess: ({ file, response }) => {
+      onResumeReplaced(file.name, response.data?.profile ?? null);
+      invalidateDocuments();
+      clearInput(resumeInputRef);
+    },
+    onError: (error, { file }) => {
+      if (error?.message === "Duplicate Upload") setDeleteError("Duplicate Upload");
+      onResumeReplaced(file.name, null);
+      clearInput(resumeInputRef);
+    },
+  });
+
+  const certificateUploadMutation = useMutation({
+    mutationFn: async ({ file }) => {
+      const fd = new FormData();
+      fd.append("file", file);
+      const response = await postDocument(`/candidate/${candidateId}/certificates/upload`, fd);
+      return response.data;
+    },
+    retry: false,
+    onSuccess: (certificate) => {
+      onCertUploaded(certificate);
+      invalidateDocuments();
+      clearInput(certInputRef);
+    },
+    onError: () => {
+      setDeleteError("Certificate upload failed. Please try again.");
+      clearInput(certInputRef);
+    },
+  });
+
+  const certificateReplaceMutation = useMutation({
+    mutationFn: async ({ certId, file }) => {
+      const fd = new FormData();
+      fd.append("file", file);
+      await postDocument(`/candidate/${candidateId}/certificates/${certId}/replace`, fd);
+      return { certId, filename: file.name };
+    },
+    retry: false,
+    onSuccess: ({ certId, filename }) => {
+      onCertReplaced(certId, filename);
+      invalidateDocuments();
+      clearInput({ current: certReplaceRefs.current[certId] });
+    },
+    onError: (_, { certId }) => {
+      setDeleteError("Certificate replacement failed. Please try again.");
+      clearInput({ current: certReplaceRefs.current[certId] });
+    },
+  });
+
+  const deleteMutation = useMutation({
+    mutationFn: async (documentToDelete) => {
+      if (documentToDelete.type === "resume") {
+        await axios.delete(`${API}/candidate/${candidateId}/resume`, { headers: authHeaders });
+      } else {
+        await axios.delete(`${API}/candidate/${candidateId}/certificates/${documentToDelete.id}`, {
+          headers: authHeaders,
+        });
+      }
+      return documentToDelete;
+    },
+    retry: false,
+    onSuccess: (documentToDelete) => {
+      setConfirmDelete(null);
+      documentToDelete.type === "resume"
+        ? onResumeDeleted()
+        : onCertDeleted(documentToDelete.id);
+      invalidateDocuments();
+    },
+    onError: () => setDeleteError("Deletion failed. Please try again."),
+  });
+
+  const busy = resumeReplaceMutation.isPending || certificateUploadMutation.isPending ||
+    certificateReplaceMutation.isPending || deleteMutation.isPending;
 
   const openDocument = (event, path) => {
     event.preventDefault();
@@ -1876,84 +1966,36 @@ function DocumentsTab({
 
   const handleResumeReplace = async (file) => {
     if (!file || !candidateId) return;
-    setBusy(true);
-    try {
-      const arrayBuffer = await file.arrayBuffer();
-      const hashBuffer = await crypto.subtle.digest("SHA-256", arrayBuffer);
-      const fingerprint = Array.from(new Uint8Array(hashBuffer))
-        .map((b) => b.toString(16).padStart(2, "0"))
-        .join("");
-      if (documents.resume?.fingerprint && documents.resume.fingerprint === fingerprint) {
-        setDeleteError("Duplicate Upload");
-        return;
-      }
-      const fd = new FormData();
-      fd.append("file", file);
-      const res = await postDocument(`/candidate/${candidateId}/resume/replace`, fd);
-      onResumeReplaced(file.name, res.data?.profile ?? null);
-    } catch {
-      onResumeReplaced(file.name, null);
-    } finally {
-      setBusy(false);
+    setDeleteError(null);
+    const arrayBuffer = await file.arrayBuffer();
+    const hashBuffer = await crypto.subtle.digest("SHA-256", arrayBuffer);
+    const fingerprint = Array.from(new Uint8Array(hashBuffer))
+      .map((b) => b.toString(16).padStart(2, "0"))
+      .join("");
+    if (documents.resume?.fingerprint && documents.resume.fingerprint === fingerprint) {
+      setDeleteError("Duplicate Upload");
+      return;
     }
+    resumeReplaceMutation.mutate({ file });
   };
 
   const handleCertUpload = async (files) => {
     const selectedFiles = Array.from(files || []).filter(Boolean);
     if (!selectedFiles.length || !candidateId) return;
-    setBusy(true);
-    try {
-      await Promise.all(
-        selectedFiles.map(async (file) => {
-          const fd = new FormData();
-          fd.append("file", file);
-          const res = await postDocument(`/candidate/${candidateId}/certificates/upload`, fd);
-          onCertUploaded(res.data);
-        }),
-      );
-    } catch {
-      // silent
-    } finally {
-      setBusy(false);
-    }
+    setDeleteError(null);
+    await Promise.all(selectedFiles.map((file) => certificateUploadMutation.mutateAsync({ file }))).catch(() => {});
   };
 
   const handleCertReplace = async (certId, file) => {
     if (!file || !candidateId) return;
-    setBusy(true);
-    try {
-      const fd = new FormData();
-      fd.append("file", file);
-      await postDocument(`/candidate/${candidateId}/certificates/${certId}/replace`, fd);
-      onCertReplaced(certId, file.name);
-    } catch {
-      // silent
-    } finally {
-      setBusy(false);
-    }
+    setDeleteError(null);
+    await certificateReplaceMutation.mutateAsync({ certId, file }).catch(() => {});
   };
 
   const handleConfirmDelete = async () => {
     if (!confirmDelete || !candidateId) return;
-    setBusy(true);
     setDeleteError(null);
-    try {
-      if (confirmDelete.type === "resume") {
-        await axios.delete(`${API}/candidate/${candidateId}/resume`, { headers: authHeaders });
-        setConfirmDelete(null);
-        onResumeDeleted();
-      } else {
-        await axios.delete(`${API}/candidate/${candidateId}/certificates/${confirmDelete.id}`, {
-          headers: authHeaders,
-        });
-        setConfirmDelete(null);
-        onCertDeleted(confirmDelete.id);
-      }
-    } catch {
-      setDeleteError("Deletion failed. Please try again.");
-    } finally {
-      setBusy(false);
-    }
+    deleteMutation.mutate(confirmDelete);
   };
 
   if (docsLoading) {

@@ -33,6 +33,14 @@ import {
   trackCandidateJob,
 } from "../lib/candidateJobs";
 
+const EMPTY_DOCUMENTS = { resume: null, certificates: [], application_resumes: [] };
+
+function fetchCandidateDocuments(candidateId, candidateToken) {
+  return axios.get(`${API}/candidate/${candidateId}/documents`, {
+    headers: candidateToken ? { Authorization: `Bearer ${candidateToken}` } : {},
+  }).then(({ data }) => data);
+}
+
 export { getVoiceIntakeCenterView };
 
 // Keep PDF.js out of Dashboard's initial dependency graph. The shared promise
@@ -308,8 +316,13 @@ function Dashboard() {
   const [chatRestored, setChatRestored] = React.useState(false);
   const [inputValue, setInputValue] = React.useState("");
   const [composerFocusToken, setComposerFocusToken] = React.useState(0);
-  const [documents, setDocuments] = React.useState({ resume: null, certificates: [], application_resumes: [] });
-  const [docsLoading, setDocsLoading] = React.useState(false);
+  const documentsQuery = useQuery({
+    queryKey: candidateKeys.documents(candidateId),
+    queryFn: () => fetchCandidateDocuments(candidateId, candidateToken),
+    enabled: isCandidateIdReady(candidateId),
+  });
+  const documents = documentsQuery.data ?? EMPTY_DOCUMENTS;
+  const docsLoading = documentsQuery.isPending;
   const [selectedJob, setSelectedJob] = React.useState(null);
   const [sending, setSending] = React.useState(false);
   const [showSubscriptionPopup, setShowSubscriptionPopup] = React.useState(false);
@@ -704,9 +717,7 @@ function Dashboard() {
       // Reload both resources so the card and Apply Now gauge use that final
       // backend score, rather than any prior score or calculated delta.
       refreshProfile();
-      axios.get(`${API}/candidate/${candidateId}/documents`, {
-        headers: candidateToken ? { Authorization: `Bearer ${candidateToken}` } : {},
-      }).then((res) => setDocuments(res.data)).catch(() => {});
+      queryClient.invalidateQueries({ queryKey: candidateKeys.documents(candidateId), exact: true });
       queryClient.invalidateQueries({ queryKey: candidateKeys.jobs(candidateId) });
     };
     window.addEventListener("message", onProfileUpdated);
@@ -739,22 +750,6 @@ function Dashboard() {
     window.addEventListener("eve:resume-fix-credits-updated", updateResumeFixCredits);
     return () => window.removeEventListener("eve:resume-fix-credits-updated", updateResumeFixCredits);
   }, [refreshResumeFixCredits]);
-
-  const refreshDocuments = React.useCallback(() => {
-    if (!candidateId) return Promise.resolve();
-    setDocsLoading(true);
-    return axios
-      .get(`${API}/candidate/${candidateId}/documents`, {
-        headers: candidateToken ? { Authorization: `Bearer ${candidateToken}` } : {},
-      })
-      .then((res) => setDocuments(res.data))
-      .catch(() => {})
-      .finally(() => setDocsLoading(false));
-  }, [candidateId, candidateToken]);
-
-  React.useEffect(() => {
-    refreshDocuments();
-  }, [refreshDocuments]);
 
   const sessionIdRef = React.useRef(
     `sess-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
@@ -843,34 +838,25 @@ function Dashboard() {
   }, [handleSuggestionClick]);
 
   const handleResumeReplaced = React.useCallback((filename, newProfile) => {
-    setDocuments((prev) => ({ ...prev, resume: { filename } }));
     refreshProfile();
-    refreshDocuments();
-  }, [refreshProfile, refreshDocuments]);
+    queryClient.invalidateQueries({ queryKey: candidateKeys.documents(candidateId), exact: true });
+  }, [candidateId, queryClient, refreshProfile]);
 
   const handleCertUploaded = React.useCallback((cert) => {
-    setDocuments((prev) => ({ ...prev, certificates: [...prev.certificates, cert] }));
-  }, []);
+    queryClient.invalidateQueries({ queryKey: candidateKeys.documents(candidateId), exact: true });
+  }, [candidateId, queryClient]);
 
   const handleCertReplaced = React.useCallback((certId, filename) => {
-    setDocuments((prev) => ({
-      ...prev,
-      certificates: prev.certificates.map((c) =>
-        c.id === certId ? { ...c, filename } : c
-      ),
-    }));
-  }, []);
+    queryClient.invalidateQueries({ queryKey: candidateKeys.documents(candidateId), exact: true });
+  }, [candidateId, queryClient]);
 
   const handleResumeDeleted = React.useCallback(() => {
-    setDocuments((prev) => ({ ...prev, resume: null }));
-  }, []);
+    queryClient.invalidateQueries({ queryKey: candidateKeys.documents(candidateId), exact: true });
+  }, [candidateId, queryClient]);
 
   const handleCertDeleted = React.useCallback((certId) => {
-    setDocuments((prev) => ({
-      ...prev,
-      certificates: prev.certificates.filter((c) => c.id !== certId),
-    }));
-  }, []);
+    queryClient.invalidateQueries({ queryKey: candidateKeys.documents(candidateId), exact: true });
+  }, [candidateId, queryClient]);
 
   const refreshJobs = React.useCallback(
     () => queryClient.invalidateQueries({ queryKey: candidateKeys.jobs(candidateId) }),
