@@ -4,6 +4,7 @@ import ReactDOM from "react-dom/client";
 import axios from "axios";
 
 import LivingProfile from "../LivingProfile";
+import { TestQueryProvider } from "../../testUtils";
 
 globalThis.IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -27,7 +28,7 @@ function renderTracked(jobs = [TRACKED_JOB], extraProps = {}) {
   const root = ReactDOM.createRoot(container);
   act(() => {
     root.render(
-      <LivingProfile
+      <TestQueryProvider><LivingProfile
         activeTab="tracked"
         userProfile={{
           name: "Test User",
@@ -59,7 +60,7 @@ function renderTracked(jobs = [TRACKED_JOB], extraProps = {}) {
         onPhotoChange={jest.fn()}
         onJobViewed={jest.fn()}
         {...extraProps}
-      />
+      /></TestQueryProvider>
     );
   });
   return {

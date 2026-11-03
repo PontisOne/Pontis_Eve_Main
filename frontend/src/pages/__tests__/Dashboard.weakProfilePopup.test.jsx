@@ -4,6 +4,7 @@ import ReactDOM from "react-dom/client";
 import axios from "axios";
 
 import Dashboard from "../Dashboard";
+import { TestQueryProvider } from "../../testUtils";
 import { saveOnboardingState } from "../../lib/onboardingStorage";
 
 globalThis.IS_REACT_ACT_ENVIRONMENT = true;
@@ -68,7 +69,7 @@ function renderDashboard() {
   const container = document.createElement("div");
   document.body.appendChild(container);
   const root = ReactDOM.createRoot(container);
-  act(() => { root.render(<Dashboard />); });
+  act(() => { root.render(<TestQueryProvider><Dashboard /></TestQueryProvider>); });
   const result = {
     container,
     unmount() {

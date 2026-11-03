@@ -3,6 +3,7 @@ import { act } from "react";
 import ReactDOM from "react-dom/client";
 
 import { JobsTab } from "../LivingProfile";
+import { TestQueryProvider } from "../../testUtils";
 
 globalThis.IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -17,7 +18,7 @@ function renderJobs(jobs, onLockedJobClick = jest.fn()) {
   document.body.appendChild(container);
   const root = ReactDOM.createRoot(container);
   act(() => root.render(
-    <JobsTab
+    <TestQueryProvider><JobsTab
       jobs={jobs}
       matchingJobsTotal={jobs.length}
       onTrack={jest.fn()}
@@ -27,7 +28,7 @@ function renderJobs(jobs, onLockedJobClick = jest.fn()) {
       candidateId="candidate-1"
       onJobViewed={jest.fn()}
       onLockedJobClick={onLockedJobClick}
-    />
+    /></TestQueryProvider>
   ));
   return { container, onLockedJobClick, unmount: () => act(() => root.unmount()) };
 }

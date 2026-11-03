@@ -1,8 +1,8 @@
 import React from "react";
-import axios from "axios";
 import { BriefcaseBusiness, CheckCircle2, X } from "lucide-react";
 import { toast } from "sonner";
-import { API } from "../lib/apiConfig";
+import { applyCandidateJob } from "../lib/candidateJobs";
+import { useMutation } from "@tanstack/react-query";
 
 const storageKey = (candidateId) => `eve:application-follow-up:${candidateId}`;
 
@@ -38,6 +38,7 @@ function markEveLeft(candidateId) {
 export function useApplicationFollowUp(candidateId, onApplied) {
   const [pendingJob, setPendingJob] = React.useState(null);
   const [saving, setSaving] = React.useState(false);
+  const applyMutation = useMutation({ mutationFn: applyCandidateJob, retry: false });
 
   const revealPending = React.useCallback(() => {
     const pending = readPending(candidateId);
@@ -96,7 +97,7 @@ export function useApplicationFollowUp(candidateId, onApplied) {
     try {
       // The endpoint uses COALESCE and a single recommendation row, so a
       // repeated confirmation cannot create duplicate tracked/apply records.
-      await axios.post(`${API}/candidate/${candidateId}/jobs/${pendingJob.id}/apply`);
+      await applyMutation.mutateAsync({ candidateId, jobId: pendingJob.id });
       clearPending(candidateId);
       setPendingJob(null);
       await onApplied?.(pendingJob.id);
@@ -106,7 +107,7 @@ export function useApplicationFollowUp(candidateId, onApplied) {
     } finally {
       setSaving(false);
     }
-  }, [candidateId, onApplied, pendingJob, saving]);
+  }, [applyMutation, candidateId, onApplied, pendingJob, saving]);
 
   const modal = pendingJob ? (
     <div className="fixed inset-0 z-[70] flex items-center justify-center bg-[#172033]/55 p-4 backdrop-blur-[2px] sm:p-6" role="dialog" aria-modal="true" aria-labelledby="application-follow-up-title" data-testid="application-follow-up-modal">

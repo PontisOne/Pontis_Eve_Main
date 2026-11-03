@@ -3,6 +3,7 @@ import { act } from "react";
 import ReactDOM from "react-dom/client";
 import axios from "axios";
 import Dashboard from "../Dashboard";
+import { TestQueryProvider } from "../../testUtils";
 import { saveOnboardingState } from "../../lib/onboardingStorage";
 
 globalThis.IS_REACT_ACT_ENVIRONMENT = true;
@@ -111,7 +112,7 @@ function setupAxios({ profiles = [profile()], resume = { filename: "uploaded-res
     return Promise.resolve({ data: {} });
   });
 }
-function renderDashboard() { const container = document.createElement("div"); document.body.appendChild(container); const root = ReactDOM.createRoot(container); act(() => root.render(<Dashboard />)); return { container, unmount: () => { act(() => root.unmount()); container.remove(); } }; }
+function renderDashboard() { const container = document.createElement("div"); document.body.appendChild(container); const root = ReactDOM.createRoot(container); act(() => root.render(<TestQueryProvider><Dashboard /></TestQueryProvider>)); return { container, unmount: () => { act(() => root.unmount()); container.remove(); } }; }
 async function flush() { for (let i = 0; i < 20; i += 1) await act(async () => Promise.resolve()); }
 function click(container, id) { act(() => container.querySelector(`[data-testid="${id}"]`).click()); }
 
