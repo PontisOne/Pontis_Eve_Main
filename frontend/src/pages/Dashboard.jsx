@@ -1,5 +1,6 @@
 import React from "react";
 import axios from "axios";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Panel, PanelGroup, PanelResizeHandle } from "react-resizable-panels";
 import { toast } from "sonner";
 import { Bell } from "lucide-react";
@@ -17,12 +18,14 @@ import {
 import { buildDashboardEveGreetingFromProfile } from "../lib/dashboardMessaging";
 import { hydrateProfileStrength } from "../lib/profileStrength";
 import { clearCandidateSessionCache } from "../lib/queryClient";
-import { mergeProfilesForDisplay, normalizeProfileForDisplay } from "../lib/profileNormalization";
+import { normalizeProfileForDisplay } from "../lib/profileNormalization";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import VoiceIntake from "../components/onboarding/VoiceIntake";
 import BillingPage from "../components/BillingPage";
 import { getVoiceIntakeCenterView } from "../lib/voiceIntakeRouting";
 import { API, BACKEND_URL } from "../lib/apiConfig";
+import { candidateKeys, isCandidateIdReady } from "../lib/queryKeys";
+import { fetchCandidateProfile, mapCandidateProfile } from "../lib/profileQueries";
 
 export { getVoiceIntakeCenterView };
 
@@ -74,20 +77,6 @@ function buildFallbackProfile(isOpenToMatches = true) {
 
 function hydrateDisplayProfile(profile) {
   return hydrateProfileStrength(normalizeProfileForDisplay(profile));
-}
-
-function profilesAreEqual(left, right) {
-  return JSON.stringify(left) === JSON.stringify(right);
-}
-
-function mergeProfileUpdatesForDisplay(currentProfile, updates) {
-  if (!updates || typeof updates !== "object") return currentProfile;
-
-  const merged = hydrateDisplayProfile(
-    mergeProfilesForDisplay(currentProfile, updates)
-  );
-
-  return profilesAreEqual(currentProfile, merged) ? currentProfile : merged;
 }
 
 function ResizeHandle({ testId, subtle = false }) {
@@ -247,7 +236,7 @@ function Dashboard() {
   const stored = React.useMemo(() => loadOnboardingState(), []);
   const [candidateId, setCandidateId] = React.useState(() => loadOnboardingState().candidateId ?? null);
   const [candidateToken] = React.useState(() => loadOnboardingState().candidateToken ?? null);
-  const isOpenToMatches = stored.isOpenToMatches ?? true;
+  const [isOpenToMatches, setIsOpenToMatches] = React.useState(stored.isOpenToMatches ?? true);
   const [settingsOpen, setSettingsOpen] = React.useState(false);
   const [sidebarCollapsed, setSidebarCollapsed] = React.useState(false);
   const leftPanelRef = React.useRef(null);
@@ -282,9 +271,17 @@ function Dashboard() {
     saveOnboardingState({ ...loadOnboardingState(), activeTab: tab });
   }, []);
 
-  const [userProfile, setUserProfile] = React.useState(() =>
-    hydrateDisplayProfile(buildFallbackProfile(isOpenToMatches))
-  );
+  const queryClient = useQueryClient();
+  const profileQuery = useQuery({
+    queryKey: candidateKeys.profile(candidateId),
+    queryFn: () => fetchCandidateProfile(candidateId),
+    enabled: isCandidateIdReady(candidateId),
+  });
+  const userProfile = React.useMemo(() => (
+    profileQuery.data
+      ? mapCandidateProfile(profileQuery.data, candidateId, isOpenToMatches)
+      : hydrateDisplayProfile(buildFallbackProfile(isOpenToMatches))
+  ), [candidateId, isOpenToMatches, profileQuery.data]);
   // Locked on first non-empty profile load; never updated by resume replacement.
   const footerIdentityRef = React.useRef({ name: "", email: "" });
   const [footerIdentity, setFooterIdentity] = React.useState({ name: "", email: "" });
@@ -388,7 +385,7 @@ function Dashboard() {
       .catch(() => setResumeFixCreditBalance(null));
   }, [candidateId]);
 
-  // Load real profile from PostgreSQL on mount
+  /*
   React.useEffect(() => {
     if (!candidateId) return;
     axios
@@ -484,6 +481,7 @@ function Dashboard() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [candidateId]); // isOpenToMatches intentionally excluded — toggle state is preserved via prev
 
+  */
   React.useEffect(() => {
     // Backend is the single source of truth for the initial view.
     // Skip if the user has already made an explicit navigation choice.
@@ -506,7 +504,8 @@ function Dashboard() {
     }
   }, [centerView, hasJobsAccess]);
 
-  const refreshProfile = React.useCallback(async () => {
+  /* legacy refresh implementation replaced by query refetch.
+  const legacyRefreshProfile = React.useCallback(async () => {
     if (!candidateId) return null;
     try {
       const res = await axios.get(`${API}/candidate/${candidateId}/profile`);
@@ -547,10 +546,18 @@ function Dashboard() {
     }
   }, [candidateId]);
 
+  */
+  const refreshProfile = React.useCallback(async () => {
+    if (!isCandidateIdReady(candidateId)) return null;
+    await queryClient.refetchQueries({ queryKey: candidateKeys.profile(candidateId), exact: true });
+    const data = queryClient.getQueryData(candidateKeys.profile(candidateId));
+    return data ? mapCandidateProfile(data, candidateId, isOpenToMatches) : null;
+  }, [candidateId, isOpenToMatches, queryClient]);
+
   const handlePhotoChange = React.useCallback((url) => {
-    setUserProfile((prev) => ({ ...prev, avatar: url }));
+    queryClient.setQueryData(candidateKeys.profile(candidateId), (current) => current ? { ...current, photo_url: url } : current);
     refreshProfile();
-  }, [refreshProfile]);
+  }, [candidateId, queryClient, refreshProfile]);
 
   const handleLogout = React.useCallback(() => {
     clearCandidateSessionCache();
@@ -565,10 +572,9 @@ function Dashboard() {
   }, [navigate]);
 
   const handleToggleOpenToMatches = React.useCallback(() => {
-    setUserProfile((prev) => {
-      const next = { ...prev, isOpenToMatches: !prev.isOpenToMatches };
-      const s = loadOnboardingState();
-      saveOnboardingState({ ...s, isOpenToMatches: next.isOpenToMatches });
+    setIsOpenToMatches((current) => {
+      const next = !current;
+      saveOnboardingState({ ...loadOnboardingState(), isOpenToMatches: next });
       return next;
     });
   }, []);
@@ -1245,8 +1251,9 @@ function Dashboard() {
               candidateProfile={voiceIntakeProfile || userProfile}
               onComplete={async (result) => {
                 if (result?.profile || result?.profile_updates) {
-                  const updatePayload = result.profile || result.profile_updates || {};
-                  setUserProfile((prev) => mergeProfileUpdatesForDisplay(prev, updatePayload));
+                  // The backend response is authoritative; refresh below
+                  // replaces the candidate-scoped cache without merging stale
+                  // list fields back into the profile.
                 }
                 // Keep the candidate in Chat while the backend confirms the
                 // outcome. A local Voice Intake result is not authoritative.

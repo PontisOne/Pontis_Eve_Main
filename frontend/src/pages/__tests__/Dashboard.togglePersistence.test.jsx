@@ -2,6 +2,7 @@ import React from "react";
 import { act } from "react";
 import ReactDOM from "react-dom/client";
 import axios from "axios";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 
 import Dashboard from "../Dashboard";
 import { saveOnboardingState } from "../../lib/onboardingStorage";
@@ -73,7 +74,14 @@ function renderDashboard() {
   const container = document.createElement("div");
   document.body.appendChild(container);
   const root = ReactDOM.createRoot(container);
-  act(() => { root.render(<Dashboard />); });
+  const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
+  act(() => {
+    root.render(
+      <QueryClientProvider client={queryClient}>
+        <Dashboard />
+      </QueryClientProvider>
+    );
+  });
   return {
     container,
     unmount() { act(() => { root.unmount(); }); container.remove(); },
