@@ -1,7 +1,9 @@
 import React from "react";
 import axios from "axios";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useSearchParams } from "react-router-dom";
 import { API } from "../lib/apiConfig";
+import { candidateKeys, isCandidateIdReady } from "../lib/queryKeys";
 const plain = (value) => (value == null ? "" : String(value));
 const list = (value) => Array.isArray(value) ? value : [];
 const skillKey = (value) => plain(value).trim().toLowerCase();
@@ -89,7 +91,6 @@ export default function ResumeEditor() {
   // This is the server-authoritative list used for confirmation payloads.
   // guidance.missing_skills may intentionally hide skills selected in the UI.
   const [missingSkills, setMissingSkills] = React.useState([]);
-  const [saving, setSaving] = React.useState(false);
   const savingRef = React.useRef(false);
   const [result, setResult] = React.useState(null);
   const [claimWarning, setClaimWarning] = React.useState("");
@@ -103,32 +104,46 @@ export default function ResumeEditor() {
   // current parsed list outside render state so Save never posts a stale array.
   const skillsDraftRef = React.useRef([]);
   const previous = score(params.get("previous_match_score"));
+  const queryClient = useQueryClient();
+  const improvementQuery = useQuery({
+    queryKey: candidateKeys.resumeImprovement(candidateId, recommendationId),
+    queryFn: async () => {
+      const { data } = await axios.get(`${API}/candidate/${candidateId}/jobs/${recommendationId}/match-improvement`);
+      return data;
+    },
+    enabled: isCandidateIdReady(candidateId) && Boolean(recommendationId),
+  });
 
   React.useEffect(() => {
-    if (!candidateId || !recommendationId) { setError("This resume editor needs a candidate and recommendation."); return; }
-    axios.get(`${API}/candidate/${candidateId}/jobs/${recommendationId}/match-improvement`)
-      .then(({ data }) => {
-        const existing = list(data.resume?.skills);
-        const mergedSkills = selectedSections.skills
-          ? [...existing, ...selectedSkills.filter((skill) => !existing.some((item) => plain(item).trim().toLowerCase() === plain(skill).trim().toLowerCase()))]
-          : existing;
-        const draft = makeAtsDraft({ ...data.resume, skills: mergedSkills }, selectedSections);
-        skillsDraftRef.current = mergedSkills;
-        setResume(draft);
-        const jdSkills = list(data.required_skills);
-        const missingSkills = list(data.missing_skills).length
-          ? list(data.missing_skills)
-          : jdSkills.filter((skill) => !mergedSkills.some((item) => plain(item).trim().toLowerCase() === plain(skill).trim().toLowerCase()));
-        setMissingSkills(missingSkills);
-        setGuidance({ ...data, required_skills: jdSkills, missing_skills: selectedSections.skills ? missingSkills.filter((skill) => !selectedSkills.some((selected) => skillKey(selected) === skillKey(skill))) : missingSkills });
-        if (params.get("selected_sections") || params.get("selected_skills")) {
-          window.setTimeout(() => setGenerating(false), 900);
-        } else {
-          setGenerating(false);
-        }
-      })
-      .catch((e) => setError(e?.response?.data?.detail || "Unable to load your resume."));
-  }, [candidateId, recommendationId, selectedSections, selectedSkills, params]);
+    if (!isCandidateIdReady(candidateId) || !recommendationId) {
+      setError("This resume editor needs a candidate and recommendation.");
+      return;
+    }
+    if (improvementQuery.isError) {
+      setError(improvementQuery.error?.response?.data?.detail || "Unable to load your resume.");
+      return;
+    }
+    const data = improvementQuery.data;
+    if (!data) return;
+    const existing = list(data.resume?.skills);
+    const mergedSkills = selectedSections.skills
+      ? [...existing, ...selectedSkills.filter((skill) => !existing.some((item) => plain(item).trim().toLowerCase() === plain(skill).trim().toLowerCase()))]
+      : existing;
+    const draft = makeAtsDraft({ ...data.resume, skills: mergedSkills }, selectedSections);
+    skillsDraftRef.current = mergedSkills;
+    setResume(draft);
+    const jdSkills = list(data.required_skills);
+    const missingSkills = list(data.missing_skills).length
+      ? list(data.missing_skills)
+      : jdSkills.filter((skill) => !mergedSkills.some((item) => plain(item).trim().toLowerCase() === plain(skill).trim().toLowerCase()));
+    setMissingSkills(missingSkills);
+    setGuidance({ ...data, required_skills: jdSkills, missing_skills: selectedSections.skills ? missingSkills.filter((skill) => !selectedSkills.some((selected) => skillKey(selected) === skillKey(skill))) : missingSkills });
+    if (params.get("selected_sections") || params.get("selected_skills")) {
+      const timer = window.setTimeout(() => setGenerating(false), 900);
+      return () => window.clearTimeout(timer);
+    }
+    setGenerating(false);
+  }, [candidateId, recommendationId, selectedSections, selectedSkills, params, improvementQuery.data, improvementQuery.error, improvementQuery.isError]);
 
   const update = (key, value) => setResume((old) => ({ ...old, [key]: value }));
   const addSuggestedSkill = (skill) => {
@@ -148,16 +163,36 @@ export default function ResumeEditor() {
     update("bio", current ? `${current}\n\n[Confirm if applicable] ${text}` : `[Confirm if applicable] ${text}`);
   };
   const updateItem = (key, index, field, value) => update(key, list(resume[key]).map((item, i) => i === index ? (typeof item === "string" ? value : { ...item, [field]: value }) : item));
+  const claimMutation = useMutation({
+    mutationFn: async () => {
+      const { data } = await axios.post(`${API}/candidate/${candidateId}/jobs/${recommendationId}/resume-fix-credit-claim`);
+      return data;
+    },
+    retry: false,
+  });
+  const saveMutation = useMutation({
+    mutationFn: async ({ claimId, validConfirmedSkills }) => {
+      const { data } = await axios.post(`${API}/candidate/${candidateId}/jobs/${recommendationId}/match-improvement`, {
+        profile_updates: { ...resume, skills: skillsDraftRef.current },
+        fix_credit_claim_id: claimId,
+        confirmed_skills: validConfirmedSkills,
+      });
+      return data;
+    },
+    retry: false,
+  });
+  const saving = claimMutation.isPending || saveMutation.isPending;
+
   const save = async () => {
     if (savingRef.current) return;
     savingRef.current = true;
-    setSaving(true); setError(""); setClaimWarning("");
+    setError(""); setClaimWarning("");
     try {
       // The first save consumes the charged claim. Every later save must use
       // a fresh, server-issued editor_repeat claim for this entitlement.
       let claimId = fixCreditClaimId;
       if (!claimId) {
-        const { data: credit } = await axios.post(`${API}/candidate/${candidateId}/jobs/${recommendationId}/resume-fix-credit-claim`);
+        const credit = await claimMutation.mutateAsync();
         claimId = credit.claim_id;
         setFixCreditClaimId(claimId);
       }
@@ -165,7 +200,7 @@ export default function ResumeEditor() {
       const currentMissingKeys = new Set(currentMissing.map(skillKey));
       const validConfirmedSkills = confirmedSkills.filter((skill) => currentMissingKeys.has(skillKey(skill)));
       setConfirmedSkills(validConfirmedSkills);
-      const { data } = await axios.post(`${API}/candidate/${candidateId}/jobs/${recommendationId}/match-improvement`, { profile_updates: { ...resume, skills: skillsDraftRef.current }, fix_credit_claim_id: claimId, confirmed_skills: validConfirmedSkills });
+      const data = await saveMutation.mutateAsync({ claimId, validConfirmedSkills });
       // The API re-reads candidates.skills after saving and returns that
       // canonical profile. Keep the document in sync with it so a combined
       // value entered here is immediately rendered as individual skills.
@@ -186,6 +221,7 @@ export default function ResumeEditor() {
       setFixCreditClaimId(null);
       setResult(data);
       setNewlyAddedSkills(list(data?.newly_added_skills ?? data?.changes?.skills_added ?? data?.changed_skills));
+      await queryClient.invalidateQueries({ queryKey: candidateKeys.documents(candidateId), exact: true });
       // The editor is opened in its own tab. Notify the dashboard tab to
       // discard its cached profile and load the persisted canonical payload.
       if (window.opener && data.profile) {
@@ -193,7 +229,7 @@ export default function ResumeEditor() {
       }
       // Rotate before the next click; the claim just used is now consumed.
       try {
-        const { data: nextCredit } = await axios.post(`${API}/candidate/${candidateId}/jobs/${recommendationId}/resume-fix-credit-claim`);
+        const nextCredit = await claimMutation.mutateAsync();
         if (!nextCredit?.claim_id) throw new Error("The next resume-fix claim was not issued.");
         setFixCreditClaimId(nextCredit.claim_id);
       } catch (rotationError) {
@@ -205,7 +241,7 @@ export default function ResumeEditor() {
       }
       setError(e?.response?.data?.detail?.message || e?.response?.data?.detail || "Could not save your resume.");
     }
-    finally { savingRef.current = false; setSaving(false); }
+    finally { savingRef.current = false; }
   };
   if (error && !resume) return <main className="p-8 text-red-700">{error}</main>;
   if (!resume) return <main className="p-8 text-slate-600">Loading your resume…</main>;

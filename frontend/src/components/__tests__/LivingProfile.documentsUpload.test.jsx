@@ -2,8 +2,10 @@ import React from "react";
 import { act } from "react";
 import ReactDOM from "react-dom/client";
 import axios from "axios";
+import { QueryClientProvider } from "@tanstack/react-query";
 
 import LivingProfile from "../LivingProfile";
+import { createTestQueryClient } from "../../testUtils";
 
 globalThis.IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -50,14 +52,15 @@ const BASE_PROPS = {
   onJobViewed: jest.fn(),
 };
 
-function render(documents, extraProps = {}) {
+function render(documents, extraProps = {}, client = createTestQueryClient()) {
   const container = document.createElement("div");
   document.body.appendChild(container);
   const root = ReactDOM.createRoot(container);
   act(() => {
-    root.render(<LivingProfile {...BASE_PROPS} documents={documents} {...extraProps} />);
+    root.render(<QueryClientProvider client={client}><LivingProfile {...BASE_PROPS} documents={documents} {...extraProps} /></QueryClientProvider>);
   });
   return {
+    client,
     container,
     unmount() {
       act(() => root.unmount());
@@ -164,7 +167,8 @@ describe("Resume empty state", () => {
     const container = document.createElement("div");
     document.body.appendChild(container);
     const root = ReactDOM.createRoot(container);
-    act(() => root.render(<ResumeLifecycle />));
+    const client = createTestQueryClient();
+    act(() => root.render(<QueryClientProvider client={client}><ResumeLifecycle /></QueryClientProvider>));
 
     act(() => {
       [...container.querySelectorAll("button")].find((button) => button.textContent === "Delete").click();
@@ -276,6 +280,42 @@ describe("Certificate empty state", () => {
       expect.any(FormData)
     );
     expect(onCertUploaded).toHaveBeenCalledWith(certData);
+    unmount();
+  });
+
+  it("refreshes only the current candidate document cache after certificate upload", async () => {
+    const client = createTestQueryClient();
+    const invalidateSpy = jest.spyOn(client, "invalidateQueries");
+    axios.post.mockResolvedValue({ data: { id: "c2", filename: "cert2.pdf" } });
+    const view = render(
+      { resume: null, certificates: [] },
+      { onCertUploaded: jest.fn() },
+      client,
+    );
+    const fileInput = view.container.querySelector("input[type='file'][accept='.pdf,.png,.jpg,.jpeg']");
+    await act(async () => {
+      Object.defineProperty(fileInput, "files", { value: [new File(["data"], "cert2.pdf", { type: "application/pdf" })], configurable: true });
+      fileInput.dispatchEvent(new Event("change", { bubbles: true }));
+    });
+    await flush();
+    expect(invalidateSpy).toHaveBeenCalledWith({
+      queryKey: ["candidate", "cand-1", "documents"],
+      exact: true,
+    });
+    view.unmount();
+  });
+
+  it("shows certificate upload failures instead of swallowing them", async () => {
+    axios.post.mockRejectedValue(new Error("upload failed"));
+    const { container, unmount } = render({ resume: null, certificates: [] });
+    const fileInput = container.querySelector("input[type='file'][accept='.pdf,.png,.jpg,.jpeg']");
+    await act(async () => {
+      Object.defineProperty(fileInput, "files", { value: [new File(["data"], "cert2.pdf", { type: "application/pdf" })], configurable: true });
+      fileInput.dispatchEvent(new Event("change", { bubbles: true }));
+    });
+    await flush();
+    expect(axios.post).toHaveBeenCalledTimes(1);
+    expect(container.textContent).toContain("Certificate upload failed");
     unmount();
   });
 

@@ -3,7 +3,8 @@ import { act } from "react";
 import ReactDOM from "react-dom/client";
 import axios from "axios";
 import Dashboard from "../Dashboard";
-import { TestQueryProvider } from "../../testUtils";
+import { TestQueryProvider, createTestQueryClient } from "../../testUtils";
+import { candidateKeys } from "../../lib/queryKeys";
 import { saveOnboardingState } from "../../lib/onboardingStorage";
 
 globalThis.IS_REACT_ACT_ENVIRONMENT = true;
@@ -112,7 +113,14 @@ function setupAxios({ profiles = [profile()], resume = { filename: "uploaded-res
     return Promise.resolve({ data: {} });
   });
 }
-function renderDashboard() { const container = document.createElement("div"); document.body.appendChild(container); const root = ReactDOM.createRoot(container); act(() => root.render(<TestQueryProvider><Dashboard /></TestQueryProvider>)); return { container, unmount: () => { act(() => root.unmount()); container.remove(); } }; }
+function renderDashboard({ candidateId = "cand-123", client = createTestQueryClient() } = {}) {
+  saveOnboardingState({ candidateId, isOpenToMatches: true, activeTab: "jobs" });
+  const container = document.createElement("div");
+  document.body.appendChild(container);
+  const root = ReactDOM.createRoot(container);
+  act(() => root.render(<TestQueryProvider client={client}><Dashboard /></TestQueryProvider>));
+  return { client, container, unmount: () => { act(() => root.unmount()); container.remove(); } };
+}
 async function flush() { for (let i = 0; i < 20; i += 1) await act(async () => Promise.resolve()); }
 function click(container, id) { act(() => container.querySelector(`[data-testid="${id}"]`).click()); }
 
@@ -194,8 +202,29 @@ describe("Dashboard three-panel context", () => {
     setupAxios({ profiles: [profile(), profile({ keySkills: ["React", "TypeScript"] })] }); const view = renderDashboard(); await flush();
     await act(async () => window.dispatchEvent(new MessageEvent("message", { data: { type: "eve:candidate-profile-updated", candidateId: "cand-123" }, origin: window.location.origin })));
     await flush();
+    expect(view.client.getQueryState(candidateKeys.documents("cand-123"))?.fetchStatus).toBe("idle");
     expect(axios.get).toHaveBeenCalledWith(expect.stringContaining("/documents"), expect.any(Object));
     expect(view.container.querySelector("[data-testid=resume-inline-preview]")).toBeTruthy(); view.unmount();
+  });
+
+  it("does not fetch document metadata without a candidate identity", async () => {
+    setupAxios();
+    const view = renderDashboard({ candidateId: null });
+    await flush();
+    expect(axios.get).not.toHaveBeenCalledWith(expect.stringContaining("/documents"), expect.anything());
+    expect(view.client.getQueryState(candidateKeys.documents(null))).toBeUndefined();
+    view.unmount();
+  });
+
+  it("retains a document query error instead of converting it into a successful response", async () => {
+    axios.get.mockImplementation((url) => {
+      if (url.includes("/documents")) return Promise.reject(new Error("documents unavailable"));
+      return Promise.resolve({ data: {} });
+    });
+    const view = renderDashboard();
+    await flush();
+    expect(view.client.getQueryState(candidateKeys.documents("cand-123"))?.status).toBe("error");
+    view.unmount();
   });
 
   it("shows chat with the profile context", async () => {

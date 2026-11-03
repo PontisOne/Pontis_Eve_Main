@@ -2,8 +2,10 @@ import React from "react";
 import { act } from "react";
 import ReactDOM from "react-dom/client";
 import axios from "axios";
+import { QueryClientProvider } from "@tanstack/react-query";
 
 import LivingProfile from "../LivingProfile";
+import { createTestQueryClient } from "../../testUtils";
 
 globalThis.IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -31,9 +33,10 @@ function renderDocuments(resumeFingerprint = null, extraProps = {}, resumePresen
   const container = document.createElement("div");
   document.body.appendChild(container);
   const root = ReactDOM.createRoot(container);
+  const client = createTestQueryClient();
   act(() => {
     root.render(
-      <LivingProfile
+      <QueryClientProvider client={client}><LivingProfile
         activeTab="documents"
         userProfile={{
           name: "Test User",
@@ -70,7 +73,7 @@ function renderDocuments(resumeFingerprint = null, extraProps = {}, resumePresen
         onPhotoChange={jest.fn()}
         onJobViewed={jest.fn()}
         {...extraProps}
-      />
+      /></QueryClientProvider>
     );
   });
   return {

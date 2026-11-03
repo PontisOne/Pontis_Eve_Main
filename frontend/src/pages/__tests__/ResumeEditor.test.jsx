@@ -1,16 +1,39 @@
 import React, { act } from "react";
 import { createRoot } from "react-dom/client";
 import axios from "axios";
+import { QueryClientProvider } from "@tanstack/react-query";
 import ResumeEditor from "../ResumeEditor";
+import { createTestQueryClient } from "../../testUtils";
+import { candidateKeys } from "../../lib/queryKeys";
 
+let searchParams = new URLSearchParams("candidate_id=candidate-1&recommendation_id=rec-1&fix_credit_claim_id=claim-initial");
 vi.mock("react-router-dom", () => {
-  const stableSearchParams = new URLSearchParams("candidate_id=candidate-1&recommendation_id=rec-1&fix_credit_claim_id=claim-initial");
-  return { useSearchParams: () => [stableSearchParams] };
+  return { useSearchParams: () => [searchParams] };
 }, { virtual: true });
 
 const resume = { name: "Candidate", headline: "Engineer", skills: ["Python", "FastAPI"], work_experience: [], education: [], certifications: [], projects: [] };
 
+async function flush() {
+  for (let i = 0; i < 8; i += 1) await act(async () => new Promise((resolve) => setTimeout(resolve, 0)));
+}
+
 describe("ResumeEditor profile refresh", () => {
+  beforeEach(() => {
+    searchParams = new URLSearchParams("candidate_id=candidate-1&recommendation_id=rec-1&fix_credit_claim_id=claim-initial");
+  });
+
+  it("does not fetch the improvement query without a valid candidate identity", async () => {
+    searchParams = new URLSearchParams("candidate_id=&recommendation_id=rec-1");
+    const get = axios.get;
+    const container = document.createElement("div");
+    const root = createRoot(container);
+    await act(async () => { root.render(<QueryClientProvider client={createTestQueryClient()}><ResumeEditor /></QueryClientProvider>); });
+    await flush();
+    expect(get).not.toHaveBeenCalled();
+    expect(container.textContent).toContain("This resume editor needs a candidate and recommendation.");
+    await act(async () => { root.unmount(); });
+  });
+
   it("rotates claims across three saves without skipping the stored claim", async () => {
     global.IS_REACT_ACT_ENVIRONMENT = true;
     const claimResponses = ["claim-B", "claim-C", "claim-D"].map((claim_id) => ({ data: { claim_id } }));
@@ -24,8 +47,8 @@ describe("ResumeEditor profile refresh", () => {
       .mockImplementationOnce(async () => claimResponses[2]);
     const container = document.createElement("div");
     const root = createRoot(container);
-    await act(async () => { root.render(<ResumeEditor />); });
-    await act(async () => { await Promise.resolve(); });
+    await act(async () => { root.render(<QueryClientProvider client={createTestQueryClient()}><ResumeEditor /></QueryClientProvider>); });
+    await flush();
     const saveButton = () => Array.from(container.querySelectorAll("button")).find((button) => button.textContent === "Save Changes");
     for (let i = 0; i < 3; i += 1) await act(async () => { saveButton().click(); await Promise.resolve(); });
     const matchCalls = axios.post.mock.calls.filter(([url]) => url.includes("match-improvement"));
@@ -45,8 +68,8 @@ describe("ResumeEditor profile refresh", () => {
       .mockResolvedValueOnce({ data: { claim_id: "claim-next" } });
     const container = document.createElement("div");
     const root = createRoot(container);
-    await act(async () => { root.render(<ResumeEditor />); });
-    await act(async () => { await Promise.resolve(); });
+    await act(async () => { root.render(<QueryClientProvider client={createTestQueryClient()}><ResumeEditor /></QueryClientProvider>); });
+    await flush();
     await act(async () => { Array.from(container.querySelectorAll("button")).find((button) => button.textContent === "Save Changes").click(); await Promise.resolve(); });
     expect(container.querySelector('[data-testid="resume-save-result"]')).not.toBeNull();
     expect(container.querySelector('[data-testid="resume-claim-warning"]')?.textContent).toContain("changes were saved");
@@ -64,13 +87,13 @@ describe("ResumeEditor profile refresh", () => {
       .mockImplementationOnce(() => new Promise((resolve) => { resolveMatch = resolve; }));
     const container = document.createElement("div");
     const root = createRoot(container);
-    await act(async () => { root.render(<ResumeEditor />); });
-    await act(async () => { await Promise.resolve(); });
+    await act(async () => { root.render(<QueryClientProvider client={createTestQueryClient()}><ResumeEditor /></QueryClientProvider>); });
+    await flush();
     const saveButton = () => Array.from(container.querySelectorAll("button")).find((button) => button.textContent === "Save Changes");
     await act(async () => { saveButton().click(); saveButton().click(); });
     expect(axios.post.mock.calls.filter(([url]) => url.includes("match-improvement"))).toHaveLength(1);
     resolveMatch({ data: { match_score: 60, profile: { candidate_id: "candidate-1" } } });
-    await act(async () => { await Promise.resolve(); });
+    await flush();
     await act(async () => { root.unmount(); });
   });
 
@@ -79,8 +102,8 @@ describe("ResumeEditor profile refresh", () => {
     axios.get.mockResolvedValue({ data: { resume: { ...resume, skills: ["React.js", "Node.js", "Frontend Development"] }, match_score: 50, missing_skills: [] } });
     const container = document.createElement("div");
     const root = createRoot(container);
-    await act(async () => { root.render(<ResumeEditor />); });
-    await act(async () => { await Promise.resolve(); });
+    await act(async () => { root.render(<QueryClientProvider client={createTestQueryClient()}><ResumeEditor /></QueryClientProvider>); });
+    await flush();
     expect(container.querySelector('[data-testid="resume-skills"]').textContent).toBe("React.js • Node.js • Frontend Development");
     await act(async () => { root.unmount(); });
   });
@@ -91,8 +114,8 @@ describe("ResumeEditor profile refresh", () => {
     axios.get.mockResolvedValue({ data: { resume: { ...resume, skills: canonicalSkills }, match_score: 50, missing_skills: [] } });
     const container = document.createElement("div");
     const root = createRoot(container);
-    await act(async () => { root.render(<ResumeEditor />); });
-    await act(async () => { await Promise.resolve(); });
+    await act(async () => { root.render(<QueryClientProvider client={createTestQueryClient()}><ResumeEditor /></QueryClientProvider>); });
+    await flush();
     expect(container.querySelector('[data-testid="resume-skills"]').textContent).toBe(canonicalSkills.join(" \u2022 "));
     await act(async () => { root.unmount(); });
   });
@@ -103,8 +126,8 @@ describe("ResumeEditor profile refresh", () => {
     axios.get.mockResolvedValue({ data: { resume: { ...resume, skills: canonicalSkills }, match_score: 50, missing_skills: [] } });
     const container = document.createElement("div");
     const root = createRoot(container);
-    await act(async () => { root.render(<ResumeEditor />); });
-    await act(async () => { await Promise.resolve(); });
+    await act(async () => { root.render(<QueryClientProvider client={createTestQueryClient()}><ResumeEditor /></QueryClientProvider>); });
+    await flush();
     expect(container.querySelector('[data-testid="resume-skills"]').textContent).toBe(canonicalSkills.join(" \u2022 "));
     await act(async () => { root.unmount(); });
   });
@@ -116,8 +139,8 @@ describe("ResumeEditor profile refresh", () => {
     axios.post.mockResolvedValue({ data: { match_score: 60, profile: { candidate_id: "candidate-1", keySkills: canonicalSkills }, remaining_missing_skills: [] } });
     const container = document.createElement("div");
     const root = createRoot(container);
-    await act(async () => { root.render(<ResumeEditor />); });
-    await act(async () => { await Promise.resolve(); });
+    await act(async () => { root.render(<QueryClientProvider client={createTestQueryClient()}><ResumeEditor /></QueryClientProvider>); });
+    await flush();
     const skills = container.querySelector('[data-testid="resume-skills"]');
     skills.textContent = "HTML5 Express.js FlaskCSS3";
     // jsdom does not implement HTMLElement.innerText, which the
@@ -139,8 +162,8 @@ describe("ResumeEditor profile refresh", () => {
     axios.post.mockResolvedValue({ data: { match_score: 60, profile: { candidate_id: "candidate-1", keySkills: ["CSS3", "OpenCV", "Computer Vision"] } } });
     const container = document.createElement("div");
     const root = createRoot(container);
-    await act(async () => { root.render(<ResumeEditor />); });
-    await act(async () => { await Promise.resolve(); });
+    await act(async () => { root.render(<QueryClientProvider client={createTestQueryClient()}><ResumeEditor /></QueryClientProvider>); });
+    await flush();
     const skills = container.querySelector('[data-testid="resume-skills"]');
     Object.defineProperty(skills, "innerText", { configurable: true, value: "CSS3 \u2022 OpenCV \u2022 Computer Vision" });
     await act(async () => { skills.dispatchEvent(new FocusEvent("focusout", { bubbles: true })); });
@@ -163,8 +186,8 @@ describe("ResumeEditor profile refresh", () => {
     const postMessage = jest.spyOn(window, "postMessage").mockImplementation(() => {});
     const container = document.createElement("div");
     const root = createRoot(container);
-    await act(async () => { root.render(<ResumeEditor />); });
-    await act(async () => { await Promise.resolve(); });
+    await act(async () => { root.render(<QueryClientProvider client={createTestQueryClient()}><ResumeEditor /></QueryClientProvider>); });
+    await flush();
     await act(async () => { container.querySelector("button").click(); });
     expect(postMessage).toHaveBeenCalledWith(expect.objectContaining({ type: "eve:candidate-profile-updated", candidateId: "candidate-1" }), window.location.origin);
     await act(async () => { root.unmount(); });
@@ -181,8 +204,8 @@ describe("ResumeEditor profile refresh", () => {
       .mockResolvedValueOnce({ data: { claim_id: "claim-next" } });
     const container = document.createElement("div");
     const root = createRoot(container);
-    await act(async () => { root.render(<ResumeEditor />); });
-    await act(async () => { await Promise.resolve(); });
+    await act(async () => { root.render(<QueryClientProvider client={createTestQueryClient()}><ResumeEditor /></QueryClientProvider>); });
+    await flush();
     await act(async () => { Array.from(container.querySelectorAll("button")).find((button) => button.textContent === "Save Changes").click(); });
     expect(container.querySelector('[data-testid="resume-save-result"]').textContent).toContain("87%");
     await act(async () => { root.unmount(); });
@@ -197,10 +220,40 @@ describe("ResumeEditor profile refresh", () => {
     const back = history.back;
     const container = document.createElement("div");
     const root = createRoot(container);
-    await act(async () => { root.render(<ResumeEditor />); });
-    await act(async () => { await Promise.resolve(); });
+    await act(async () => { root.render(<QueryClientProvider client={createTestQueryClient()}><ResumeEditor /></QueryClientProvider>); });
+    await flush();
     await act(async () => { container.querySelector('[data-testid="resume-editor-back"]').click(); });
     expect(back).toHaveBeenCalledTimes(1);
+    await act(async () => { root.unmount(); });
+  });
+
+  it("retains query loading errors instead of returning an empty resume", async () => {
+    axios.get.mockRejectedValue(new Error("resume unavailable"));
+    const container = document.createElement("div");
+    const root = createRoot(container);
+    await act(async () => { root.render(<QueryClientProvider client={createTestQueryClient()}><ResumeEditor /></QueryClientProvider>); });
+    await flush();
+    expect(container.textContent).toContain("Unable to load your resume.");
+    await act(async () => { root.unmount(); });
+  });
+
+  it("invalidates only the candidate document cache after a successful save", async () => {
+    axios.get.mockResolvedValue({ data: { resume, match_score: 50, missing_skills: [] } });
+    axios.post
+      .mockResolvedValueOnce({ data: { match_score: 60, profile: { candidate_id: "candidate-1" } } })
+      .mockResolvedValueOnce({ data: { claim_id: "claim-next" } });
+    const client = createTestQueryClient();
+    const invalidateSpy = jest.spyOn(client, "invalidateQueries");
+    const container = document.createElement("div");
+    const root = createRoot(container);
+    await act(async () => { root.render(<QueryClientProvider client={client}><ResumeEditor /></QueryClientProvider>); });
+    await flush();
+    await act(async () => { Array.from(container.querySelectorAll("button")).find((button) => button.textContent === "Save Changes").click(); });
+    await flush();
+    expect(invalidateSpy).toHaveBeenCalledWith({
+      queryKey: candidateKeys.documents("candidate-1"),
+      exact: true,
+    });
     await act(async () => { root.unmount(); });
   });
 
@@ -223,8 +276,8 @@ describe("ResumeEditor profile refresh", () => {
     const open = jest.spyOn(window, "open").mockImplementation(() => null);
     const container = document.createElement("div");
     const root = createRoot(container);
-    await act(async () => { root.render(<ResumeEditor />); });
-    await act(async () => { await Promise.resolve(); });
+    await act(async () => { root.render(<QueryClientProvider client={createTestQueryClient()}><ResumeEditor /></QueryClientProvider>); });
+    await flush();
     await act(async () => { container.querySelector("button").click(); });
     const downloadButton = Array.from(container.querySelectorAll("button"))
       .find((button) => button.textContent === "Download Updated Resume");
