@@ -5,6 +5,7 @@ import { MemoryRouter } from "react-router-dom";
 import { render } from "@testing-library/react";
 
 import Dashboard from "../Dashboard";
+import { TestQueryProvider } from "../../testUtils";
 import { saveOnboardingState } from "../../lib/onboardingStorage";
 
 globalThis.IS_REACT_ACT_ENVIRONMENT = true;
@@ -156,7 +157,7 @@ function mockDashboardRequests(profileResponses) {
 function renderDashboard() {
   return render(
     <MemoryRouter initialEntries={["/dashboard"]}>
-      <Dashboard />
+    <TestQueryProvider><Dashboard /></TestQueryProvider>
     </MemoryRouter>,
   );
 }

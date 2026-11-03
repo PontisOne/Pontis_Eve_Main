@@ -3,6 +3,7 @@ import { act } from "react";
 import ReactDOM from "react-dom/client";
 import axios from "axios";
 import Dashboard from "../Dashboard";
+import { TestQueryProvider } from "../../testUtils";
 import { saveOnboardingState } from "../../lib/onboardingStorage";
 
 globalThis.IS_REACT_ACT_ENVIRONMENT = true;
@@ -16,7 +17,7 @@ vi.mock("sonner", () => ({ Toaster: () => null, toast: { error: jest.fn(), succe
 
 const profile = (percent) => ({ name: "Test User", email: "test@example.com", profile_strength_percent: percent, voice_intake_resume: { status: "completed", has_open_question: false } });
 function mockRequests(percent) { axios.get.mockImplementation((url) => Promise.resolve({ data: url.includes("/profile") ? profile(percent) : url.includes("/chat") ? { messages: [] } : url.includes("/documents") ? { resume: null, certificates: [] } : [] })); }
-function renderDashboard() { const container = document.createElement("div"); document.body.appendChild(container); const root = ReactDOM.createRoot(container); act(() => root.render(<Dashboard />)); return { container, unmount: () => { act(() => root.unmount()); container.remove(); } }; }
+function renderDashboard() { const container = document.createElement("div"); document.body.appendChild(container); const root = ReactDOM.createRoot(container); act(() => root.render(<TestQueryProvider><Dashboard /></TestQueryProvider>)); return { container, unmount: () => { act(() => root.unmount()); container.remove(); } }; }
 async function waitFor(predicate) { for (let i = 0; i < 30; i += 1) { await act(async () => Promise.resolve()); if (predicate()) return; } throw new Error("Timed out waiting for dashboard state"); }
 
 describe("Dashboard profile completion navbar guidance", () => {

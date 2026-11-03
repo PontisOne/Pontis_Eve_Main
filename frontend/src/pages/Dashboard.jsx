@@ -1,6 +1,6 @@
 import React from "react";
 import axios from "axios";
-import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Panel, PanelGroup, PanelResizeHandle } from "react-resizable-panels";
 import { toast } from "sonner";
 import { Bell } from "lucide-react";
@@ -26,6 +26,12 @@ import { getVoiceIntakeCenterView } from "../lib/voiceIntakeRouting";
 import { API, BACKEND_URL } from "../lib/apiConfig";
 import { candidateKeys, isCandidateIdReady } from "../lib/queryKeys";
 import { fetchCandidateProfile, mapCandidateProfile } from "../lib/profileQueries";
+import {
+  applyCandidateJob,
+  dismissCandidateJob,
+  fetchCandidateJobs,
+  trackCandidateJob,
+} from "../lib/candidateJobs";
 
 export { getVoiceIntakeCenterView };
 
@@ -302,14 +308,10 @@ function Dashboard() {
   const [chatRestored, setChatRestored] = React.useState(false);
   const [inputValue, setInputValue] = React.useState("");
   const [composerFocusToken, setComposerFocusToken] = React.useState(0);
-  const [availableJobs, setAvailableJobs] = React.useState([]);
-  const [matchingJobsTotal, setMatchingJobsTotal] = React.useState(0);
   const [documents, setDocuments] = React.useState({ resume: null, certificates: [], application_resumes: [] });
   const [docsLoading, setDocsLoading] = React.useState(false);
   const [selectedJob, setSelectedJob] = React.useState(null);
   const [sending, setSending] = React.useState(false);
-  const [jobsLoading, setJobsLoading] = React.useState(true);
-  const [jobsError, setJobsError] = React.useState(false);
   const [showSubscriptionPopup, setShowSubscriptionPopup] = React.useState(false);
   const [showSubscriptionPlanPopup, setShowSubscriptionPlanPopup] = React.useState(false);
   const [paymentStarting, setPaymentStarting] = React.useState(false);
@@ -655,40 +657,27 @@ function Dashboard() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [userProfile.strengthPercent]);
 
-  // Load real job recommendations from backend
-  const fetchJobs = React.useCallback((requestMore = false) => {
-    if (!candidateId || !hasJobsAccess) {
-      setAvailableJobs([]);
-      setMatchingJobsTotal(0);
-      setSelectedJob(null);
-      setJobsLoading(false);
-      return;
-    }
-    setJobsError(false);
-    axios
-      .get(`${API}/candidate/${candidateId}/jobs`, { params: {
-        ...(requestMore ? { request_more: true } : {}),
-        type: userProfile?.opportunity_type === "intern" ? "intern" : "jobs",
-      }})
-      .then((res) => {
-        setAvailableJobs(res.data || []);
-        const total = Number(res.headers?.["x-total-matching-jobs"]);
-        setMatchingJobsTotal(Number.isFinite(total) ? total : (res.data || []).length);
-        setSelectedJob((prev) => prev ?? (res.data?.[0] || null));
-        setJobsLoading(false);
-      })
-      .catch((error) => {
-        if (error?.response?.status === 403 && error.response.data?.detail?.code === "daily_job_limit_reached") {
-          setShowSubscriptionPopup(true);
-          setJobsLoading(false);
-          return;
-        }
-        setJobsError(true);
-        setJobsLoading(false);
-      });
-  }, [candidateId, hasJobsAccess, userProfile?.opportunity_type]);
-
   const opportunityType = userProfile?.opportunity_type === "intern" ? "intern" : "jobs";
+  const jobsQuery = useQuery({
+    queryKey: candidateKeys.jobs(candidateId, opportunityType),
+    queryFn: () => fetchCandidateJobs({ candidateId, opportunityType }),
+    enabled: isCandidateIdReady(candidateId) && hasJobsAccess,
+    retry: false,
+  });
+  const availableJobs = jobsQuery.data?.jobs || [];
+  const matchingJobsTotal = jobsQuery.data?.total || 0;
+  const jobsLoading = jobsQuery.isLoading;
+  const jobsError = jobsQuery.isError;
+  React.useEffect(() => {
+    if (jobsQuery.error?.response?.status === 403 && jobsQuery.error.response.data?.detail?.code === "daily_job_limit_reached") {
+      setShowSubscriptionPopup(true);
+    }
+  }, [jobsQuery.error]);
+  React.useEffect(() => {
+    if (jobsQuery.data?.jobs?.length) {
+      setSelectedJob((previous) => previous ?? jobsQuery.data.jobs[0]);
+    }
+  }, [jobsQuery.data, setSelectedJob]);
   // The selected center view and the candidate's primary opportunity preference
   // are intentionally separate: selection controls the visible panel, while
   // this controls the persistent emphasis in the tab labels.
@@ -718,11 +707,11 @@ function Dashboard() {
       axios.get(`${API}/candidate/${candidateId}/documents`, {
         headers: candidateToken ? { Authorization: `Bearer ${candidateToken}` } : {},
       }).then((res) => setDocuments(res.data)).catch(() => {});
-      fetchJobs();
+      queryClient.invalidateQueries({ queryKey: candidateKeys.jobs(candidateId) });
     };
     window.addEventListener("message", onProfileUpdated);
     return () => window.removeEventListener("message", onProfileUpdated);
-  }, [candidateId, candidateToken, fetchJobs, refreshProfile]);
+  }, [candidateId, candidateToken, queryClient, refreshProfile]);
 
   React.useEffect(() => {
     const showResumeFixSubscription = () => setShowSubscriptionPopup(true);
@@ -750,12 +739,6 @@ function Dashboard() {
     window.addEventListener("eve:resume-fix-credits-updated", updateResumeFixCredits);
     return () => window.removeEventListener("eve:resume-fix-credits-updated", updateResumeFixCredits);
   }, [refreshResumeFixCredits]);
-
-  React.useEffect(() => {
-    fetchJobs();
-    const interval = setInterval(fetchJobs, 60000);
-    return () => clearInterval(interval);
-  }, [fetchJobs]);
 
   const refreshDocuments = React.useCallback(() => {
     if (!candidateId) return Promise.resolve();
@@ -889,25 +872,36 @@ function Dashboard() {
     }));
   }, []);
 
+  const refreshJobs = React.useCallback(
+    () => queryClient.invalidateQueries({ queryKey: candidateKeys.jobs(candidateId) }),
+    [candidateId, queryClient],
+  );
+
+  const trackMutation = useMutation({
+    mutationFn: trackCandidateJob,
+    retry: false,
+  });
+  const dismissMutation = useMutation({
+    mutationFn: dismissCandidateJob,
+    retry: false,
+  });
+
   const handleTrackJob = async (jobId) => {
     const job = availableJobs.find((j) => j.id === jobId);
     if (!job || job.locked || !candidateId) return;
     const willTrack = !job.tracked;
-    setAvailableJobs((prev) =>
-      prev.map((j) => (j.id === jobId ? { ...j, tracked: willTrack } : j))
-    );
+    queryClient.setQueryData(candidateKeys.jobs(candidateId, opportunityType), (current) => current && {
+      ...current,
+      jobs: current.jobs.map((j) => (j.id === jobId ? { ...j, tracked: willTrack } : j)),
+    });
     try {
-      if (willTrack) {
-        await axios.post(`${API}/candidate/${candidateId}/jobs/${jobId}/track`);
-        toast.success(`Tracking ${job.company}`);
-      } else {
-        await axios.delete(`${API}/candidate/${candidateId}/jobs/${jobId}/track`);
-        toast("Untracked");
-      }
+      await trackMutation.mutateAsync({ candidateId, jobId, tracked: willTrack });
+      willTrack ? toast.success(`Tracking ${job.company}`) : toast("Untracked");
     } catch {
-      setAvailableJobs((prev) =>
-        prev.map((j) => (j.id === jobId ? { ...j, tracked: !willTrack } : j))
-      );
+      queryClient.setQueryData(candidateKeys.jobs(candidateId, opportunityType), (current) => current && {
+        ...current,
+        jobs: current.jobs.map((j) => (j.id === jobId ? { ...j, tracked: !willTrack } : j)),
+      });
       toast.error("Could not update tracking.");
     }
   };
@@ -915,15 +909,18 @@ function Dashboard() {
   const handleDismissJob = async (jobId, reason = null) => {
     const job = availableJobs.find((j) => j.id === jobId);
     if (!job || job.locked || !candidateId) return;
-    setAvailableJobs((prev) => prev.filter((j) => j.id !== jobId));
+    queryClient.setQueryData(candidateKeys.jobs(candidateId, opportunityType), (current) => current && {
+      ...current,
+      jobs: current.jobs.filter((j) => j.id !== jobId),
+    });
     if (selectedJob?.id === jobId) {
       setSelectedJob(availableJobs.find((j) => j.id !== jobId) || null);
     }
     toast("Removed from feed", { description: "You won't see this again." });
     try {
-      await axios.post(`${API}/candidate/${candidateId}/jobs/${jobId}/dismiss`, reason ? { reason } : {});
+      await dismissMutation.mutateAsync({ candidateId, jobId, reason });
     } catch {
-      fetchJobs();
+      await refreshJobs();
     }
   };
 
@@ -937,7 +934,7 @@ function Dashboard() {
         script.onload = resolve; script.onerror = reject; document.body.appendChild(script);
       });
       const checkout = new window.Razorpay({ key: order.key_id, amount: order.amount, currency: order.currency, name: order.name, description: order.description, order_id: order.order_id, prefill: order.prefill,
-        handler: async (payment) => { try { await axios.post(`${API}/candidate/${candidateId}/billing/verify`, payment); setShowSubscriptionPlanPopup(false); toast.success("Subscription activated"); refreshProfile(); fetchJobs(); } catch { toast.error("We could not verify the payment. It will be updated shortly if captured."); } finally { setPaymentStarting(false); } },
+        handler: async (payment) => { try { await axios.post(`${API}/candidate/${candidateId}/billing/verify`, payment); setShowSubscriptionPlanPopup(false); toast.success("Subscription activated"); refreshProfile(); refreshJobs(); } catch { toast.error("We could not verify the payment. It will be updated shortly if captured."); } finally { setPaymentStarting(false); } },
         modal: { ondismiss: () => setPaymentStarting(false) },
       });
       checkout.on("payment.failed", () => { setPaymentStarting(false); toast.error("Payment was not completed. No subscription was activated."); });
@@ -1168,10 +1165,10 @@ function Dashboard() {
                 onCertReplaced={handleCertReplaced}
                 onResumeDeleted={handleResumeDeleted}
                 onCertDeleted={handleCertDeleted}
-                onInterested={fetchJobs}
+                onInterested={refreshJobs}
                 onPhotoChange={handlePhotoChange}
                 onProfileUpdated={refreshProfile}
-                onJobViewed={(jobId) => setAvailableJobs((prev) => prev.map((j) => (j.id === jobId ? { ...j, viewed: true } : j)))}
+                onJobViewed={(jobId) => queryClient.setQueryData(candidateKeys.jobs(candidateId, opportunityType), (current) => current && { ...current, jobs: current.jobs.map((j) => (j.id === jobId ? { ...j, viewed: true } : j)) })}
                 onLockedJobClick={() => setShowSubscriptionPopup(true)}
               />
             )
@@ -1286,7 +1283,7 @@ function Dashboard() {
                 <div className="flex-1 flex flex-col items-center justify-center gap-3 px-8 text-center">
                   <p className="text-[14px] text-[#1F1F1F]">Couldn't load recommendations</p>
                   <button
-                    onClick={fetchJobs}
+                    onClick={refreshJobs}
                     className="text-[12.5px] text-[#4A4A48] underline underline-offset-2 hover:text-[#1F1F1F]"
                   >
                     Try again
@@ -1302,13 +1299,9 @@ function Dashboard() {
                     selectedJob={selectedJob}
                     setSelectedJob={setSelectedJob}
                     candidateId={candidateId}
-                    onJobViewed={(jobId) =>
-                      setAvailableJobs((prev) =>
-                        prev.map((j) => (j.id === jobId ? { ...j, viewed: true } : j))
-                      )
-                    }
+                    onJobViewed={(jobId) => queryClient.setQueryData(candidateKeys.jobs(candidateId, opportunityType), (current) => current && { ...current, jobs: current.jobs.map((j) => (j.id === jobId ? { ...j, viewed: true } : j)) })}
                     onLockedJobClick={() => setShowSubscriptionPopup(true)}
-                    onApplied={fetchJobs}
+                    onApplied={refreshJobs}
                   />
                 </div>
               )
@@ -1363,14 +1356,10 @@ function Dashboard() {
             onCertReplaced={handleCertReplaced}
             onResumeDeleted={handleResumeDeleted}
             onCertDeleted={handleCertDeleted}
-            onInterested={fetchJobs}
+            onInterested={refreshJobs}
             onPhotoChange={handlePhotoChange}
             onProfileUpdated={refreshProfile}
-            onJobViewed={(jobId) =>
-              setAvailableJobs((prev) =>
-                prev.map((j) => (j.id === jobId ? { ...j, viewed: true } : j))
-              )
-            }
+            onJobViewed={(jobId) => queryClient.setQueryData(candidateKeys.jobs(candidateId, opportunityType), (current) => current && { ...current, jobs: current.jobs.map((j) => (j.id === jobId ? { ...j, viewed: true } : j)) })}
             onLockedJobClick={() => setShowSubscriptionPopup(true)}
           />
           }

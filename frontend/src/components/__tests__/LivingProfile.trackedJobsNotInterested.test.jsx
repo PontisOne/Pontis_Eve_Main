@@ -3,6 +3,7 @@ import { act } from "react";
 import ReactDOM from "react-dom/client";
 
 import LivingProfile from "../LivingProfile";
+import { TestQueryProvider } from "../../testUtils";
 
 globalThis.IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -25,7 +26,7 @@ function renderTracked(onDismissJob = jest.fn(), jobs = [TRACKED_JOB]) {
   const root = ReactDOM.createRoot(container);
   act(() => {
     root.render(
-      <LivingProfile
+      <TestQueryProvider><LivingProfile
         activeTab="tracked"
         userProfile={{
           name: "Test User",
@@ -56,7 +57,7 @@ function renderTracked(onDismissJob = jest.fn(), jobs = [TRACKED_JOB]) {
         onInterested={jest.fn()}
         onPhotoChange={jest.fn()}
         onJobViewed={jest.fn()}
-      />
+      /></TestQueryProvider>
     );
   });
   return {

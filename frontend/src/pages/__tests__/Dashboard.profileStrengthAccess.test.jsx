@@ -4,6 +4,7 @@ import axios from "axios";
 import { render } from "@testing-library/react";
 
 import Dashboard from "../Dashboard";
+import { TestQueryProvider } from "../../testUtils";
 import { saveOnboardingState } from "../../lib/onboardingStorage";
 
 globalThis.IS_REACT_ACT_ENVIRONMENT = true;
@@ -86,7 +87,7 @@ function mockRequests(profiles) {
 }
 
 function renderDashboard() {
-  return render(<Dashboard />);
+  return render(<TestQueryProvider><Dashboard /></TestQueryProvider>);
 }
 
 async function waitForDashboardState(predicate) {

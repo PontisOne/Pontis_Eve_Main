@@ -4,6 +4,7 @@ import ReactDOM from "react-dom/client";
 import axios from "axios";
 
 import SwipeJobDeck from "../SwipeJobCard";
+import { TestQueryProvider } from "../../testUtils";
 
 globalThis.IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -32,13 +33,13 @@ function renderDeck(props = {}) {
 
   act(() => {
     root.render(
-      <SwipeJobDeck
+      <TestQueryProvider><SwipeJobDeck
         jobs={[job]}
         candidateId="cand-123"
         onJobsChange={jest.fn()}
         onDismissJob={jest.fn()}
         {...props}
-      />
+      /></TestQueryProvider>
     );
   });
 
@@ -136,12 +137,12 @@ describe("SwipeJobDeck job details navigation", () => {
     const refreshedJob = { ...job, match_score: 0.33 };
     await act(async () => {
       renderResult.root.render(
-        <SwipeJobDeck
+        <TestQueryProvider><SwipeJobDeck
           jobs={[refreshedJob]}
           candidateId="cand-123"
           onJobsChange={jest.fn()}
           onDismissJob={jest.fn()}
-        />
+        /></TestQueryProvider>
       );
     });
     expect(renderResult.container.querySelector('[data-testid="match-score-job-1"]').textContent).toContain("33%");

@@ -27,6 +27,7 @@ import { normalizeJobDescription } from "../lib/jobDescription";
 import { loadOnboardingState } from "../lib/onboardingStorage";
 import { buildProfileBio } from "../lib/profileBio";
 import { candidateKeys } from "../lib/queryKeys";
+import { viewCandidateJob } from "../lib/candidateJobs";
 import { updateCandidateProfile } from "../lib/profileQueries";
 import {
   formatEducationDateRange,
@@ -1165,11 +1166,11 @@ export function JobsTab({
       setDetailJob(job);
       if (!job.viewed && candidateId) {
         try {
-          await axios.post(`${API}/candidate/${candidateId}/jobs/${job.id}/view`);
+          // View events are intentional fire-and-forget telemetry: opening the
+          // detail modal must not wait on or fail because of this side effect.
+          void viewCandidateJob({ candidateId, jobId: job.id }).catch(() => {});
           onJobViewed?.(job.id);
-        } catch {
-          // silent
-        }
+        } catch { /* fire-and-forget view events never block navigation */ }
       }
     },
     [candidateId, onJobViewed],
