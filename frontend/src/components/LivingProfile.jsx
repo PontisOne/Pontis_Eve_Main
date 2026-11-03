@@ -20,10 +20,14 @@ import {
   X,
 } from "lucide-react";
 import React from "react";
+import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { z } from "zod";
 import { API, BACKEND_URL } from "../lib/apiConfig";
 import { normalizeJobDescription } from "../lib/jobDescription";
 import { loadOnboardingState } from "../lib/onboardingStorage";
 import { buildProfileBio } from "../lib/profileBio";
+import { candidateKeys } from "../lib/queryKeys";
+import { updateCandidateProfile } from "../lib/profileQueries";
 import {
   formatEducationDateRange,
   formatEducationScore,
@@ -544,8 +548,30 @@ export function ProfileEditor({ profile, candidateId, onClose, onSaved }) {
     additional_information: profile.additional_information || "",
     hobbies: csv(profile.hobbies || profile.interests || profile.raw_data?.hobbies),
   }));
-  const [saving, setSaving] = React.useState(false);
   const [error, setError] = React.useState("");
+  const queryClient = useQueryClient();
+  const profileSchema = React.useMemo(() => z.object({
+    name: z.string().max(300), headline: z.string().max(300), location: z.string().max(300),
+    experience_years: z.union([
+      z.literal(""),
+      z.coerce.number().finite().min(0, "Years of experience cannot be negative"),
+    ]), availability: z.string().max(200),
+    salary_expectation: z.string().max(200), bio: z.string().max(5000),
+    work_experience: z.array(z.object({ title: z.string(), company: z.string(), dates: z.string(), description: z.string() })),
+    education: z.array(z.object({ degree: z.string(), institution: z.string(), dates: z.string() })),
+    skills: z.union([z.string(), z.array(z.string())]), certifications: z.array(z.string()),
+    preferred_roles: z.union([z.string(), z.array(z.string())]), additional_information: z.string(), hobbies: z.union([z.string(), z.array(z.string())]),
+  }), []);
+  const saveMutation = useMutation({
+    mutationFn: (payload) => updateCandidateProfile({ candidateId, payload }),
+    retry: false,
+    onSuccess: (data) => {
+      queryClient.setQueryData(candidateKeys.profile(candidateId), data);
+      onSaved?.(data);
+      onClose();
+    },
+    onError: (err) => setError(err?.response?.data?.detail || "Could not save the profile. Please try again."),
+  });
   const field = (key, value) => setDraft((current) => ({ ...current, [key]: value }));
   const recordField = (section, index, key, value) =>
     setDraft((current) => ({
@@ -560,10 +586,13 @@ export function ProfileEditor({ profile, candidateId, onClose, onSaved }) {
       [section]: current[section].filter((_, i) => i !== index),
     }));
   const save = async () => {
-    setSaving(true);
     setError("");
-    try {
-      await axios.put(`${API}/candidate/${candidateId}/profile`, {
+    const validation = profileSchema.safeParse(draft);
+    if (!validation.success) {
+      setError("Please check the highlighted profile fields and try again.");
+      return;
+    }
+    saveMutation.mutate({
         ...draft,
         experience_years: draft.experience_years === "" ? 0 : Number(draft.experience_years),
         skills: parseCsv(draft.skills),
@@ -573,13 +602,6 @@ export function ProfileEditor({ profile, candidateId, onClose, onSaved }) {
         preferred_roles: parseCsv(draft.preferred_roles),
         hobbies: parseCsv(draft.hobbies),
       });
-      await onSaved?.();
-      onClose();
-    } catch (err) {
-      setError(err?.response?.data?.detail || "Could not save the profile. Please try again.");
-    } finally {
-      setSaving(false);
-    }
   };
   return (
     <div
@@ -611,6 +633,7 @@ export function ProfileEditor({ profile, candidateId, onClose, onSaved }) {
               <label key={key} className="text-xs font-medium text-[#4A4A48]">
                 {label}
                 <input
+                  name={key}
                   type={key === "experience_years" ? "number" : "text"}
                   min="0"
                   step="0.1"
@@ -821,7 +844,7 @@ export function ProfileEditor({ profile, candidateId, onClose, onSaved }) {
           <button
             type="button"
             onClick={onClose}
-            disabled={saving}
+            disabled={saveMutation.isPending}
             className="rounded-full border px-4 py-2 text-sm"
           >
             Cancel
@@ -829,10 +852,10 @@ export function ProfileEditor({ profile, candidateId, onClose, onSaved }) {
           <button
             type="button"
             onClick={save}
-            disabled={saving || !candidateId}
+            disabled={saveMutation.isPending || !candidateId}
             className="rounded-full bg-[#1F1F1F] px-5 py-2 text-sm font-medium text-white disabled:opacity-50"
           >
-            {saving ? "SavingΓÇª" : "Save profile"}
+            {saveMutation.isPending ? "Saving…" : "Save profile"}
           </button>
         </div>
       </div>

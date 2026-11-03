@@ -2,6 +2,7 @@ import React from "react";
 import ReactDOM from "react-dom/client";
 import { act } from "react";
 import axios from "axios";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { ProfileEditor } from "../LivingProfile";
 
 globalThis.IS_REACT_ACT_ENVIRONMENT = true;
@@ -22,7 +23,12 @@ function renderEditor() {
   const container = document.createElement("div");
   document.body.appendChild(container);
   const root = ReactDOM.createRoot(container);
-  act(() => root.render(<ProfileEditor profile={profile} candidateId="candidate-1" onClose={jest.fn()} onSaved={jest.fn()} />));
+  const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } });
+  act(() => root.render(
+    <QueryClientProvider client={queryClient}>
+      <ProfileEditor profile={profile} candidateId="candidate-1" onClose={jest.fn()} onSaved={jest.fn()} />
+    </QueryClientProvider>
+  ));
   return { container, unmount: () => act(() => root.unmount()) };
 }
 
@@ -57,6 +63,22 @@ describe("ProfileEditor certifications", () => {
     const saveButton = Array.from(view.container.querySelectorAll("button")).find((button) => button.textContent.includes("Save profile"));
     await act(async () => saveButton.dispatchEvent(new MouseEvent("click", { bubbles: true })));
     expect(axios.put).toHaveBeenCalledWith(expect.stringContaining("/candidate/candidate-1/profile"), expect.objectContaining({ certifications: ["PMP"] }));
+    view.unmount();
+  });
+
+  it("rejects invalid experience years without calling the API", async () => {
+    axios.put.mockResolvedValue({ data: {} });
+    const view = renderEditor();
+    const input = view.container.querySelector('input[name="experience_years"]');
+    const valueSetter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value").set;
+    act(() => {
+      valueSetter.call(input, "-2");
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    const saveButton = Array.from(view.container.querySelectorAll("button")).find((button) => button.textContent.includes("Save profile"));
+    await act(async () => saveButton.dispatchEvent(new MouseEvent("click", { bubbles: true })));
+    expect(axios.put).not.toHaveBeenCalled();
+    expect(view.container.textContent).toContain("Please check the highlighted profile fields");
     view.unmount();
   });
 });
