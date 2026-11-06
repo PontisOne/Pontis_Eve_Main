@@ -3,6 +3,7 @@ import tempfile
 import unittest
 from collections import Counter
 from pathlib import Path
+from unittest.mock import patch
 
 from scripts import backend_quality
 
@@ -49,6 +50,17 @@ class RuffBaselineTests(unittest.TestCase):
             self.assertEqual(path.read_bytes(), before)
         finally:
             path.unlink(missing_ok=True)
+
+    @patch.object(backend_quality, "run_command", return_value=0)
+    @patch.object(backend_quality, "run_ruff_lint", return_value=0)
+    def test_run_ruff_forwards_only_supplied_filenames(self, mock_lint, mock_run):
+        supplied = ["backend/app/example.py", "backend/tests/test_example.py"]
+
+        self.assertEqual(backend_quality.run_ruff(supplied), 0)
+        mock_lint.assert_called_once_with(supplied)
+        command = mock_run.call_args.args[0]
+        self.assertEqual(command[-len(supplied):], supplied)
+        self.assertNotIn("backend/app/unrelated.py", command)
 
 
 if __name__ == "__main__":
