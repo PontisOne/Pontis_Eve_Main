@@ -4,10 +4,10 @@ import sys
 from collections import Counter
 from pathlib import Path
 
-
 ROOT = Path(__file__).resolve().parent.parent
 BACKEND = ROOT / "backend"
 BASELINE = BACKEND / "ruff-baseline.json"
+
 
 # Selects the Python interpreter for running development tools.
 # It prefers the backend virtual environment and falls back to the
@@ -23,16 +23,19 @@ def tool_python() -> str:
             return str(candidate)
     return sys.executable
 
+
 # Executes the given command from the repository root and returns its exit code.
 # A zero exit code generally indicates success, while a nonzero code indicates
 # a failure or another result that the calling function must handle.
 def run_command(command: list[str]) -> int:
     return subprocess.run(command, cwd=ROOT, check=False).returncode
 
+
 # Converts a file path into a path relative to the backend directory,
 # using forward slashes to keep the path format consistent across operating systems.
 def relative_backend_path(filename: str) -> str:
     return Path(filename).resolve().relative_to(BACKEND.resolve()).as_posix()
+
 
 # Creates a stable fingerprint for a Ruff violation using its backend-relative
 # file path, rule code, and normalized source line. This helps compare current
@@ -47,31 +50,67 @@ def violation_key(item: dict) -> str:
 
 def ruff_lint_counts(files: list[str]) -> tuple[Counter[str], int]:
     result = subprocess.run(
-        [tool_python(), "-m", "ruff", "check", "--output-format", "json", "--config", str(BACKEND / "pyproject.toml"), *files],
-        cwd=ROOT, capture_output=True, text=True, check=False,
+        [
+            tool_python(),
+            "-m",
+            "ruff",
+            "check",
+            "--output-format",
+            "json",
+            "--config",
+            str(BACKEND / "pyproject.toml"),
+            *files,
+        ],
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+        check=False,
     )
     if result.returncode not in (0, 1):
         print(result.stderr, file=sys.stderr, end="")
         return Counter(), result.returncode
-    diagnostics = json.loads(result.stdout or "[]")
+    try:
+        diagnostics = json.loads(result.stdout or "[]")
+    except json.JSONDecodeError as error:
+        print(f"Unable to parse Ruff JSON output: {error}", file=sys.stderr)
+        return Counter(), 1
     return Counter(violation_key(item) for item in diagnostics), 0
 
 
 def load_baseline() -> Counter[str]:
-    with BASELINE.open(encoding="utf-8") as stream:
-        data = json.load(stream)
-    return Counter({str(key): int(value) for key, value in data["violations"].items()})
+    try:
+        with BASELINE.open(encoding="utf-8") as stream:
+            data = json.load(stream)
+        violations = data["violations"]
+        return Counter({str(key): int(value) for key, value in violations.items()})
+    except (FileNotFoundError, OSError) as error:
+        raise ValueError(
+            f"Unable to load Ruff baseline at {BASELINE}: {error}"
+        ) from error
+    except (json.JSONDecodeError, KeyError, TypeError, ValueError) as error:
+        raise ValueError(f"Invalid Ruff baseline at {BASELINE}: {error}") from error
 
 
 def new_lint_violations(current: Counter[str], baseline: Counter[str]) -> Counter[str]:
-    return Counter({key: count - baseline[key] for key, count in current.items() if count > baseline[key]})
+    return Counter(
+        {
+            key: count - baseline[key]
+            for key, count in current.items()
+            if count > baseline[key]
+        }
+    )
 
 
 def run_ruff_lint(files: list[str]) -> int:
     current, returncode = ruff_lint_counts(files)
     if returncode != 0:
         return returncode
-    new_violations = new_lint_violations(current, load_baseline())
+    try:
+        baseline = load_baseline()
+    except ValueError as error:
+        print(error, file=sys.stderr)
+        return 1
+    new_violations = new_lint_violations(current, baseline)
     if new_violations:
         print("New Ruff violations detected:")
         for key, count in sorted(new_violations.items()):
@@ -98,8 +137,20 @@ def update_baseline() -> int:
 
 def staged_python_files() -> list[str]:
     result = subprocess.run(
-        ["git", "diff", "--cached", "--name-only", "-z", "--diff-filter=ACMR", "--", "backend"],
-        cwd=ROOT, capture_output=True, text=True, check=True,
+        [
+            "git",
+            "diff",
+            "--cached",
+            "--name-only",
+            "-z",
+            "--diff-filter=ACMR",
+            "--",
+            "backend",
+        ],
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+        check=True,
     )
     files = []
     backend_root = BACKEND.resolve()
@@ -108,7 +159,11 @@ def staged_python_files() -> list[str]:
             continue
         path = Path(name)
         absolute_path = (ROOT / path).resolve()
-        if path.suffix == ".py" and backend_root in absolute_path.parents and absolute_path.is_file():
+        if (
+            path.suffix == ".py"
+            and backend_root in absolute_path.parents
+            and absolute_path.is_file()
+        ):
             files.append(path.as_posix())
     return files
 
@@ -120,7 +175,18 @@ def run_ruff(files: list[str]) -> int:
     lint_result = run_ruff_lint(files)
     if lint_result != 0:
         return lint_result
-    return run_command([tool_python(), "-m", "ruff", "format", "--check", "--config", str(BACKEND / "pyproject.toml"), *files])
+    return run_command(
+        [
+            tool_python(),
+            "-m",
+            "ruff",
+            "format",
+            "--check",
+            "--config",
+            str(BACKEND / "pyproject.toml"),
+            *files,
+        ]
+    )
 
 
 def run_mypy() -> int:
@@ -129,12 +195,24 @@ def run_mypy() -> int:
         print("No staged backend Python files; skipping mypy.")
         return 0
     print(f"Running mypy on {len(files)} staged backend Python file(s)...")
-    return run_command([tool_python(), "-m", "mypy", "--config-file", str(BACKEND / "mypy.ini"), *files])
+    return run_command(
+        [
+            tool_python(),
+            "-m",
+            "mypy",
+            "--config-file",
+            str(BACKEND / "mypy.ini"),
+            *files,
+        ]
+    )
 
 
 def main() -> int:
     if len(sys.argv) < 2:
-        print("Usage: python scripts/backend_quality.py [ruff|mypy|update-ruff-baseline]", file=sys.stderr)
+        print(
+            "Usage: python scripts/backend_quality.py [ruff|mypy|update-ruff-baseline]",
+            file=sys.stderr,
+        )
         return 2
     action = sys.argv[1]
     if action == "ruff":

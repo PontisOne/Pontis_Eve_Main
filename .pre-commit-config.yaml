@@ -1,4 +1,4 @@
-﻿repos:
+repos:
   - repo: local
     hooks:
       # Backend quality checks — Issue #6
@@ -14,4 +14,11 @@
         entry: python scripts/backend_quality.py mypy
         language: system
         files: ^backend/.*\.py$
+        pass_filenames: false
+
+      - id: backend-quality-tests
+        name: Backend quality-check unit tests
+        entry: python -m unittest scripts.tests.test_backend_quality
+        language: system
+        files: ^(scripts/backend_quality\.py|scripts/tests/test_backend_quality\.py)$
         pass_filenames: false
