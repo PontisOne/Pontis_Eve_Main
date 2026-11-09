@@ -48,11 +48,12 @@ The frontend scripts now use Vite and Vitest directly:
   "start": "vite",
   "build": "vite build",
   "preview": "vite preview",
+  "serve:production": "node scripts/serve-production.js",
   "test": "vitest run"
 }
 ```
 
-CRA, CRACO, and Jest runtime dependencies are no longer the application toolchain. Vite dependencies include `vite` and `@vitejs/plugin-react`; test dependencies include `vitest`, `jsdom`, and Testing Library packages. The project keeps `@testing-library/jest-dom` because its DOM assertions remain useful under Vitest. Yarn resolutions remain in place for the repository's known transitive dependency constraints.
+CRA, CRACO, and Jest runtime dependencies are no longer the application toolchain. Vite dependencies include `vite` and `@vitejs/plugin-react`; test dependencies include `vitest`, `jsdom`, and Testing Library packages. The production static server uses `serve-handler` and `compression` directly; `yarn preview` remains Vite's local build preview and does not apply production hosting rules. The project keeps `@testing-library/jest-dom` because its DOM assertions remain useful under Vitest. Yarn resolutions remain in place for the repository's known transitive dependency constraints.
 
 ### Environment variables
 
@@ -73,6 +74,8 @@ The production environment uses the same key with the production API origin. Oth
 - Applies the same JSX loader behavior to dependency optimization.
 - Writes production output to `frontend/build` with source maps disabled.
 - Ignores generated and dependency directories in the development watcher.
+
+The production static server uses `frontend/serve.json` for cache headers and SPA fallback. Its Node wrapper returns a JSON 404 for `/api` and `/health` paths before invoking the static handler, preventing the extensionless SPA fallback from claiming those namespaces.
 
 The source alias is also reflected in `frontend/jsconfig.json` and is used by imports such as `@/App` and `@/lib/utils`.
 
@@ -121,7 +124,7 @@ yarn build
 
 Vite resolves and bundles the application and its CSS, applies the configured React and JSX transforms, and writes the optimized output to `frontend/build`. The output is static and should be deployed to a static host or web server configured to return the SPA entry point for client-side routes such as `/dashboard` and `/resume-editor`. Environment values are fixed when this build is created.
 
-After building, `yarn preview` serves the output locally on Vite's default port `4173` for checking the production bundle.
+After building, `yarn preview` serves the output locally on Vite's default port `4173`. Preview is for checking the production bundle; it does not apply `serve.json`. To test the deployment static server, use `PORT=4174 yarn serve:production` instead.
 
 ### Automated tests
 
