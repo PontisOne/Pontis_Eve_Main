@@ -17,11 +17,11 @@ This inventory is cross-checked against `package.json`, the frontend configurati
 - **Styling and UI:** Tailwind CSS, PostCSS, Autoprefixer, locally maintained shadcn/ui-style components built on Radix UI primitives, and `lucide-react` icons. Supporting utilities include `class-variance-authority`, `clsx`, `tailwind-merge`, and `tailwindcss-animate`.
 - **Server data and validation:** `src/index.js` mounts a TanStack Query `QueryClientProvider` with a 60-second default query stale time and window-focus refetch disabled. The current app source has no `useQuery` or `useMutation` calls; screens primarily make Axios requests and keep request state in React components. Zod currently validates `VITE_BACKEND_URL` in `src/lib/apiConfig.js`; it is not a general API-response validation layer.
 - **Forms and interaction:** The app uses Sonner notifications, Framer Motion, `react-resizable-panels`, and `lucide-react`. Shared UI components also import React Hook Form, Embla Carousel, `input-otp`, and `next-themes`; the latter is used by a reusable toast wrapper and does not mean the app uses Next.js.
-- **Product integrations:** Voice intake uses Vapi through the `useVapi` hook, which imports the Web SDK. `libphonenumber-js` supports phone input, and DOMPurify sanitizes job-description content. Although `pdfjs-dist` is declared in `package.json`, there are no direct imports of it in `src/`; the current source does not establish that PDF.js is used for document preview.
+- **Product integrations:** Voice intake uses Vapi through the `useVapi` hook, which imports the Web SDK. `libphonenumber-js` supports phone input, DOMPurify sanitizes job-description content, and Dashboard uses PDF.js to render resume previews.
 - **Testing:** Vitest, JSDOM, and React Testing Library (`@testing-library/react`, `@testing-library/dom`, `@testing-library/user-event`, and `@testing-library/jest-dom`).
 - **Additional tooling:** ESLint and React/accessibility/hooks plugins are dependencies, but `package.json` does not currently define a lint script. There is no TypeScript compiler or configured TypeScript type-check command; application source is currently JavaScript/JSX. The intended quality-gate direction is to use `pre-commit` as the shared frontend/backend hook framework, with Biome for frontend formatting/linting, `tsc` for an explicitly scoped gradual JS/TS check, and Vitest for tests. This pipeline is planned, not configured yet.
 
-`package.json` also declares dependencies for which no direct imports were found in `src/`, including `@hookform/resolvers`, `date-fns`, `dayjs`, `html2canvas`, `jspdf`, `lodash`, `pdfjs-dist`, `recharts`, and `swr`. This does not rule out indirect use by dependencies.
+`package.json` also declares dependencies for which no direct imports were found in `src/`, including `@hookform/resolvers`, `date-fns`, `dayjs`, `html2canvas`, `jspdf`, `lodash`, `recharts`, and `swr`. This does not rule out indirect use by dependencies.
 
 ## Local development
 
@@ -39,16 +39,6 @@ VITE_BACKEND_URL=http://localhost:8000
 ```
 
 The checked-in `frontend/.env.production` supplies `VITE_BACKEND_URL` for production builds. `VITE_BACKEND_URL` is required and validated as an HTTP(S) URL when the API configuration module loads; the API client appends `/api`. Vite exposes variables beginning with `VITE_` in the client bundle, so do not put server secrets or OAuth client secrets in frontend environment files.
-
-## Bundle analysis
-
-The normal production build does not generate analysis output. To create an interactive Rollup bundle report, run:
-
-```bash
-yarn build:analyze
-```
-
-Open `frontend/build/bundle-analysis.html` in a browser. The report is generated only for that command and is not committed.
 
 Voice onboarding uses Vapi. To enable it in a local frontend, set the public Vapi key and assistant ID:
 
@@ -72,7 +62,7 @@ Routes are composed in `src/App.js`:
 
 The frontend falls back to the sign-in route for unknown paths.
 
-The route pages are currently imported directly by `src/App.js`; there is no `React.lazy`/`Suspense` route splitting in the current implementation.
+The route pages are imported directly by `src/App.js`; route-level lazy loading and chunk-load recovery are tracked separately in issue #23.
 
 - `src/pages/` contains route-level screens and coordinates larger flows.
 - `src/components/` contains shared product components, including the dashboard panels, profile, job cards, billing, and onboarding voice UI.

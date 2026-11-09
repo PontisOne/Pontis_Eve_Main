@@ -1,9 +1,8 @@
 const path = require("path");
 const { defineConfig, transformWithEsbuild } = require("vite");
 const react = require("@vitejs/plugin-react");
-const { visualizer } = require("rollup-plugin-visualizer");
 
-module.exports = defineConfig(({ mode }) => ({
+module.exports = defineConfig({
   plugins: [
     {
       name: "jsx-in-js",
@@ -15,16 +14,6 @@ module.exports = defineConfig(({ mode }) => ({
       },
     },
     react(),
-    ...(mode === "analyze"
-      ? [
-          visualizer({
-            filename: "build/bundle-analysis.html",
-            open: false,
-            gzipSize: true,
-            brotliSize: true,
-          }),
-        ]
-      : []),
   ],
   resolve: {
     alias: {
@@ -54,4 +43,4 @@ module.exports = defineConfig(({ mode }) => ({
       ],
     },
   },
-}));
+});

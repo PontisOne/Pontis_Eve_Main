@@ -9,6 +9,7 @@ globalThis.IS_REACT_ACT_ENVIRONMENT = true;
 vi.mock("pdfjs-dist/build/pdf", () => ({
   GlobalWorkerOptions: {},
   getDocument: jest.fn(() => ({
+    destroy: jest.fn(),
     promise: Promise.resolve({
       numPages: 3,
       getPage: jest.fn(() => Promise.resolve({
@@ -18,7 +19,7 @@ vi.mock("pdfjs-dist/build/pdf", () => ({
     }),
   })),
 }));
-vi.mock("pdfjs-dist/build/pdf.worker.entry", () => "pdf-worker");
+vi.mock("pdfjs-dist/build/pdf.worker.entry", () => ({ default: "pdf-worker" }));
 vi.mock("react-router-dom", () => ({ useNavigate: () => jest.fn(), useSearchParams: () => [new URLSearchParams(), jest.fn()] }), { virtual: true });
 vi.mock("../../components/Sidebar", () => ({ default: ({ setActiveTab, collapsed, onToggleCollapsed }) => <div data-testid="sidebar" data-collapsed={collapsed ? "true" : "false"}><button data-testid="sidebar-collapse-btn" onClick={onToggleCollapsed}>toggle</button>{["jobs", "tracked", "profile", "documents", "opportunities", "billing"].map((id) => <button key={id} data-testid={`nav-tab-${id}`} onClick={() => setActiveTab(id)}>{id}</button>)}</div> }));
 vi.mock("../../components/ChatHub", () => ({ default: (props) => <div data-testid="chat-hub"><button data-testid="chat-mic-btn" onClick={props.onMicClick}>mic</button></div> }));
