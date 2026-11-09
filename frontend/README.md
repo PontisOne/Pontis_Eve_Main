@@ -59,12 +59,6 @@ VITE_EVE_VAPI_ASSISTANT_ID=
 
 These are browser-facing integration settings, not substitutes for backend webhook configuration. See the backend README for the corresponding server settings.
 
-### Development headers and health checks
-
-The Vite development server sends `Cross-Origin-Resource-Policy: same-origin`, preserving the header previously supplied by CRACO. This is a development-server setting only; production static-server headers are owned by the deployment host. Optional development health checks are enabled only when `ENABLE_HEALTH_CHECK=true` is present before Vite starts. When absent or set to any other value, no health routes are registered.
-
-The opt-in routes are minimal: `/health`, `/health/live`, and `/health/ready` return status JSON with HTTP 200. The legacy Webpack health plugin, `/health/errors`, `/health/stats`, compiler metrics, and detailed diagnostics were retired rather than migrated because they could disclose errors, paths, runtime, or resource information. Backend health checks remain owned by the backend application, and no Railway production health-check configuration is asserted here.
-
 ## Routes and application structure
 
 Routes are composed in `src/App.js`:
@@ -141,8 +135,6 @@ yarn build
 The generated static site is written to `build/`. Use `yarn dev` to run Vite at `http://localhost:5173`, `yarn build` to create the production bundle, and `yarn preview` to inspect that bundle locally. `yarn start` remains an alias for `yarn dev`. Run `yarn test` for the Vitest suite. ESLint and its React-related plugins are installed, but there is no configured lint script or TypeScript type-check script. The planned shared `pre-commit` pipeline will add the frontend Biome and scoped `tsc` checks alongside Vitest; do not treat these as available commands until they are configured.
 
 To inspect the production bundle locally, run `yarn preview` after `yarn build`. It uses Vite's default port `4173`.
-
-Issue #22 checks can be run with `yarn vitest run vite.config.test.js`. Run `yarn test` for the full frontend suite, `yarn build` for the production bundle, and `git diff --check` from the repository root.
 
 ## Backend integration and authentication
 

@@ -74,10 +74,6 @@ The production environment uses the same key with the production API origin. Oth
 - Writes production output to `frontend/build` with source maps disabled.
 - Ignores generated and dependency directories in the development watcher.
 
-Vite development responses include `Cross-Origin-Resource-Policy: same-origin`, matching the useful CRACO header. This is configured under Vite's `server.headers` and is not a production response policy.
-
-The old `ENABLE_HEALTH_CHECK` behavior is preserved as an explicit development-only opt-in. Set `ENABLE_HEALTH_CHECK=true` before starting Vite to register `/health`, `/health/live`, and `/health/ready`; omit it or use any other value to register no health routes. These endpoints return only minimal status JSON and HTTP 200 responses. The Webpack health plugin was not restored, and `/health/errors` and `/health/stats` were intentionally not migrated because detailed compiler errors, stack traces, paths, runtime details, and resource metrics are inappropriate for a public development-server surface. Backend health-check ownership remains in the backend application layer. No production health endpoint is added without repository evidence that Railway requires one.
-
 The source alias is also reflected in `frontend/jsconfig.json` and is used by imports such as `@/App` and `@/lib/utils`.
 
 ### Tailwind CSS and frontend documentation
@@ -143,8 +139,6 @@ yarn vitest run src/lib/__tests__/profileNormalization.test.js -t "test name"
 ```
 
 Tests are colocated under `src/` and its `__tests__/` directories. When adding tests, prefer Testing Library behavior assertions and use the shared setup rather than duplicating browser-environment shims in individual files.
-
-Issue #22 configuration tests are in `frontend/vite.config.test.js` and cover the development CORP header, health-check activation states, minimal response shapes/status codes, and the absence of sensitive diagnostic fields. Run them with `yarn vitest run vite.config.test.js`. Verify the built SPA shell and static assets with `yarn build`; use `git diff --check` to catch whitespace errors.
 
 ## Operational notes
 
