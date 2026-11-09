@@ -44,13 +44,16 @@ The frontend scripts now use Vite and Vitest directly:
 
 ```json
 {
+  "dev": "vite",
   "start": "vite",
   "build": "vite build",
+  "preview": "vite preview",
+  "serve:production": "node scripts/serve-production.js",
   "test": "vitest run"
 }
 ```
 
-CRA, CRACO, and Jest runtime dependencies are no longer the application toolchain. Vite dependencies include `vite` and `@vitejs/plugin-react`; test dependencies include `vitest`, `jsdom`, and Testing Library packages. The project keeps `@testing-library/jest-dom` because its DOM assertions remain useful under Vitest. Yarn resolutions remain in place for the repository's known transitive dependency constraints.
+CRA, CRACO, and Jest runtime dependencies are no longer the application toolchain. Vite dependencies include `vite` and `@vitejs/plugin-react`; test dependencies include `vitest`, `jsdom`, and Testing Library packages. The production static server uses `serve-handler` and `compression` directly; `yarn preview` remains Vite's local build preview and does not apply production hosting rules. The project keeps `@testing-library/jest-dom` because its DOM assertions remain useful under Vitest. Yarn resolutions remain in place for the repository's known transitive dependency constraints.
 
 ### Environment variables
 
@@ -72,7 +75,7 @@ The production environment uses the same key with the production API origin. Oth
 - Writes production output to `frontend/build` with source maps disabled.
 - Ignores generated and dependency directories in the development watcher.
 
-Vite development responses include `Cross-Origin-Resource-Policy: same-origin`, matching the useful CRACO header. This is configured under Vite's `server.headers` and is not a production response policy. Production headers and SPA fallback behavior belong to the static server or hosting platform serving `frontend/build`; this repository does not claim that Railway has configured either one.
+Vite development responses include `Cross-Origin-Resource-Policy: same-origin`, matching the useful CRACO header. This is configured under Vite's `server.headers` and is not a production response policy. The production static server uses `frontend/serve.json` for cache headers and SPA fallback. Its Node wrapper returns a JSON 404 for `/api` and `/health` paths before invoking the static handler, preventing the extensionless SPA fallback from claiming those namespaces.
 
 The old `ENABLE_HEALTH_CHECK` behavior is preserved as an explicit development-only opt-in. Set `ENABLE_HEALTH_CHECK=true` before starting Vite to register `/health`, `/health/live`, and `/health/ready`; omit it or use any other value to register no health routes. These endpoints return only minimal status JSON and HTTP 200 responses. The Webpack health plugin was not restored, and `/health/errors` and `/health/stats` were intentionally not migrated because detailed compiler errors, stack traces, paths, runtime details, and resource metrics are inappropriate for a public development-server surface. Backend health-check ownership remains in the backend application layer. No production health endpoint is added without repository evidence that Railway requires one.
 

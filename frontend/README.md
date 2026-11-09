@@ -165,7 +165,7 @@ Build command: yarn build
 Start command: yarn serve:production
 ```
 
-The production server uses `serve.json` to rewrite `/`, the known application routes, and otherwise-unmatched extensionless paths to `index.html`. This lets React Router handle unknown direct URLs (the app redirects them to sign-in) without turning missing file-like requests such as JavaScript, CSS, fonts, and images into HTML responses. It deliberately does not use `serve -s`, which would also rewrite missing assets.
+The production server checks `/api` and `/health` (including nested paths) before serving static files. Those reserved paths return a non-cacheable JSON 404 from the frontend server instead of being rewritten to the SPA; production API and health behavior remains owned by their respective services. Other extensionless paths fall back to `index.html` so React Router can handle unknown routes. File-like paths such as JavaScript, CSS, fonts, and images are not rewritten when missing, so they remain genuine 404s.
 
 `serve.json` sets `index.html` to `no-store`, fingerprinted JS/CSS and fonts to one-year immutable caching, and images to one-day caching. The production server compresses eligible text responses when the request advertises gzip support; verify this at the deployed Railway domain after each hosting change.
 
