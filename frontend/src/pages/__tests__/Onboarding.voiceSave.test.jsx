@@ -2,15 +2,16 @@ import React from "react";
 import { act } from "react";
 import ReactDOM from "react-dom/client";
 
-jest.mock("axios", () => ({ post: jest.fn() }));
-jest.mock("react-router-dom", () => ({
+vi.mock("react-router-dom", () => ({
   useNavigate: () => jest.fn(),
   useSearchParams: () => [new URLSearchParams(), jest.fn()],
 }), { virtual: true });
-jest.mock("../../components/onboarding/VoiceIntake", () => (props) => {
-  globalThis.__voiceIntakeProps = props;
-  return <div data-testid="voice-intake-mock" />;
-});
+vi.mock("../../components/onboarding/VoiceIntake", () => ({
+  default: (props) => {
+    globalThis.__voiceIntakeProps = props;
+    return <div data-testid="voice-intake-mock" />;
+  },
+}));
 
 import Onboarding from "../Onboarding";
 import { saveOnboardingState } from "../../lib/onboardingStorage";

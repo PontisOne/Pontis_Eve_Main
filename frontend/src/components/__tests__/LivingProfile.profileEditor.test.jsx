@@ -6,8 +6,7 @@ import { ProfileEditor } from "../LivingProfile";
 
 globalThis.IS_REACT_ACT_ENVIRONMENT = true;
 
-vi.mock("axios");
-jest.mock("react-router-dom", () => ({
+vi.mock("react-router-dom", () => ({
   useNavigate: () => jest.fn(),
   useSearchParams: () => [new URLSearchParams(), jest.fn()],
 }), { virtual: true });

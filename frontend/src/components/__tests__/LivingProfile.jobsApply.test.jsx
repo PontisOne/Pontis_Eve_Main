@@ -7,7 +7,6 @@ import { JobsTab } from "../LivingProfile";
 
 globalThis.IS_REACT_ACT_ENVIRONMENT = true;
 
-jest.mock("axios");
 
 const job = {
   id: "job-free-1", title: "Product Engineer", company: "Acme", location: "Remote",
@@ -47,7 +46,7 @@ describe("JobsTab Apply Now", () => {
     expect(container.querySelector('[data-testid="improve-match-modal"]')).toBeTruthy();
     expect(container.textContent).toContain("React");
     expect(openSpy).not.toHaveBeenCalled();
-    act(() => Array.from(container.querySelectorAll("button")).find((button) => button.textContent.includes("Apply with Current Resume")).dispatchEvent(new MouseEvent("click", { bubbles: true })));
+    act(() => Array.from(container.querySelectorAll("button")).find((button) => button.textContent.includes("Apply Without Customizing")).dispatchEvent(new MouseEvent("click", { bubbles: true })));
     expect(openSpy).toHaveBeenCalledWith(job.job_url, "_blank", "noopener,noreferrer");
     expect(JSON.parse(sessionStorage.getItem("eve:application-follow-up:cand-1"))).toMatchObject({
       id: job.id,
@@ -89,7 +88,7 @@ describe("JobsTab Apply Now", () => {
       container.querySelector('[data-testid="job-apply-job-free-1"]').dispatchEvent(new MouseEvent("click", { bubbles: true }));
       await Promise.resolve();
     });
-    act(() => Array.from(container.querySelectorAll("button")).find((button) => button.textContent.includes("Apply with Current Resume")).dispatchEvent(new MouseEvent("click", { bubbles: true })));
+    act(() => Array.from(container.querySelectorAll("button")).find((button) => button.textContent.includes("Apply Without Customizing")).dispatchEvent(new MouseEvent("click", { bubbles: true })));
 
     expect(openSpy).toHaveBeenCalledWith(job.job_url, "_blank", "noopener,noreferrer");
     expect(container.querySelector('[data-testid="application-follow-up-modal"]')).toBeNull();
@@ -123,7 +122,7 @@ describe("JobsTab Apply Now", () => {
 
     expect(container.querySelector('[data-testid="improve-match-modal"]')).toBeTruthy();
     expect(container.querySelector('[data-testid="application-follow-up-modal"]')).toBeNull();
-    act(() => Array.from(container.querySelectorAll("button")).find((button) => button.textContent.includes("Apply with Current Resume")).dispatchEvent(new MouseEvent("click", { bubbles: true })));
+    act(() => Array.from(container.querySelectorAll("button")).find((button) => button.textContent.includes("Apply Without Customizing")).dispatchEvent(new MouseEvent("click", { bubbles: true })));
     expect(JSON.parse(sessionStorage.getItem("eve:application-follow-up:cand-1"))).toMatchObject({ id: job.id, leftEve: false });
 
     act(() => {

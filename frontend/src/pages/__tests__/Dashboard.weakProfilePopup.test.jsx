@@ -8,22 +8,21 @@ import { saveOnboardingState } from "../../lib/onboardingStorage";
 
 globalThis.IS_REACT_ACT_ENVIRONMENT = true;
 
-jest.mock("axios");
-jest.mock("react-router-dom", () => ({
+vi.mock("react-router-dom", () => ({
   useNavigate: () => jest.fn(),
   useSearchParams: () => [new URLSearchParams(), jest.fn()],
 }), { virtual: true });
-jest.mock("../../components/Sidebar", () => () => <div data-testid="sidebar" />);
-jest.mock("../../components/ChatHub", () => () => <div data-testid="chat-hub" />);
-jest.mock("../../components/LivingProfile", () => () => <div data-testid="living-profile" />);
-jest.mock("../../components/SwipeJobCard", () => () => <div data-testid="jobs-deck" />);
-jest.mock("../../components/onboarding/VoiceIntake", () => () => <div data-testid="voice-intake" />);
-jest.mock("react-resizable-panels", () => ({
+vi.mock("../../components/Sidebar", () => ({ default: () => <div data-testid="sidebar" /> }));
+vi.mock("../../components/ChatHub", () => ({ default: () => <div data-testid="chat-hub" /> }));
+vi.mock("../../components/LivingProfile", () => ({ __esModule: true, default: () => <div data-testid="living-profile" />, JobsTab: () => <div data-testid="jobs-deck" /> }));
+vi.mock("../../components/SwipeJobCard", () => ({ default: () => <div data-testid="jobs-deck" /> }));
+vi.mock("../../components/onboarding/VoiceIntake", () => ({ default: () => <div data-testid="voice-intake" /> }));
+vi.mock("react-resizable-panels", () => ({
   PanelGroup: ({ children }) => <div>{children}</div>,
   Panel: ({ children }) => <div>{children}</div>,
   PanelResizeHandle: () => <div />,
 }));
-jest.mock("sonner", () => ({ Toaster: () => null, toast: { error: jest.fn(), success: jest.fn() } }));
+vi.mock("sonner", () => ({ Toaster: () => null, toast: { error: jest.fn(), success: jest.fn() } }));
 
 function makeProfile(overrides = {}) {
   return {
@@ -70,11 +69,19 @@ function renderDashboard() {
   document.body.appendChild(container);
   const root = ReactDOM.createRoot(container);
   act(() => { root.render(<Dashboard />); });
-  return {
+  const result = {
     container,
-    unmount() { act(() => { root.unmount(); }); container.remove(); },
+    unmount() {
+      act(() => { root.unmount(); });
+      container.remove();
+      activeRenders.delete(result);
+    },
   };
+  activeRenders.add(result);
+  return result;
 }
+
+const activeRenders = new Set();
 
 async function flush() {
   await act(async () => { await Promise.resolve(); });
@@ -91,13 +98,14 @@ async function waitFor(predicate, attempts = 30) {
 beforeEach(() => {
   localStorage.clear();
   jest.clearAllMocks();
-  jest.useFakeTimers();
+  vi.useFakeTimers();
   saveOnboardingState({ candidateId: "cand-1", isOpenToMatches: true });
 });
 
 afterEach(() => {
-  jest.runAllTimers();
-  jest.useRealTimers();
+  for (const renderResult of activeRenders) renderResult.unmount();
+  vi.clearAllTimers();
+  vi.useRealTimers();
 });
 
 describe("Low profile strength popup — session-scoped behavior", () => {
@@ -105,12 +113,12 @@ describe("Low profile strength popup — session-scoped behavior", () => {
     mockRequests([makeProfile({ profile_strength_percent: 60, profile_strength_label: "Developing" })]);
     const { container, unmount } = renderDashboard();
 
-    await waitFor(() => container.querySelector('[data-testid="jobs-deck"]') !== null);
+    await waitFor(() => container.querySelector('[data-testid="chat-hub"]') !== null);
 
     // Popup not yet visible (delayed by 800ms)
     expect(container.querySelector('[data-testid="weak-profile-popup"]')).toBeNull();
 
-    act(() => { jest.advanceTimersByTime(900); });
+    act(() => { jest.advanceTimersByTime(800); });
 
     expect(container.querySelector('[data-testid="weak-profile-popup"]')).not.toBeNull();
     unmount();
@@ -123,8 +131,8 @@ describe("Low profile strength popup — session-scoped behavior", () => {
     ]);
     const { container, unmount } = renderDashboard();
 
-    await waitFor(() => container.querySelector('[data-testid="jobs-deck"]') !== null);
-    act(() => { jest.advanceTimersByTime(900); });
+    await waitFor(() => container.querySelector('[data-testid="chat-hub"]') !== null);
+    act(() => { jest.advanceTimersByTime(800); });
 
     // Dismiss popup
     const dismissBtn = container.querySelector('[data-testid="weak-profile-dismiss-btn"]');
@@ -135,7 +143,7 @@ describe("Low profile strength popup — session-scoped behavior", () => {
 
     // Simulate profile update (still below 75%) — popup must NOT reappear
     await flush();
-    act(() => { jest.advanceTimersByTime(900); });
+    act(() => { jest.advanceTimersByTime(800); });
 
     expect(container.querySelector('[data-testid="weak-profile-popup"]')).toBeNull();
     unmount();
@@ -145,8 +153,8 @@ describe("Low profile strength popup — session-scoped behavior", () => {
     // First session
     mockRequests([makeProfile({ profile_strength_percent: 60, profile_strength_label: "Developing" })]);
     const first = renderDashboard();
-    await waitFor(() => first.container.querySelector('[data-testid="jobs-deck"]') !== null);
-    act(() => { jest.advanceTimersByTime(900); });
+    await waitFor(() => first.container.querySelector('[data-testid="chat-hub"]') !== null);
+    act(() => { jest.advanceTimersByTime(800); });
     expect(first.container.querySelector('[data-testid="weak-profile-popup"]')).not.toBeNull();
     first.unmount(); // simulates logout (component unmounts, ref is destroyed)
 
@@ -154,8 +162,8 @@ describe("Low profile strength popup — session-scoped behavior", () => {
     jest.clearAllMocks();
     mockRequests([makeProfile({ profile_strength_percent: 60, profile_strength_label: "Developing" })]);
     const second = renderDashboard();
-    await waitFor(() => second.container.querySelector('[data-testid="jobs-deck"]') !== null);
-    act(() => { jest.advanceTimersByTime(900); });
+    await waitFor(() => second.container.querySelector('[data-testid="chat-hub"]') !== null);
+    act(() => { jest.advanceTimersByTime(800); });
 
     expect(second.container.querySelector('[data-testid="weak-profile-popup"]')).not.toBeNull();
     second.unmount();
@@ -165,8 +173,8 @@ describe("Low profile strength popup — session-scoped behavior", () => {
     mockRequests([makeProfile({ profile_strength_percent: 75, profile_strength_label: "Strong" })]);
     const { container, unmount } = renderDashboard();
 
-    await waitFor(() => container.querySelector('[data-testid="jobs-deck"]') !== null);
-    act(() => { jest.advanceTimersByTime(900); });
+    await waitFor(() => container.querySelector('[data-testid="chat-hub"]') !== null);
+    act(() => { jest.advanceTimersByTime(800); });
 
     expect(container.querySelector('[data-testid="weak-profile-popup"]')).toBeNull();
     unmount();
@@ -186,8 +194,8 @@ describe("Low profile strength popup — session-scoped behavior", () => {
     })]);
     const { container, unmount } = renderDashboard();
 
-    await waitFor(() => container.querySelector('[data-testid="jobs-deck"]') !== null);
-    act(() => { jest.advanceTimersByTime(900); });
+    await waitFor(() => container.querySelector('[data-testid="chat-hub"]') !== null);
+    act(() => { jest.advanceTimersByTime(800); });
     expect(container.querySelector('[data-testid="weak-profile-popup"]')).not.toBeNull();
 
     act(() => {
@@ -229,8 +237,8 @@ describe("Low profile strength popup — session-scoped behavior", () => {
     ]);
     const { container, unmount } = renderDashboard();
 
-    await waitFor(() => container.querySelector('[data-testid="jobs-deck"]') !== null);
-    act(() => { jest.advanceTimersByTime(900); });
+    await waitFor(() => container.querySelector('[data-testid="chat-hub"]') !== null);
+    act(() => { jest.advanceTimersByTime(800); });
 
     // Click Chat with Eve from the popup
     act(() => {

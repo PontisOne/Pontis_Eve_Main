@@ -1938,6 +1938,9 @@ function DocumentsTab({
 
   return (
     <div className="space-y-8" data-testid="documents-tab-content">
+      {deleteError && !confirmDelete && (
+        <p className="text-[12px] text-red-500" role="alert">{deleteError}</p>
+      )}
       {/* Confirmation dialog */}
       {confirmDelete && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/30">
