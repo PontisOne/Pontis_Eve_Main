@@ -17,11 +17,11 @@ This inventory is cross-checked against `package.json`, the frontend configurati
 - **Styling and UI:** Tailwind CSS, PostCSS, Autoprefixer, locally maintained shadcn/ui-style components built on Radix UI primitives, and `lucide-react` icons. Supporting utilities include `class-variance-authority`, `clsx`, `tailwind-merge`, and `tailwindcss-animate`.
 - **Server data and validation:** `src/index.js` mounts a TanStack Query `QueryClientProvider` with a 60-second default query stale time and window-focus refetch disabled. The current app source has no `useQuery` or `useMutation` calls; screens primarily make Axios requests and keep request state in React components. Zod currently validates `VITE_BACKEND_URL` in `src/lib/apiConfig.js`; it is not a general API-response validation layer.
 - **Forms and interaction:** The app uses Sonner notifications, Framer Motion, `react-resizable-panels`, and `lucide-react`. Shared UI components also import React Hook Form, Embla Carousel, `input-otp`, and `next-themes`; the latter is used by a reusable toast wrapper and does not mean the app uses Next.js.
-- **Product integrations:** Voice intake uses Vapi through the `useVapi` hook, which imports the Web SDK. `libphonenumber-js` supports phone input, and DOMPurify sanitizes job-description content. Although `pdfjs-dist` is declared in `package.json`, there are no direct imports of it in `src/`; the current source does not establish that PDF.js is used for document preview.
+- **Product integrations:** Voice intake uses Vapi through the `useVapi` hook, which imports the Web SDK. `libphonenumber-js` supports phone input, DOMPurify sanitizes job-description content, and Dashboard uses PDF.js to render resume previews.
 - **Testing:** Vitest, JSDOM, and React Testing Library (`@testing-library/react`, `@testing-library/dom`, `@testing-library/user-event`, and `@testing-library/jest-dom`).
-- **Quality tooling:** The root pre-commit hooks run Biome on staged frontend source/config files, the explicitly scoped TypeScript check, Vitest, and Gitleaks. TypeScript currently checks only `src/lib/apiConfig.js`; the rest of the JavaScript/JSX application is not type-checked.
+- **Quality tooling:** Rollup Visualizer generates an opt-in bundle report through `yarn build:analyze`. The root pre-commit hooks run Biome on staged frontend source/config files, the explicitly scoped TypeScript check, Vitest, and Gitleaks. TypeScript currently checks only `src/lib/apiConfig.js`; the rest of the JavaScript/JSX application is not type-checked.
 
-`package.json` also declares dependencies for which no direct imports were found in `src/`, including `@hookform/resolvers`, `date-fns`, `dayjs`, `html2canvas`, `jspdf`, `lodash`, `pdfjs-dist`, `recharts`, and `swr`. This does not rule out indirect use by dependencies.
+`package.json` also declares dependencies for which no direct imports were found in `src/`, including `@hookform/resolvers`, `date-fns`, `dayjs`, `html2canvas`, `jspdf`, `lodash`, `recharts`, and `swr`. This does not rule out indirect use by dependencies.
 
 ## Local development
 
@@ -29,16 +29,26 @@ From this directory, install dependencies and start the development server:
 
 ```sh
 yarn install --frozen-lockfile
-yarn start
+yarn dev
 ```
 
-The application runs at [http://localhost:5173](http://localhost:5173). Configure the backend URL before starting the app. Create a `frontend/.env.local` file:
+The application runs at [http://localhost:5173](http://localhost:5173). `yarn start` remains available as a compatibility alias for `yarn dev`. Configure the backend URL before starting the app. Create a `.env.local` file in this directory:
 
 ```dotenv
 VITE_BACKEND_URL=http://localhost:8000
 ```
 
 The checked-in `frontend/.env.production` supplies `VITE_BACKEND_URL` for production builds. `VITE_BACKEND_URL` is required and validated as an HTTP(S) URL when the API configuration module loads; the API client appends `/api`. Vite exposes variables beginning with `VITE_` in the client bundle, so do not put server secrets or OAuth client secrets in frontend environment files.
+
+## Bundle analysis
+
+The normal production build does not generate analysis output. To create an interactive Rollup bundle report, run:
+
+```bash
+yarn build:analyze
+```
+
+Open `frontend/build/bundle-analysis.html` in a browser. The report is generated only for that command and is not committed.
 
 Voice onboarding uses Vapi. To enable it in a local frontend, set the public Vapi key and assistant ID:
 
@@ -48,6 +58,12 @@ VITE_EVE_VAPI_ASSISTANT_ID=
 ```
 
 These are browser-facing integration settings, not substitutes for backend webhook configuration. See the backend README for the corresponding server settings.
+
+### Development headers and health checks
+
+The Vite development server sends `Cross-Origin-Resource-Policy: same-origin`, preserving the header previously supplied by CRACO. This is a development-server setting only; production response headers and fallback behavior are configured by the production static server. Optional development health checks are enabled only when `ENABLE_HEALTH_CHECK=true` is present before Vite starts. When absent or set to any other value, no health routes are registered.
+
+The opt-in routes are minimal: `/health`, `/health/live`, and `/health/ready` return status JSON with HTTP 200. The legacy Webpack health plugin, `/health/errors`, `/health/stats`, compiler metrics, and detailed diagnostics were retired rather than migrated because they could disclose errors, paths, runtime, or resource information. Backend health checks remain owned by the backend application, and no Railway production health-check configuration is asserted here.
 
 ## Routes and application structure
 
@@ -62,7 +78,7 @@ Routes are composed in `src/App.js`:
 
 The frontend falls back to the sign-in route for unknown paths.
 
-The route pages are currently imported directly by `src/App.js`; there is no `React.lazy`/`Suspense` route splitting in the current implementation.
+The route pages are loaded with `React.lazy` inside a `Suspense` boundary. `RouteErrorBoundary` provides a reload action if a route chunk fails to load.
 
 - `src/pages/` contains route-level screens and coordinates larger flows.
 - `src/components/` contains shared product components, including the dashboard panels, profile, job cards, billing, and onboarding voice UI.
@@ -96,7 +112,7 @@ Follow the frontend and shared boundary requirements in [`../agents.md`](../agen
 
 Run commands from `frontend/`.
 
-Run the Vitest suite once:
+Run the complete Vitest suite:
 
 ```sh
 yarn test
@@ -122,10 +138,11 @@ Create a production build with:
 yarn build
 ```
 
-The generated static site is written to `build/`. `package.json` defines
-`start`, `build`, `test`, `lint`, and `typecheck` scripts. The root
-`CONTRIBUTING.md` documents the shared pre-commit pipeline and exact
-TypeScript boundary.
+The generated static site is written to `build/`. Use `yarn dev` to run Vite at `http://localhost:5173`, `yarn build` to create the production bundle, and `yarn preview` to inspect that bundle locally. `yarn start` remains an alias for `yarn dev`. The package scripts also provide `test`, `test:coverage`, `lint`, and `typecheck`; the root `CONTRIBUTING.md` documents the shared pre-commit pipeline and scoped TypeScript coverage.
+
+To serve the production build locally with Vite's preview server, run `yarn preview` after `yarn build`. It uses Vite's default port `4173`. Preview is intended for a local build check; it does not apply the production `serve.json` rewrite rules.
+
+Issue #22 checks can be run with `yarn vitest run vite.config.test.js`. Run `yarn test` for the full frontend suite, `yarn build` for the production bundle, and `git diff --check` from the repository root.
 
 ## Backend integration and authentication
 
@@ -139,4 +156,35 @@ The frontend currently stores the backend-issued candidate bearer token with onb
 
 ## Deployment
 
-Build with `yarn build` and deploy the contents of `build/` to the static hosting service. Set the configured Vite backend URL to the intended API origin in the build environment; frontend environment variables are baked into the static assets at build time. Configure the hosting service to serve the SPA entry point for application routes such as `/dashboard` and `/resume-editor`.
+Build with `yarn build` and deploy the contents of `build/` to the static hosting service. Set the configured Vite backend URL to the intended API origin in the build environment; frontend environment variables are baked into the static assets at build time.
+
+The production frontend uses a small Node server around `serve-handler`, the `compression` middleware, and the checked-in `serve.json` configuration. Railway's frontend service (`Pontis_Eve_Main`, root directory `/frontend`) should use:
+
+```text
+Build command: yarn build
+Start command: yarn serve:production
+```
+
+The production server checks `/api` and `/health` (including nested paths) before serving static files. Those reserved paths return a non-cacheable JSON 404 from the frontend server instead of being rewritten to the SPA; production API and health behavior remains owned by their respective services. Other extensionless paths fall back to `index.html` so React Router can handle unknown routes. File-like paths such as JavaScript, CSS, fonts, and images are not rewritten when missing, so they remain genuine 404s.
+
+`serve.json` sets `index.html` to `no-store`, fingerprinted JS/CSS and fonts to one-year immutable caching, and images to one-day caching. The production server compresses eligible text responses when the request advertises gzip support; verify this at the deployed Railway domain after each hosting change.
+
+For local verification using the same static server configuration, build the app and start the production server with an available port:
+
+```sh
+yarn build
+PORT=4174 yarn serve:production
+```
+
+In another terminal, inspect the responses:
+
+```sh
+curl -i http://localhost:4174/dashboard
+curl -i http://localhost:4174/not-a-route
+curl -i http://localhost:4174/api/unknown
+curl -i http://localhost:4174/health/live
+curl -i http://localhost:4174/assets/missing.js
+curl -i -H 'Accept-Encoding: gzip' http://localhost:4174/
+```
+
+The app routes and unknown extensionless route should return the SPA HTML with HTTP 200; React Router redirects the unknown route to sign-in. `/api/*`, `/health/*`, and missing static assets should return 404, never the SPA HTML. Stop the server with Ctrl+C when finished.

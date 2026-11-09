@@ -44,13 +44,16 @@ The frontend scripts now use Vite and Vitest directly:
 
 ```json
 {
+  "dev": "vite",
   "start": "vite",
   "build": "vite build",
+  "preview": "vite preview",
+  "serve:production": "node scripts/serve-production.js",
   "test": "vitest run"
 }
 ```
 
-CRA, CRACO, and Jest runtime dependencies are no longer the application toolchain. Vite dependencies include `vite` and `@vitejs/plugin-react`; test dependencies include `vitest`, `jsdom`, and Testing Library packages. The project keeps `@testing-library/jest-dom` because its DOM assertions remain useful under Vitest. Yarn resolutions remain in place for the repository's known transitive dependency constraints.
+CRA, CRACO, and Jest runtime dependencies are no longer the application toolchain. Vite dependencies include `vite` and `@vitejs/plugin-react`; test dependencies include `vitest`, `jsdom`, and Testing Library packages. The production static server uses `serve-handler` and `compression` directly; `yarn preview` remains Vite's local build preview and does not apply production hosting rules. The project keeps `@testing-library/jest-dom` because its DOM assertions remain useful under Vitest. Yarn resolutions remain in place for the repository's known transitive dependency constraints.
 
 ### Environment variables
 
@@ -71,6 +74,10 @@ The production environment uses the same key with the production API origin. Oth
 - Applies the same JSX loader behavior to dependency optimization.
 - Writes production output to `frontend/build` with source maps disabled.
 - Ignores generated and dependency directories in the development watcher.
+
+Vite development responses include `Cross-Origin-Resource-Policy: same-origin`, matching the useful CRACO header. This is configured under Vite's `server.headers` and is not a production response policy. The production static server uses `frontend/serve.json` for cache headers and SPA fallback. Its Node wrapper returns a JSON 404 for `/api` and `/health` paths before invoking the static handler, preventing the extensionless SPA fallback from claiming those namespaces.
+
+The old `ENABLE_HEALTH_CHECK` behavior is preserved as an explicit development-only opt-in. Set `ENABLE_HEALTH_CHECK=true` before starting Vite to register `/health`, `/health/live`, and `/health/ready`; omit it or use any other value to register no health routes. These endpoints return only minimal status JSON and HTTP 200 responses. The Webpack health plugin was not restored, and `/health/errors` and `/health/stats` were intentionally not migrated because detailed compiler errors, stack traces, paths, runtime details, and resource metrics are inappropriate for a public development-server surface. Backend health-check ownership remains in the backend application layer. No production health endpoint is added without repository evidence that Railway requires one.
 
 The source alias is also reflected in `frontend/jsconfig.json` and is used by imports such as `@/App` and `@/lib/utils`.
 
@@ -104,10 +111,10 @@ From `frontend/`, install the locked dependencies and start Vite:
 
 ```sh
 yarn install --frozen-lockfile
-yarn start
+yarn dev
 ```
 
-Vite serves the application at `http://localhost:5173` and uses `frontend/index.html` as the HTML shell. The browser loads `/src/index.js`; Vite transforms modules on demand, applies the React JSX transform, resolves the `@` alias, and updates changed modules quickly during development. The backend normally runs separately on port `8000`, and `VITE_BACKEND_URL` points frontend API calls to it.
+`yarn start` remains available as a compatibility alias. Vite serves the application at `http://localhost:5173` and uses `frontend/index.html` as the HTML shell. The browser loads `/src/index.js`; Vite transforms modules on demand, applies the React JSX transform, resolves the `@` alias, and updates changed modules quickly during development. The backend normally runs separately on port `8000`, and `VITE_BACKEND_URL` points frontend API calls to it.
 
 ### Production build
 
@@ -118,6 +125,8 @@ yarn build
 ```
 
 Vite resolves and bundles the application and its CSS, applies the configured React and JSX transforms, and writes the optimized output to `frontend/build`. The output is static and should be deployed to a static host or web server configured to return the SPA entry point for client-side routes such as `/dashboard` and `/resume-editor`. Environment values are fixed when this build is created.
+
+After building, `yarn preview` serves the output locally on Vite's default port `4173`. Preview is for checking the production bundle; it does not apply `serve.json`. To test the deployment static server, use `PORT=4174 yarn serve:production` instead.
 
 ### Automated tests
 
@@ -136,6 +145,8 @@ yarn vitest run src/lib/__tests__/profileNormalization.test.js -t "test name"
 
 Tests are colocated under `src/` and its `__tests__/` directories. When adding tests, prefer Testing Library behavior assertions and use the shared setup rather than duplicating browser-environment shims in individual files.
 
+Issue #22 configuration tests are in `frontend/vite.config.test.js` and cover the development CORP header, health-check activation states, minimal response shapes/status codes, and the absence of sensitive diagnostic fields. Run them with `yarn vitest run vite.config.test.js`. Verify the built SPA shell and static assets with `yarn build`; use `git diff --check` to catch whitespace errors.
+
 ## Operational notes
 
 - Use Yarn and keep `frontend/yarn.lock` synchronized; do not recreate a `package-lock.json`.
@@ -143,4 +154,3 @@ Tests are colocated under `src/` and its `__tests__/` directories. When adding t
 - Preserve the `build/` output contract and configure the hosting platform for SPA fallback routing.
 - Keep Vite configuration changes in `vite.config.js` and test-only behavior in `vitest.config.js` or `src/setupTests.js`.
 - When changing API origins or frontend environment values, rebuild the frontend because Vite embeds them into the generated assets.
-

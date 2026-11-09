@@ -15,7 +15,7 @@ module.exports = defineConfig({
     },
     globals: true,
     setupFiles: [path.resolve(__dirname, "src/setupTests.js")],
-    include: ["src/**/*.{test,spec}.{js,jsx,ts,tsx}"],
+    include: ["src/**/*.{test,spec}.{js,jsx,ts,tsx}", "vite.config.test.js"],
     exclude: ["node_modules", "build", "coverage"],
     css: true,
     coverage: {

@@ -44,11 +44,6 @@ vi.mock("../../../hooks/useVapi", () => {
   return { __esModule: true, default: useVapi, VAPI_STATES, buildTranscriptText };
 });
 
-vi.mock("axios", () => {
-  const post = jest.fn(() => Promise.resolve({ data: {} }));
-  return { __esModule: true, default: { post }, post };
-});
-
 describe("VoiceIntake transcript visibility", () => {
   let container;
   let root;

@@ -6,10 +6,10 @@ import Dashboard from "../Dashboard";
 import { saveOnboardingState } from "../../lib/onboardingStorage";
 
 globalThis.IS_REACT_ACT_ENVIRONMENT = true;
-jest.mock("axios");
-jest.mock("pdfjs-dist/build/pdf", () => ({
+vi.mock("pdfjs-dist/build/pdf", () => ({
   GlobalWorkerOptions: {},
   getDocument: jest.fn(() => ({
+    destroy: jest.fn(),
     promise: Promise.resolve({
       numPages: 3,
       getPage: jest.fn(() => Promise.resolve({
@@ -19,19 +19,84 @@ jest.mock("pdfjs-dist/build/pdf", () => ({
     }),
   })),
 }));
-jest.mock("pdfjs-dist/build/pdf.worker.entry", () => "pdf-worker");
-jest.mock("react-router-dom", () => ({ useNavigate: () => jest.fn(), useSearchParams: () => [new URLSearchParams(), jest.fn()] }), { virtual: true });
-jest.mock("../../components/Sidebar", () => ({ setActiveTab, collapsed, onToggleCollapsed }) => <div data-testid="sidebar" data-collapsed={collapsed ? "true" : "false"}><button data-testid="sidebar-collapse-btn" onClick={onToggleCollapsed}>toggle</button>{["jobs", "tracked", "profile", "documents", "opportunities", "billing"].map((id) => <button key={id} data-testid={`nav-tab-${id}`} onClick={() => setActiveTab(id)}>{id}</button>)}</div>);
-jest.mock("../../components/ChatHub", () => (props) => <div data-testid="chat-hub"><button data-testid="chat-mic-btn" onClick={props.onMicClick}>mic</button></div>);
-jest.mock("../../components/LivingProfile", () => ({ __esModule: true, default: ({ activeTab }) => <div data-testid={`living-profile-${activeTab}`} />, JobsTab: () => <div data-testid="jobs-deck" /> }));
-jest.mock("../../components/BillingPage", () => () => <div data-testid="billing-page" />);
-jest.mock("../../components/onboarding/VoiceIntake", () => () => <div data-testid="voice-intake" />);
-jest.mock("react-resizable-panels", () => ({
-  PanelGroup: ({ children }) => <div>{children}</div>,
-  Panel: ({ children, id, className, "data-testid": testId, "data-single-content-panel": singleContentPanel, "data-collapsed": collapsed }) => <div id={id} className={className} data-testid={testId} data-single-content-panel={singleContentPanel} data-collapsed={collapsed}>{children}</div>,
-  PanelResizeHandle: ({ "data-testid": testId }) => <div data-testid={testId} />,
-}));
-jest.mock("sonner", () => ({ Toaster: () => null, toast: { error: jest.fn(), success: jest.fn() } }));
+vi.mock("pdfjs-dist/build/pdf.worker.entry", () => ({ default: "pdf-worker" }));
+vi.mock("react-router-dom", () => ({ useNavigate: () => jest.fn(), useSearchParams: () => [new URLSearchParams(), jest.fn()] }), { virtual: true });
+vi.mock("../../components/Sidebar", () => ({ default: ({ setActiveTab, collapsed, onToggleCollapsed }) => <div data-testid="sidebar" data-collapsed={collapsed ? "true" : "false"}><button data-testid="sidebar-collapse-btn" onClick={onToggleCollapsed}>toggle</button>{["jobs", "tracked", "profile", "documents", "opportunities", "billing"].map((id) => <button key={id} data-testid={`nav-tab-${id}`} onClick={() => setActiveTab(id)}>{id}</button>)}</div> }));
+vi.mock("../../components/ChatHub", () => ({ default: (props) => <div data-testid="chat-hub"><button data-testid="chat-mic-btn" onClick={props.onMicClick}>mic</button></div> }));
+vi.mock("../../components/LivingProfile", () => ({ __esModule: true, default: ({ activeTab }) => <div data-testid={`living-profile-${activeTab}`} />, JobsTab: () => <div data-testid="jobs-deck" /> }));
+vi.mock("../../components/BillingPage", () => ({ default: () => <div data-testid="billing-page" /> }));
+vi.mock("../../components/onboarding/VoiceIntake", () => ({ default: () => <div data-testid="voice-intake" /> }));
+vi.mock("react-resizable-panels", () => {
+    const React = require("react");
+    const PanelGroupContext = React.createContext(null);
+
+    function PanelGroup({ children }) {
+      const panels = React.useRef(new Map());
+      const registerPanel = React.useCallback((id, panel) => {
+        panels.current.set(id, panel);
+        return () => panels.current.delete(id);
+      }, []);
+
+      return (
+        <PanelGroupContext.Provider value={{ registerPanel }}>
+          <div>{children}</div>
+        </PanelGroupContext.Provider>
+      );
+    }
+
+    const Panel = React.forwardRef(({
+      children,
+      id,
+      className,
+      defaultSize = 50,
+      minSize = 0,
+      maxSize = 100,
+      "data-testid": testId,
+      "data-single-content-panel": singleContentPanel,
+      "data-collapsed": collapsed,
+    }, ref) => {
+      const context = React.useContext(PanelGroupContext);
+      const [size, setSize] = React.useState(defaultSize);
+      const sizeRef = React.useRef(size);
+      sizeRef.current = size;
+
+      const panelApi = React.useMemo(() => ({
+        getSize: () => sizeRef.current,
+        resize: (nextSize) => {
+          const boundedSize = Math.min(maxSize, Math.max(minSize, nextSize));
+          sizeRef.current = boundedSize;
+          setSize(boundedSize);
+        },
+      }), [maxSize, minSize]);
+
+      React.useImperativeHandle(ref, () => panelApi, [panelApi]);
+
+      React.useEffect(() => {
+        if (!context || id == null) return undefined;
+        return context.registerPanel(id, panelApi);
+      }, [context, id, panelApi]);
+
+      return (
+        <div
+          id={id}
+          className={className}
+          data-testid={testId}
+          data-single-content-panel={singleContentPanel}
+          data-collapsed={collapsed}
+          data-panel-size={size}
+        >
+          {children}
+        </div>
+      );
+    });
+
+    return {
+      PanelGroup,
+      Panel,
+      PanelResizeHandle: ({ "data-testid": testId }) => <div data-testid={testId} />,
+    };
+});
+vi.mock("sonner", () => ({ Toaster: () => null, toast: { error: jest.fn(), success: jest.fn() } }));
 
 const profile = (overrides = {}) => ({ name: "Test User", email: "test@example.com", headline: "Engineer", keySkills: ["React"], experience: [], education: [], certifications: [], profile_strength_percent: 90, profile_strength_label: "Strong", voice_intake_resume: { status: "completed", has_open_question: false }, ...overrides });
 

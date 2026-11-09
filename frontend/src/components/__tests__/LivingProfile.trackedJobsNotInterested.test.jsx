@@ -6,7 +6,6 @@ import LivingProfile from "../LivingProfile";
 
 globalThis.IS_REACT_ACT_ENVIRONMENT = true;
 
-vi.mock("axios");
 jest.mock("sonner", () => ({ toast: { error: jest.fn(), success: jest.fn() } }));
 
 const TRACKED_JOB = {

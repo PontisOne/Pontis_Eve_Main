@@ -12,7 +12,55 @@ if (!globalThis.crypto?.subtle) {
 
 import { vi } from "vitest";
 
+// React 19 requires this flag before any createRoot-rendered test work so
+// asynchronous updates are recognized as part of the supported act() test
+// environment, including tests that manage roots directly.
+globalThis.IS_REACT_ACT_ENVIRONMENT = true;
+
 globalThis.jest = vi;
+
+// CRA's Jest automock created mock functions for Axios methods. Vitest does
+// not reproduce that shape for Axios's callable default export, so provide a
+// single shared mock for the legacy Jest-style tests.
+vi.mock("axios", () => {
+  const axios = vi.fn();
+  const methods = ["get", "post", "put", "patch", "delete", "head", "options", "request"];
+
+  const createInterceptorManager = () => {
+    const manager = {
+      handlers: [],
+      use(onFulfilled, onRejected) {
+        manager.handlers.push({ fulfilled: onFulfilled, rejected: onRejected });
+        return manager.handlers.length - 1;
+      },
+      eject(id) {
+        if (manager.handlers[id]) manager.handlers[id] = null;
+      },
+      clear() {
+        manager.handlers.length = 0;
+      },
+    };
+    return manager;
+  };
+
+  for (const method of methods) {
+    axios[method] = vi.fn();
+  }
+
+  axios.create = vi.fn(() => axios);
+  axios.CancelToken = { source: vi.fn() };
+  axios.isAxiosError = vi.fn(() => false);
+  axios.interceptors = {
+    request: createInterceptorManager(),
+    response: createInterceptorManager(),
+  };
+
+  return { default: axios };
+});
+
+afterEach(() => {
+  vi.clearAllMocks();
+});
 
 // Vitest's jsdom File implementation may lack Blob.arrayBuffer.
 // FileReader preserves the file's actual bytes, so hashing remains real.

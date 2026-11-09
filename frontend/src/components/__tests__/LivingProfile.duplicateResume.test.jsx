@@ -7,7 +7,6 @@ import LivingProfile from "../LivingProfile";
 
 globalThis.IS_REACT_ACT_ENVIRONMENT = true;
 
-jest.mock("axios");
 jest.mock("sonner", () => ({ toast: { error: jest.fn(), success: jest.fn() } }));
 
 // Stable fake fingerprint used across tests
@@ -28,7 +27,7 @@ function mockDigest(hexResult) {
   jest.spyOn(crypto.subtle, "digest").mockResolvedValue(buffer);
 }
 
-function renderDocuments(resumeFingerprint = null, extraProps = {}) {
+function renderDocuments(resumeFingerprint = null, extraProps = {}, resumePresent = Boolean(resumeFingerprint)) {
   const container = document.createElement("div");
   document.body.appendChild(container);
   const root = ReactDOM.createRoot(container);
@@ -50,7 +49,7 @@ function renderDocuments(resumeFingerprint = null, extraProps = {}) {
         }}
         jobs={[]}
         documents={{
-          resume: resumeFingerprint
+          resume: resumePresent
             ? { filename: "old-resume.pdf", fingerprint: resumeFingerprint }
             : null,
           certificates: [],
@@ -138,45 +137,12 @@ describe("Duplicate resume upload detection", () => {
     axios.post.mockResolvedValue({ data: { profile: null } });
 
     // No existing resume (fingerprint = null)
-    const { container, unmount } = renderDocuments(null, { onResumeReplaced });
-
-    // Render with a resume so the Replace button is visible
-    act(() => {
-      container.innerHTML = "";
-    });
-    // Re-render with a resume present but no fingerprint
-    const root2 = ReactDOM.createRoot(container);
-    act(() => {
-      root2.render(
-        <LivingProfile
-          activeTab="documents"
-          userProfile={{ name: "T", strength: "Strong", strengthPercent: 80, experience: [], education: [], keySkills: [], preferred_roles: [], certifications: [], additional_information: "", isOpenToMatches: true }}
-          jobs={[]}
-          documents={{ resume: { filename: "resume.pdf", fingerprint: null }, certificates: [] }}
-          docsLoading={false}
-          candidateId="cand-1"
-          selectedJob={null}
-          setSelectedJob={jest.fn()}
-          onTrackJob={jest.fn()}
-          onDismissJob={jest.fn()}
-          onToggleOpenToMatches={jest.fn()}
-          onResumeReplaced={onResumeReplaced}
-          onCertUploaded={jest.fn()}
-          onCertReplaced={jest.fn()}
-          onResumeDeleted={jest.fn()}
-          onCertDeleted={jest.fn()}
-          onInterested={jest.fn()}
-          onPhotoChange={jest.fn()}
-          onJobViewed={jest.fn()}
-        />
-      );
-    });
+    const { container, unmount } = renderDocuments(null, { onResumeReplaced }, true);
 
     await triggerFileInput(container, makeFakeFile());
 
     expect(axios.post).toHaveBeenCalledTimes(1);
     expect(container.textContent).not.toContain("Duplicate Upload");
-    act(() => root2.unmount());
     unmount();
   });
 

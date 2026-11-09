@@ -8,7 +8,6 @@ import { ProfilePhotoUpload } from "../LivingProfile";
 
 globalThis.IS_REACT_ACT_ENVIRONMENT = true;
 
-jest.mock("axios");
 
 function renderPhotoUpload(props = {}) {
   const {
@@ -197,7 +196,7 @@ describe("ProfilePhotoUpload", () => {
 
     await flush();
 
-    expect(axios.delete).toHaveBeenCalledWith("undefined/api/candidate/cand-123/photo");
+    expect(axios.delete).toHaveBeenCalledWith("http://test-backend.local/api/candidate/cand-123/photo");
     expect(onPhotoChange).toHaveBeenLastCalledWith(null);
     expect(view.container.querySelector('[data-testid="candidate-photo-placeholder"]')).toBeTruthy();
     view.unmount();
@@ -285,7 +284,7 @@ describe("ProfilePhotoUpload", () => {
     await flush();
 
     expect(axios.post).toHaveBeenCalledWith(
-      "undefined/api/candidate/cand-123/photo",
+      "http://test-backend.local/api/candidate/cand-123/photo",
       expect.any(FormData)
     );
     expect(onPhotoChange).toHaveBeenCalledWith("/api/candidate/cand-123/photo/view");
@@ -313,7 +312,7 @@ describe("ProfilePhotoUpload", () => {
     await flush();
 
     expect(axios.post).toHaveBeenCalledWith(
-      "undefined/api/candidate/cand-456/photo",
+      "http://test-backend.local/api/candidate/cand-456/photo",
       expect.any(FormData)
     );
     expect(onPhotoChange).toHaveBeenCalledWith("/api/candidate/cand-456/photo/view");

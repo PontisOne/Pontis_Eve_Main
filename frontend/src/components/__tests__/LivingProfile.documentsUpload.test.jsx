@@ -16,7 +16,6 @@ beforeEach(() => {
   }
 });
 
-vi.mock("axios");
 jest.mock("sonner", () => ({ toast: { error: jest.fn(), success: jest.fn() } }));
 
 const BASE_PROPS = {

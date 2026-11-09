@@ -3,8 +3,7 @@ import { createRoot } from "react-dom/client";
 import axios from "axios";
 import ResumeEditor from "../ResumeEditor";
 
-jest.mock("axios");
-jest.mock("react-router-dom", () => {
+vi.mock("react-router-dom", () => {
   const stableSearchParams = new URLSearchParams("candidate_id=candidate-1&recommendation_id=rec-1&fix_credit_claim_id=claim-initial");
   return { useSearchParams: () => [stableSearchParams] };
 }, { virtual: true });

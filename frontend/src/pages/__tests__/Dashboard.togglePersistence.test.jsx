@@ -8,27 +8,26 @@ import { saveOnboardingState } from "../../lib/onboardingStorage";
 
 globalThis.IS_REACT_ACT_ENVIRONMENT = true;
 
-jest.mock("axios");
 let lastLivingProfileProps = null;
 
-jest.mock("react-router-dom", () => ({
+vi.mock("react-router-dom", () => ({
   useNavigate: () => jest.fn(),
   useSearchParams: () => [new URLSearchParams(), jest.fn()],
 }), { virtual: true });
-jest.mock("../../components/Sidebar", () => () => <div data-testid="sidebar" />);
-jest.mock("../../components/ChatHub", () => () => <div data-testid="chat-hub" />);
-jest.mock("../../components/LivingProfile", () => (props) => {
+vi.mock("../../components/Sidebar", () => ({ default: () => <div data-testid="sidebar" /> }));
+vi.mock("../../components/ChatHub", () => ({ default: () => <div data-testid="chat-hub" /> }));
+vi.mock("../../components/LivingProfile", () => ({ default: (props) => {
   lastLivingProfileProps = props;
   return <div data-testid="living-profile" />;
-});
-jest.mock("../../components/SwipeJobCard", () => () => <div data-testid="jobs-deck" />);
-jest.mock("../../components/onboarding/VoiceIntake", () => () => <div data-testid="voice-intake" />);
-jest.mock("react-resizable-panels", () => ({
+}}));
+vi.mock("../../components/SwipeJobCard", () => ({ default: () => <div data-testid="jobs-deck" /> }));
+vi.mock("../../components/onboarding/VoiceIntake", () => ({ default: () => <div data-testid="voice-intake" /> }));
+vi.mock("react-resizable-panels", () => ({
   PanelGroup: ({ children }) => <div>{children}</div>,
   Panel: ({ children }) => <div>{children}</div>,
   PanelResizeHandle: () => <div />,
 }));
-jest.mock("sonner", () => ({ Toaster: () => null, toast: { error: jest.fn(), success: jest.fn() } }));
+vi.mock("sonner", () => ({ Toaster: () => null, toast: { error: jest.fn(), success: jest.fn() } }));
 
 function makeProfile(overrides = {}) {
   return {

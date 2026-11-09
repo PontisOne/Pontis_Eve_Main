@@ -1,5 +1,5 @@
 import { generateBio } from "../LivingProfile";
-jest.mock("react-router-dom", () => ({
+vi.mock("react-router-dom", () => ({
   useNavigate: () => jest.fn(),
   useSearchParams: () => [new URLSearchParams(), jest.fn()],
 }), { virtual: true });

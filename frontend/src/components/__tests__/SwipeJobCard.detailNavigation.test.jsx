@@ -7,7 +7,6 @@ import SwipeJobDeck from "../SwipeJobCard";
 
 globalThis.IS_REACT_ACT_ENVIRONMENT = true;
 
-jest.mock("axios");
 jest.mock("sonner", () => ({
   toast: {
     error: jest.fn(),
@@ -152,7 +151,7 @@ describe("SwipeJobDeck job details navigation", () => {
       renderResult.container.querySelector('[data-testid="apply-job-1"]').dispatchEvent(new MouseEvent("click", { bubbles: true }));
       await Promise.resolve();
     });
-    expect(renderResult.container.querySelector('[data-testid="match-score-gauge-value"]').textContent).toBe("33%");
+    expect(renderResult.container.querySelector('[data-testid="improve-match-modal"]')?.textContent).toContain("33%");
   });
 
   it("opens details from the card but not from a card action", () => {
@@ -207,7 +206,7 @@ describe("SwipeJobDeck job details navigation", () => {
     expect(renderResult.container.textContent).toContain("Leadership");
     expect(openSpy).not.toHaveBeenCalled();
     act(() => {
-      Array.from(renderResult.container.querySelectorAll("button")).find((button) => button.textContent?.includes("Apply with Current Resume")).dispatchEvent(new MouseEvent("click", { bubbles: true }));
+      Array.from(renderResult.container.querySelectorAll("button")).find((button) => button.textContent?.includes("Apply Without Customizing")).dispatchEvent(new MouseEvent("click", { bubbles: true }));
     });
     expect(openSpy).toHaveBeenCalledWith("https://acme.example/jobs/1", "_blank", "noopener,noreferrer");
     expect(renderResult.container.querySelector('[aria-label="Back"]')).toBeTruthy();

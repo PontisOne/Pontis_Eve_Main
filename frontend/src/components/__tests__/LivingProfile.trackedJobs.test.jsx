@@ -7,7 +7,6 @@ import LivingProfile from "../LivingProfile";
 
 globalThis.IS_REACT_ACT_ENVIRONMENT = true;
 
-jest.mock("axios");
 jest.mock("sonner", () => ({ toast: { error: jest.fn(), success: jest.fn() } }));
 
 const TRACKED_JOB = {
@@ -118,7 +117,7 @@ describe("Tracked Jobs — clickable card opens JD", () => {
     expect(container.querySelector('[data-testid="improve-match-modal"]')).toBeTruthy();
     expect(container.textContent).toContain("TypeScript");
     expect(openSpy).not.toHaveBeenCalled();
-    click(Array.from(container.querySelectorAll("button")).find((b) => b.textContent.includes("Apply with Current Resume")));
+    click(Array.from(container.querySelectorAll("button")).find((b) => b.textContent.includes("Apply Without Customizing")));
     expect(openSpy).toHaveBeenCalledWith(
       "https://acme.example/jobs/1",
       "_blank",

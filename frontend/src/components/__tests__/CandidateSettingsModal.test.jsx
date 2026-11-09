@@ -7,7 +7,6 @@ import CandidateSettingsModal from "../CandidateSettingsModal";
 
 globalThis.IS_REACT_ACT_ENVIRONMENT = true;
 
-vi.mock("axios");
 jest.mock("sonner", () => ({
   toast: {
     success: jest.fn(),
