@@ -38,7 +38,7 @@ function healthCheckPlugin(enabled) {
   };
 }
 
-module.exports = defineConfig({
+module.exports = defineConfig(() => ({
   plugins: [
     healthCheckPlugin(isHealthCheckEnabled()),
     {
@@ -83,4 +83,4 @@ module.exports = defineConfig({
       ],
     },
   },
-});
+}));
