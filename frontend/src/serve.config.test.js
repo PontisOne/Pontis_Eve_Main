@@ -9,12 +9,13 @@ const config = JSON.parse(
 );
 
 describe("production static hosting configuration", () => {
-  it("rewrites only the supported SPA routes", () => {
+  it("rewrites supported and extensionless unknown SPA routes", () => {
     expect(config.rewrites).toEqual([
       { source: "/", destination: "/index.html" },
       { source: "/onboarding", destination: "/index.html" },
       { source: "/dashboard", destination: "/index.html" },
       { source: "/resume-editor", destination: "/index.html" },
+      { source: "/:path([^.]+)", destination: "/index.html" },
     ]);
   });
 

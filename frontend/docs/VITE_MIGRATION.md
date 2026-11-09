@@ -108,10 +108,10 @@ From `frontend/`, install the locked dependencies and start Vite:
 
 ```sh
 yarn install --frozen-lockfile
-yarn start
+yarn dev
 ```
 
-Vite serves the application at `http://localhost:5173` and uses `frontend/index.html` as the HTML shell. The browser loads `/src/index.js`; Vite transforms modules on demand, applies the React JSX transform, resolves the `@` alias, and updates changed modules quickly during development. The backend normally runs separately on port `8000`, and `VITE_BACKEND_URL` points frontend API calls to it.
+`yarn start` remains available as a compatibility alias. Vite serves the application at `http://localhost:5173` and uses `frontend/index.html` as the HTML shell. The browser loads `/src/index.js`; Vite transforms modules on demand, applies the React JSX transform, resolves the `@` alias, and updates changed modules quickly during development. The backend normally runs separately on port `8000`, and `VITE_BACKEND_URL` points frontend API calls to it.
 
 ### Production build
 
@@ -122,6 +122,8 @@ yarn build
 ```
 
 Vite resolves and bundles the application and its CSS, applies the configured React and JSX transforms, and writes the optimized output to `frontend/build`. The output is static and should be deployed to a static host or web server configured to return the SPA entry point for client-side routes such as `/dashboard` and `/resume-editor`. Environment values are fixed when this build is created.
+
+After building, `yarn preview` serves the output locally on Vite's default port `4173`. Preview is for checking the production bundle; it does not apply `serve.json`. To test the deployment static server, use `PORT=4174 yarn serve:production` instead.
 
 ### Automated tests
 
@@ -149,4 +151,3 @@ Issue #22 configuration tests are in `frontend/vite.config.test.js` and cover th
 - Preserve the `build/` output contract and configure the hosting platform for SPA fallback routing.
 - Keep Vite configuration changes in `vite.config.js` and test-only behavior in `vitest.config.js` or `src/setupTests.js`.
 - When changing API origins or frontend environment values, rebuild the frontend because Vite embeds them into the generated assets.
-
