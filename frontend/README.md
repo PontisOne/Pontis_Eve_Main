@@ -140,7 +140,7 @@ yarn build
 
 The generated static site is written to `build/`. Use `yarn dev` to run Vite at `http://localhost:5173`, `yarn build` to create the production bundle, and `yarn preview` to inspect that bundle locally. `yarn start` remains an alias for `yarn dev`. Run `yarn test` for the Vitest suite. ESLint and its React-related plugins are installed, but there is no configured lint script or TypeScript type-check script. The planned shared `pre-commit` pipeline will add the frontend Biome and scoped `tsc` checks alongside Vitest; do not treat these as available commands until they are configured.
 
-To serve the production build locally with Vite's preview server, run `yarn preview` after `yarn build`. It uses Vite's default port `4173`. Preview is intended for a local build check; it does not apply the production `serve.json` rewrite rules.
+To inspect the production bundle locally, run `yarn preview` after `yarn build`. It uses Vite's default port `4173`.
 
 Issue #22 checks can be run with `yarn vitest run vite.config.test.js`. Run `yarn test` for the full frontend suite, `yarn build` for the production bundle, and `git diff --check` from the repository root.
 
@@ -156,35 +156,4 @@ The frontend currently stores the backend-issued candidate bearer token with onb
 
 ## Deployment
 
-Build with `yarn build` and deploy the contents of `build/` to the static hosting service. Set the configured Vite backend URL to the intended API origin in the build environment; frontend environment variables are baked into the static assets at build time.
-
-The production frontend uses a small Node server around `serve-handler`, the `compression` middleware, and the checked-in `serve.json` configuration. Railway's frontend service (`Pontis_Eve_Main`, root directory `/frontend`) should use:
-
-```text
-Build command: yarn build
-Start command: yarn serve:production
-```
-
-The production server checks `/api` and `/health` (including nested paths) before serving static files. Those reserved paths return a non-cacheable JSON 404 from the frontend server instead of being rewritten to the SPA; production API and health behavior remains owned by their respective services. Other extensionless paths fall back to `index.html` so React Router can handle unknown routes. File-like paths such as JavaScript, CSS, fonts, and images are not rewritten when missing, so they remain genuine 404s.
-
-`serve.json` sets `index.html` to `no-store`, fingerprinted JS/CSS and fonts to one-year immutable caching, and images to one-day caching. The production server compresses eligible text responses when the request advertises gzip support; verify this at the deployed Railway domain after each hosting change.
-
-For local verification using the same static server configuration, build the app and start the production server with an available port:
-
-```sh
-yarn build
-PORT=4174 yarn serve:production
-```
-
-In another terminal, inspect the responses:
-
-```sh
-curl -i http://localhost:4174/dashboard
-curl -i http://localhost:4174/not-a-route
-curl -i http://localhost:4174/api/unknown
-curl -i http://localhost:4174/health/live
-curl -i http://localhost:4174/assets/missing.js
-curl -i -H 'Accept-Encoding: gzip' http://localhost:4174/
-```
-
-The app routes and unknown extensionless route should return the SPA HTML with HTTP 200; React Router redirects the unknown route to sign-in. `/api/*`, `/health/*`, and missing static assets should return 404, never the SPA HTML. Stop the server with Ctrl+C when finished.
+Build with `yarn build` and deploy the contents of `build/`. Set `VITE_BACKEND_URL` to the intended API origin in the build environment; Vite environment variables are embedded in the static assets at build time. Configure the static host to serve the SPA entry point for client-side routes.

@@ -39,7 +39,6 @@
     "class-variance-authority": "0.7.1",
     "clsx": "2.1.1",
     "cmdk": "1.1.1",
-    "compression": "1.8.1",
     "date-fns": "4.1.0",
     "dayjs": "1.11.13",
     "dompurify": "^3.4.13",
@@ -60,7 +59,6 @@
     "react-resizable-panels": "3.0.1",
     "react-router-dom": "7.15.0",
     "recharts": "3.6.0",
-    "serve-handler": "6.1.7",
     "sonner": "2.0.3",
     "swr": "2.3.8",
     "tailwind-merge": "3.2.0",
@@ -74,7 +72,6 @@
     "build": "vite build",
     "preview": "vite preview",
     "build:analyze": "vite build --mode analyze",
-    "serve:production": "node scripts/serve-production.js",
     "test": "vitest run"
   },
   "browserslist": {
