@@ -2,7 +2,7 @@
 
 The frontend is the candidate-facing React application for Pontis Eve. It provides sign-in and onboarding, the candidate dashboard and Living Profile, job recommendations and tracking, and resume editing. It is built with React 19, React Router, Vite, Tailwind CSS, and reusable Radix-based UI components.
 
-The backend API lives in [`../backend`](../backend/README.md). For product context, see the repository-level [`README.md`](../README.md) and [`memory/PRD.md`](../memory/PRD.md).
+The backend API lives in [`../backend`](../backend/README.md). For product context, see the repository-level [`README.md`](../README.md) and [`memory/PRD.md`](../memory/PRD.md). Contributor setup and quality checks are documented in the root [`CONTRIBUTING.md`](../CONTRIBUTING.md).
 
 ## Requirements
 
@@ -19,7 +19,7 @@ This inventory is cross-checked against `package.json`, the frontend configurati
 - **Forms and interaction:** The app uses Sonner notifications, Framer Motion, `react-resizable-panels`, and `lucide-react`. Shared UI components also import React Hook Form, Embla Carousel, `input-otp`, and `next-themes`; the latter is used by a reusable toast wrapper and does not mean the app uses Next.js.
 - **Product integrations:** Voice intake uses Vapi through the `useVapi` hook, which imports the Web SDK. `libphonenumber-js` supports phone input, DOMPurify sanitizes job-description content, and Dashboard uses PDF.js to render resume previews.
 - **Testing:** Vitest, JSDOM, and React Testing Library (`@testing-library/react`, `@testing-library/dom`, `@testing-library/user-event`, and `@testing-library/jest-dom`).
-- **Additional tooling:** ESLint and React/accessibility/hooks plugins are dependencies, but `package.json` does not currently define a lint script. There is no TypeScript compiler or configured TypeScript type-check command; application source is currently JavaScript/JSX. The intended quality-gate direction is to use `pre-commit` as the shared frontend/backend hook framework, with Biome for frontend formatting/linting, `tsc` for an explicitly scoped gradual JS/TS check, and Vitest for tests. This pipeline is planned, not configured yet.
+- **Quality tooling:** The root pre-commit hooks run Biome on staged frontend source/config files, the explicitly scoped TypeScript check, Vitest, and Gitleaks. TypeScript currently checks only `src/lib/apiConfig.js`; the rest of the JavaScript/JSX application is not type-checked.
 
 `package.json` also declares dependencies for which no direct imports were found in `src/`, including `@hookform/resolvers`, `date-fns`, `dayjs`, `html2canvas`, `jspdf`, `lodash`, `recharts`, and `swr`. This does not rule out indirect use by dependencies.
 
@@ -122,9 +122,9 @@ Create a production build with:
 yarn build
 ```
 
-The generated static site is written to `build/`. Use `yarn dev` to run Vite at `http://localhost:5173`, `yarn build` to create the production bundle, and `yarn preview` to inspect that bundle locally. `yarn start` remains an alias for `yarn dev`. Run `yarn test` for the Vitest suite. ESLint and its React-related plugins are installed, but there is no configured lint script or TypeScript type-check script. The planned shared `pre-commit` pipeline will add the frontend Biome and scoped `tsc` checks alongside Vitest; do not treat these as available commands until they are configured.
+The generated static site is written to `build/`. Use `yarn dev` to run Vite at `http://localhost:5173`, `yarn build` to create the production bundle, and `yarn preview` to inspect that bundle locally. `yarn start` remains an alias for `yarn dev`. The package scripts also provide `test`, `test:coverage`, `lint`, and `typecheck`; the root `CONTRIBUTING.md` documents the shared pre-commit pipeline and scoped TypeScript coverage.
 
-To inspect the production bundle locally, run `yarn preview` after `yarn build`. It uses Vite's default port `4173`.
+To inspect the production bundle locally, run `yarn preview` after `yarn build`. It uses Vite's default port `4173`; preview does not apply the production static server's rewrite rules.
 
 ## Backend integration and authentication
 
