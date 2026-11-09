@@ -71,7 +71,7 @@
     "build": "vite build",
     "test": "vitest run",
     "test:coverage": "vitest run --coverage",
-    "lint": "biome check src",
+    "lint": "biome check --config-path biome.json src",
     "typecheck": "tsc --noEmit -p tsconfig.json"
   },
   "browserslist": {

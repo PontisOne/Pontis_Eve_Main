@@ -1,6 +1,6 @@
 {
   "$schema": "https://biomejs.dev/schemas/2.6.3/schema.json",
-  "root": false,
+  "root": true,
   "formatter": {
     "enabled": true,
     "indentStyle": "space",
@@ -16,6 +16,9 @@
         "recommended": true
       },
       "suspicious": {
+        "recommended": true
+      },
+      "a11y": {
         "recommended": true
       }
     }
@@ -38,7 +41,12 @@
       "linter": {
         "rules": {
           "suspicious": {
-            "noUnknownAtRules": "off"
+            "noUnknownAtRules": {
+              "level": "error",
+              "options": {
+                "ignore": ["tailwind"]
+              }
+            }
           }
         }
       }

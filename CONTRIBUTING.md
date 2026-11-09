@@ -35,7 +35,12 @@ python -m pre_commit run --all-files
 The root `.pre-commit-config.yaml` is the source of truth:
 
 - Frontend JavaScript, JSX, TypeScript, JSON, and CSS files run Biome only for
-  the filenames supplied by pre-commit (normally staged frontend files).
+  staged frontend content. `scripts/biome_staged.py` reads the Git index blob,
+  so partially staged files are checked as staged, not as working-tree files.
+  Existing lint diagnostics outside changed hunks do not block the commit;
+  parse errors, diagnostics on changed hunks, and any difference between the
+  staged blob and Biome's non-writing formatted output do. This is an
+  incremental staged gate, not a claim that the full frontend is clean.
 - Frontend changes run the TypeScript helper. `frontend/tsconfig.json` includes
   only `src/lib/apiConfig.js`; the rest of the frontend is not type-checked.
 - Changed frontend test files run only those staged test files in pre-commit.
@@ -59,11 +64,19 @@ Check the frontend source without modifying files:
 corepack yarn --cwd frontend lint
 ```
 
+The frontend Biome configuration is a frontend-owned root configuration. The
+package command above is the supported frontend lint entry point from either
+the repository root or the `frontend/` directory; it intentionally does not
+apply frontend rules to backend or root-level files.
+
 The staged-file equivalent is:
 
 ```powershell
-python scripts/biome_staged.py frontend/src/App.js
+python scripts/biome_staged.py
 ```
+
+The staged checker discovers all staged frontend files itself; command-line
+filenames are not used to narrow the check.
 
 To intentionally apply Biome fixes to frontend source files, run this command
 only after reviewing its scope. It modifies files:
@@ -76,6 +89,10 @@ Pop-Location
 
 Do not use `--write` in the pre-commit hook or as a substitute for reviewing
 unrelated baseline violations.
+
+For a deliberate full-repository report, run `corepack yarn --cwd frontend
+lint`. That command can still report pre-existing legacy diagnostics and is
+separate from the incremental staged hook.
 
 ## TypeScript boundary
 
