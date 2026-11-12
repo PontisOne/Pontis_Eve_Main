@@ -270,14 +270,14 @@ function _formatEducationDates(education) {
   const startYear = year(education?.start_date ?? education?.startDate);
   const endYear = year(education?.end_date ?? education?.endDate);
 
-  if (startYear && endYear) return `${startYear} ΓÇô ${endYear}`;
+  if (startYear && endYear) return `${startYear} – ${endYear}`;
   return education?.dates || "";
 }
 
 function ResumeExperienceEntry({ exp }) {
   const _highlights = String(exp.description || exp.summary || "")
     .split(/\n+|(?<=\.)\s+(?=[A-Z])/)
-    .map((item) => item.replace(/^[-ΓÇó]\s*/, "").trim())
+    .map((item) => item.replace(/^[–•-]\s*/, "").trim())
     .filter(Boolean);
 
   return (
@@ -832,7 +832,7 @@ export function ProfileEditor({ profile, candidateId, onClose, onSaved }) {
             disabled={saving || !candidateId}
             className="rounded-full bg-[#1F1F1F] px-5 py-2 text-sm font-medium text-white disabled:opacity-50"
           >
-            {saving ? "SavingΓÇª" : "Save profile"}
+            {saving ? "Saving…" : "Save profile"}
           </button>
         </div>
       </div>
@@ -1062,6 +1062,15 @@ export function ProfileTab({
               </span>
             ))}
           </div>
+        ) : (
+          <p className="text-[13px] text-[#9A9A98] font-normal">Not provided yet</p>
+        )}
+      </section>
+
+      <section id={profileSectionId("relocation")}>
+        <SectionLabel>Relocation</SectionLabel>
+        {profile.willing_to_relocate === true ? (
+          <p className="text-[13px] text-[#4A4A48] font-normal">Ready to relocate</p>
         ) : (
           <p className="text-[13px] text-[#9A9A98] font-normal">Not provided yet</p>
         )}
@@ -1933,7 +1942,7 @@ function DocumentsTab({
   };
 
   if (docsLoading) {
-    return <p className="text-[13px] text-[#9A9A98] font-normal">Loading documentsΓÇª</p>;
+    return <p className="text-[13px] text-[#9A9A98] font-normal">Loading documents…</p>;
   }
 
   return (
@@ -1974,7 +1983,7 @@ function DocumentsTab({
                 disabled={busy}
                 className="flex-1 py-2 rounded-xl bg-red-500 text-white text-[13px] font-medium hover:bg-red-600 transition-colors disabled:opacity-50"
               >
-                {busy ? "DeletingΓÇª" : "Delete"}
+                {busy ? "Deleting…" : "Delete"}
               </button>
             </div>
           </div>
@@ -2337,7 +2346,7 @@ function OpportunitiesTab({ candidateId, onInterested }) {
   };
 
   if (error) return <p className="text-[13px] text-red-500">{error}</p>;
-  if (opps === null) return <p className="text-[13px] text-[#9A9A98]">LoadingΓÇª</p>;
+  if (opps === null) return <p className="text-[13px] text-[#9A9A98]">Loading…</p>;
 
   const pending = opps.filter((o) => !o.candidate_response);
   const responded = opps.filter((o) => o.candidate_response);
@@ -2364,7 +2373,7 @@ function OpportunitiesTab({ candidateId, onInterested }) {
           onClick={() => setSelected(null)}
           className="text-[12px] text-[#4A4A48] hover:text-[#1F1F1F] underline underline-offset-2"
         >
-          ΓåÉ Back
+              ← Back
         </button>
         <div className="space-y-1">
           <h2 className="text-[16px] font-semibold text-[#1F1F1F]">{job.title || "Role"}</h2>
@@ -2414,7 +2423,7 @@ function OpportunitiesTab({ candidateId, onInterested }) {
         <div className="pt-2">
           {responded_val === "interested" && (
             <p className="text-[13px] font-medium text-[#2E7538]">
-              Γ£ô You expressed interest in this role.
+              ✓ You expressed interest in this role.
             </p>
           )}
           {responded_val === "not_interested" && (
@@ -2628,7 +2637,7 @@ export default function LivingProfile({
               title="Download profile as PDF"
             >
               <Download className="w-3.5 h-3.5" strokeWidth={1.75} />
-              {pdfGenerating ? "GeneratingΓÇª" : "Download PDF"}
+              {pdfGenerating ? "Generating…" : "Download PDF"}
             </button>
           )}
           <ProfileStrengthBar label={userProfile.strength} percent={userProfile.strengthPercent} />
@@ -2715,7 +2724,7 @@ function _ResumeContextTab({ resume, docsLoading }) {
   if (docsLoading) {
     return (
       <p className="text-[13px] text-[#9A9A98]" data-testid="resume-context-loading">
-        Loading resumeΓÇª
+        Loading resume…
       </p>
     );
   }

@@ -54,7 +54,7 @@ function formatJobDescription(str) {
       output.push(`${line.replace(/\s*:?$/, "")}:`);
       // Only action/requirements sections are lists. Overview, company
       // information, and policy sections should remain prose paragraphs.
-      inList = /^(?:what you(?:'|â€™)ll do|responsibilities|required qualifications|requirements|nice[- ]to[- ]haves?|education|benefits|interview process)\s*:?[ \t]*$/i.test(line);
+      inList = /^(?:what you(?:'|’)ll do|responsibilities|required qualifications|requirements|nice[- ]to[- ]haves?|education|benefits|interview process)\s*:?[ \t]*$/i.test(line);
       continue;
     }
     const item = line.replace(/^(?:[-–—*•·]|\d+[.)])\s*/, "").trim();

@@ -428,8 +428,8 @@ class TestMergeVoiceIntoProfile:
         merged = _merge_voice_into_profile(profile, voice)
         exp = merged["work_experience"][0]
         assert exp["end_date"] == "Present"
-        assert exp.get("dates", "") not in {"Present â€” Present", "Present - Present"}
-        assert not exp.get("dates", "").startswith("Present â€” Present")
+        assert exp.get("dates", "") not in {"Present — Present", "Present - Present"}
+        assert not exp.get("dates", "").startswith("Present — Present")
 
     def test_education_is_preserved_and_merged_without_duplicates(self):
         profile = self._base_profile()

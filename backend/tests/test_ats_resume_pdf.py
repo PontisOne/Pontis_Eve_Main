@@ -533,5 +533,5 @@ def test_ats_pdf_source_bullets_render_once_and_duplicate_project_text_is_remove
 
 
 def test_pdf_date_formatting_repairs_known_mojibake_and_keeps_year_only_values():
-    assert server._format_pdf_date_range({"dates": "Jan 2024 Ã¢â‚¬â€œ Present"}) == "Jan 2024 - Present"
+    assert server._format_pdf_date_range({"dates": "Jan 2024 — Present"}) == "Jan 2024 - Present"
     assert server._format_pdf_date_range({"dates": "2020"}) == "2020"

@@ -150,7 +150,7 @@ describe("normalizeProfileForDisplay experience ordering", () => {
         {
           title: "Corrupted em dash",
           company: "E",
-          dates: "Jan 2020 Ã¢â‚¬â€\u009D Mar 2021",
+          dates: "Jan 2020 \u00c3\u00a2\u00e2\u201a\u00ac\u00e2\u20ac\u2020\u009D Mar 2021",
         },
       ],
     });
@@ -178,7 +178,7 @@ describe("normalizeProfileForDisplay experience ordering", () => {
     expect([...educationDates].map((character) => character.codePointAt(0))).toContain(0x2014);
 
     const corruptedEducationDates = formatEducationDateRange({
-      dates: "2020 Ã¢â‚¬â€\u009D 2021",
+      dates: "2020 \u00c3\u00a2\u00e2\u201a\u00ac\u00e2\u20ac\u2020\u009D 2021",
     });
     expect(corruptedEducationDates).toBe("2020 — 2021");
     expect([...corruptedEducationDates].map((character) => character.codePointAt(0))).toContain(0x2014);
@@ -328,7 +328,7 @@ describe("calculateExperienceYears", () => {
 
   it("counts historical and present employment periods from month-name ranges", () => {
     const years = calculateExperienceYears([
-      { company: "Deepija Telecom", title: "Engineer", dates: "01-11-2023 â€” 09-10-2024" },
+      { company: "Deepija Telecom", title: "Engineer", dates: "01-11-2023 \u00e2\u20ac\u201d 09-10-2024" },
       { company: "Viral Bug", title: "Engineer", dates: "Aug 2025 - Present" },
     ]);
 
@@ -386,7 +386,7 @@ describe("calculateExperienceYears", () => {
       experience: [
         { company: "Deepija Telecom", title: "Engineer", start_date: "2023-11", end_date: "2024-10" },
         { company: "Viral Bug", title: "Engineer", start_date: "2025-08", end_date: "Present" },
-        { company: "Deepija Telecom", title: "Engineer", dates: "01-11-2023 â€” 09-10-2024" },
+      { company: "Deepija Telecom", title: "Engineer", dates: "01-11-2023 \u00e2\u20ac\u201d 09-10-2024" },
         { company: "Viral Bug", title: "Engineer", dates: "Aug 2025 - Present" },
       ],
     });
@@ -491,7 +491,7 @@ describe("mergeProfilesForDisplay", () => {
             id: "exp-resume",
             title: "Product Manager",
             company: "ResumeCo",
-            dates: "2021 â€” 2023",
+      dates: "2021 \u00e2\u20ac\u201d 2023",
             description: "Owned roadmap.",
           },
         ],
@@ -530,7 +530,7 @@ describe("mergeProfilesForDisplay", () => {
             id: "exp-1",
             title: "Engineer",
             company: "Acme",
-            dates: "2024 â€” Present",
+      dates: "2024 \u00e2\u20ac\u201d Present",
             description: "Built services.",
           },
         ],
@@ -660,7 +660,7 @@ describe("mergeProfilesForDisplay", () => {
 
     expect(merged.experience).toHaveLength(1);
     expect(merged.experience[0].end_date).toBe("Present");
-    expect(merged.experience[0].dates).not.toBe("Present â€” Present");
+    expect(merged.experience[0].dates).not.toBe("Present \u00e2\u20ac\u201d Present");
     expect(merged.experience[0].dates).not.toBe("Present - Present");
   });
 

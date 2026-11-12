@@ -833,7 +833,7 @@ def _truncate_date_to_month(value) -> str:
 
 
 def _normalize_for_frontend(c: dict) -> dict:
-    """Map DB candidate row ΓåÆ Eve frontend profile shape."""
+    """Map DB candidate row → Eve frontend profile shape."""
     work_exp = _sort_experience_for_display(c.get("work_experience") or [])
     experience = []
     for i, w in enumerate(work_exp):
@@ -841,7 +841,7 @@ def _normalize_for_frontend(c: dict) -> dict:
         _ed_raw = w.get("end_date") or w.get("endDate") or ""
         _ed = _truncate_date_to_month(_ed_raw) if _ed_raw else ""
         _is_current = _is_open_ended_experience_value(_ed_raw)
-        dates = " ΓÇö ".join(filter(None, [_sd, "Present" if _is_current else _ed]))
+        dates = " — ".join(filter(None, [_sd, "Present" if _is_current else _ed]))
         experience.append({
             "id": w.get("id", f"exp-{i}"),
             "title": w.get("title", ""),
@@ -861,14 +861,14 @@ def _normalize_for_frontend(c: dict) -> dict:
             start_date = experience[i]["start_date"]
             raw_end = w.get("end_date") or w.get("endDate") or ""
             end_date = experience[i]["end_date"] or ("Present" if _is_open_ended_experience_value(raw_end) else "")
-            experience[i]["dates"] = " ├óΓé¼ΓÇ¥ ".join(filter(None, [start_date, end_date]))
+            experience[i]["dates"] = " — ".join(filter(None, [start_date, end_date]))
 
     edu_raw = c.get("education") or []
     education = []
     for i, e in enumerate(edu_raw):
         _esd = _truncate_date_to_month(e.get("start_date") or "")
         _eed = _truncate_date_to_month(e.get("end_date") or "")
-        dates = " ΓÇö ".join(filter(None, [_esd, _eed]))
+        dates = " — ".join(filter(None, [_esd, _eed]))
         # Preserve a parser-supplied education date when separate boundaries
         # are unavailable. Unlike employment, a missing end date is never
         # interpreted as an ongoing course.
@@ -901,6 +901,14 @@ def _normalize_for_frontend(c: dict) -> dict:
     certifications = _normalize_certifications(raw_data.get("certifications") or [])
     key_skills = _normalize_skills(c.get("skills") or [], certifications=certifications)
 
+    preference_view = _classify_role_and_employment_preferences(
+        raw_data.get("preferred_roles") or [],
+        raw_data.get("employment_types") or [],
+        {
+            "willing_to_relocate": raw_data.get("willing_to_relocate"),
+        },
+    )
+
     profile = {
         "candidate_id": str(c.get("id") or c.get("candidate_id") or ""),
         "name": c.get("name", ""),
@@ -917,7 +925,9 @@ def _normalize_for_frontend(c: dict) -> dict:
         "education": education,
         "availability": _normalize_availability_value(raw_data.get("availability", "")) or raw_data.get("availability", ""),
         "salary_expectation": raw_data.get("salary_expectation", ""),
-        "preferred_roles": raw_data.get("preferred_roles") or [],
+        "preferred_roles": preference_view.get("preferred_roles", []),
+        "employment_types": preference_view.get("employment_types", []),
+        "willing_to_relocate": preference_view.get("willing_to_relocate"),
         "certifications": certifications,
         "projects": _normalize_projects(raw_data.get("projects")),
         "additional_information": raw_data.get("additional_information", ""),
@@ -947,7 +957,7 @@ def _repair_known_pdf_mojibake(text: str) -> str:
     """Repair only unmistakable UTF-8-as-Latin-1 artifacts at the PDF edge."""
     # Stored candidate content is otherwise left untouched. These markers are
     # produced when punctuation has been decoded with the wrong encoding.
-    if not any(marker in text for marker in ("├â", "├é", "├óΓé¼", "├óΓé¼┬ó")):
+    if not any(marker in text for marker in ("\u251c\u00e2", "\u251c\u00e9", "\u251c\u00f3\u20ac", "\u251c\u00f3\u20ac\u00a7")):
         return text
     repaired = text
     # Older saved values can contain two successive bad decodes in addition to
@@ -1182,13 +1192,13 @@ def _ats_clean_description(description: Any) -> list[str]:
         # Source bullet markers are deliberately removed: ListFlowable owns
         # the one and only visual marker and its hanging indent.
         for line in re.split(r"\r?\n+", text):
-            line = re.sub(r"^\s*(?:[ΓÇó*\-]+|\d+[.)])\s*", "", line).strip()
+            line = re.sub(r"^\s*(?:[•*\-]+|\d+[.)])\s*", "", line).strip()
             if line:
                 raw_sentences.extend(re.split(r"(?<=[.!?])\s+(?=[A-Z])", line))
     seen: set[str] = set()
     bullets: list[str] = []
     for sentence in raw_sentences:
-        cleaned = re.sub(r"\s+", " ", sentence).strip().strip("ΓÇó*- \t").rstrip(".")
+        cleaned = re.sub(r"\s+", " ", sentence).strip().strip("•*- \t").rstrip(".")
         if not cleaned:
             continue
         key = cleaned.casefold()
@@ -2375,7 +2385,7 @@ def _clean_str(value: Any) -> str:
     return " ".join(str(value).split()) if value is not None else ""
 
 
-# High-level intake topics ΓÇö used as hints to the LLM, not as hardcoded question wording.
+# High-level intake topics — used as hints to the LLM, not as hardcoded question wording.
 VOICE_INTAKE_TOPICS = [
     "background_experience",
     "skills_technologies",
@@ -2516,7 +2526,7 @@ def _is_clarification_request(text: str) -> bool:
     t = _clean_str(text).lower().strip().rstrip(" .!?")
     if not t:
         return False
-    # Must be short ΓÇö real answers are longer
+    # Must be short — real answers are longer
     if len(t) > 80:
         return False
     return any(re.search(p, t) for p in _CLARIFICATION_PATTERNS)
@@ -2909,7 +2919,7 @@ def _voice_intake_turn_pairs(voice_notes: Any, transcript: str = "") -> tuple[li
     - An assistant turn that is a short acknowledgement does NOT start a new question;
       the previous real question remains active.
     - Any assistant turn containing a real question (ends with '?', not setup/greeting)
-      is treated as an intake question ΓÇö regardless of exact wording.
+      is treated as an intake question — regardless of exact wording.
     - If a new question is a rephrasing of the current pending question, keep the
       original pending question text (do not create a new turn).
     - Consecutive user fragments belonging to the same answer are combined.
@@ -2940,7 +2950,7 @@ def _voice_intake_turn_pairs(voice_notes: Any, transcript: str = "") -> tuple[li
         if detected_q:
             # Check if this is a rephrasing of the current pending question
             if pending_question and _questions_are_rephrasing(pending_question, detected_q):
-                # Same question rephrased ΓÇö keep original pending question, don't flush
+                # Same question rephrased — keep original pending question, don't flush
                 return
             # New real question: flush any accumulated answer first
             if answer_parts and pending_question:
@@ -3000,7 +3010,7 @@ def _voice_intake_turn_pairs(voice_notes: Any, transcript: str = "") -> tuple[li
                 continue
             if pending_question:
                 answer_parts.append(cleaned)
-            # else: before first real question ΓÇö discard
+            # else: before first real question — discard
 
     # Flush any remaining assistant buffer
     _flush_assistant_buffer()
@@ -3063,7 +3073,7 @@ Rules:
 - A topic is covered if the candidate provided meaningful information about it anywhere in the conversation or profile
 - Before completing career_preferences/availability_location, explicitly collect any still-unknown work mode (Remote/Hybrid/On-site/Flexible), preferred industries, employment type, preferred locations, expected salary, and relocation preference. A candidate may decline a field; record that rather than guessing.
 - Employment history is not complete until every newly introduced or updated job has a start date. For a current job, ask "When did you start working as <role>?" when missing and record end_date exactly as "Present". For a previous job, collect both start and end dates. Do not complete the employment-history topic while these dates are missing unless the candidate explicitly cannot provide them.
-- next_question must be a natural, conversational question ΓÇö not a hardcoded template
+- next_question must be a natural, conversational question — not a hardcoded template
 - If all important topics are covered, set next_question to null and completed to true
 
 Return ONLY valid JSON:
@@ -3299,7 +3309,7 @@ def _build_voice_intake_resume_from_notes(
     Uses LLM analysis when available; falls back to structural parsing.
 
     completed_turns is ALWAYS the union of previously persisted turns and
-    newly parsed turns ΓÇö never a replacement.
+    newly parsed turns — never a replacement.
     """
     new_turns, pending_question = _voice_intake_turn_pairs(voice_notes, transcript)
 
@@ -3578,7 +3588,7 @@ def _build_voice_intake_resume_from_notes(
                 if existing_gap:
                     existing_gap["status"] = "explained"
             else:
-                # Gap is unanswered ΓÇö mandatory: override current/next question
+                # Gap is unanswered — mandatory: override current/next question
                 is_completed = False
                 gap_q = employment_gap["question"]
                 missing_topics = _merge_voice_intake_topic_list(missing_topics, ["employment_gap"])
@@ -4184,7 +4194,7 @@ def _merge_resume_into_existing_profile(existing: dict, parsed: dict) -> dict:
       experience_years) are updated from the new resume only when the existing
       value is empty/None.
     - List fields (skills, work_experience, education) are merged/enriched
-      using the existing merge helpers ΓÇö no duplicates, existing data preserved.
+      using the existing merge helpers — no duplicates, existing data preserved.
     """
     merged = dict(existing)
     parsed = _sanitize_profile_field_mapping(parsed)
@@ -4305,7 +4315,7 @@ async def _upsert_candidate(parsed: dict, fingerprint: str, file_bytes: bytes,
                     cid = str(row[0])
                     logger.info("[parse-resume] matched by fingerprint -> candidate_id=%s", cid)
         else:
-            logger.info("[parse-resume] force_new=True ΓÇö skipping email/fingerprint lookup, will insert new record")
+            logger.info("[parse-resume] force_new=True — skipping email/fingerprint lookup, will insert new record")
 
         logger.info("[parse-resume] existing candidate found=%s candidate_id=%s", cid is not None, cid)
 
@@ -4354,7 +4364,7 @@ async def _upsert_candidate(parsed: dict, fingerprint: str, file_bytes: bytes,
                 existing_raw_data, normalized_skills, resume_evidence_text, "resume"
             )
 
-            # UPDATE existing candidate ΓÇö merge resume into existing profile.
+            # UPDATE existing candidate — merge resume into existing profile.
             # Identity (name, email, phone) is always preserved from the DB.
             # All other fields are merged/enriched rather than replaced.
             existing_row_result = await db.execute(
@@ -5507,25 +5517,25 @@ Speak as a trusted career partner. No emojis. No markdown headers.
 
 CONVERSATION CONTINUITY:
 - Treat the latest candidate message as part of the ongoing conversation, not as an isolated request. Read the immediately preceding candidate and Eve messages before answering.
-- Always acknowledge the candidate's latest message or correction naturally in the first sentence (for example, "Got it ΓÇö you want to add...", "Thanks, I understand...", or "I see what you mean..."). Do not use a generic acknowledgement that ignores the actual content.
+- Always acknowledge the candidate's latest message or correction naturally in the first sentence (for example, "Got it — you want to add...", "Thanks, I understand...", or "I see what you mean..."). Do not use a generic acknowledgement that ignores the actual content.
 - Then answer the latest message directly. If the latest message confirms, corrects, or answers Eve's previous question, use that context and do not repeat the previous question.
 - When the candidate's intent is unclear, acknowledge what was understood, state the specific ambiguity, and ask one focused clarification question. Never silently choose an interpretation.
 
 CANDIDATE PROFILE (current state):
 {profile_context}
 
-MISSING FIELDS (ask about these ΓÇö do NOT ask for fields already listed above): {missing_fields}
+MISSING FIELDS (ask about these — do NOT ask for fields already listed above): {missing_fields}
 
 PROFILE COMPLETION GUIDANCE: {profile_completion_guidance}
 
 BEHAVIOR:
 - ALWAYS acknowledge the candidate's latest message and answer it FIRST and DIRECTLY, using the candidate profile and the immediately preceding conversation turns. Do not redirect to job search or any other topic unless the candidate's message explicitly asks for it.
-- PROFILE IMPROVEMENT QUESTIONS: When you receive a message starting with [PROFILE_QUESTION], it is an internal instruction ΓÇö do NOT treat it as a candidate statement. Instead, ask the candidate that exact question naturally and conversationally, then wait for their answer. Do not acknowledge the instruction format.
+- PROFILE IMPROVEMENT QUESTIONS: When you receive a message starting with [PROFILE_QUESTION], it is an internal instruction — do NOT treat it as a candidate statement. Instead, ask the candidate that exact question naturally and conversationally, then wait for their answer. Do not acknowledge the instruction format.
 - PROFILE COMPLETION: If PROFILE COMPLETION GUIDANCE says the profile is below 90% and lists a next question, and the candidate's current message is NOT a direct question about something else, proactively ask that ONE backend-selected question at the end of your reply. Do NOT ask it if the candidate's message already answers it. Stop asking proactive profile questions once the guidance says the profile is at 90%+.
 - COMPLETENESS WORDING: An empty MISSING FIELDS list means the candidate's core required details are present; it does NOT mean Profile Strength is 100%. When PROFILE COMPLETION GUIDANCE says the profile is below 90%, never say the profile is "complete", "100% complete", or has "no missing details". Instead, say the core details are present and naturally use the supplied strengthening area/question.
 - PREFERENCE COMPLETION: When PROFILE COMPLETION GUIDANCE asks about a work preference, ask that exact question naturally. Never expose field keys, internal guidance, or a profile score/percentage to the candidate.
-- If the candidate asks whether you have their resume, details, or profile ΓÇö answer YES or NO based on the profile above, and summarise what you have. Never say you are loading jobs in response to such questions.
-- If the candidate asks what information you still need ΓÇö list only the MISSING FIELDS from the profile above. Do not mention jobs.
+- If the candidate asks whether you have their resume, details, or profile — answer YES or NO based on the profile above, and summarise what you have. Never say you are loading jobs in response to such questions.
+- If the candidate asks what information you still need — list only the MISSING FIELDS from the profile above. Do not mention jobs.
 - Job search, job matching, and job recommendations must ONLY be triggered when the candidate explicitly asks for jobs, roles, or matches (e.g. "find me jobs", "show me matches", "what roles suit me"). Never volunteer job search in response to profile/resume/details questions.
 - Use the candidate profile above to personalise every response. Address the candidate by their actual name when known.
 - NEVER ask for information that is already present in the candidate profile above (name, email, phone, resume, skills, experience, etc.).
@@ -5559,24 +5569,24 @@ BEHAVIOR:
   When the candidate explicitly says an item is "from Additional Information", use
   ONLY `additional_information` as the deletion target. Never delete a
   certification merely because the requested phrase contains "certificate".
-  If the item does not exist in the profile, say so ΓÇö do NOT add it.
+  If the item does not exist in the profile, say so — do NOT add it.
   If the request is ambiguous (multiple items could match), ask a clarification question instead of deleting.
 
-JOB RECOMMENDATIONS ΓÇö STRICT RULES:
+JOB RECOMMENDATIONS — STRICT RULES:
 - NEVER invent, fabricate, or hallucinate job titles, company names, salaries, benefits, job descriptions, or hiring status.
-- When the candidate asks for jobs/matches, the real database results will appear under "REAL JOB MATCHES FROM DATABASE" in the profile context above. Present ONLY those results ΓÇö title, company, location, salary, match score, and a brief description summary.
+- When the candidate asks for jobs/matches, the real database results will appear under "REAL JOB MATCHES FROM DATABASE" in the profile context above. Present ONLY those results — title, company, location, salary, match score, and a brief description summary.
 - If "REAL JOB MATCHES FROM DATABASE" is present in the context, you MUST present those jobs directly. Do NOT say you are pulling jobs, loading jobs, or that results will appear elsewhere.
 - If no "REAL JOB MATCHES FROM DATABASE" section is present and the candidate asks for jobs, say no matches were found right now and suggest they check back after their profile is more complete.
 - You may summarise or explain job data that has been returned to you, but you must not add details that were not in the source data.
 - When a candidate expresses interest in a specific job, tell them to click the Apply Now button on the job card to complete their application on the company's website. Never say you have submitted or will submit their application.
 
-APPLICATION WORKFLOW ΓÇö STRICT RULES:
+APPLICATION WORKFLOW — STRICT RULES:
 - NEVER say or imply that an application has been submitted. Eve does NOT submit applications.
 - When a candidate expresses interest in a job, respond with something like: "I haven't submitted your application. Click Apply Now to complete it on the company's website." Then direct them to use the Apply Now button shown in the job card.
-- Do NOT ask "Shall I submit your application?" ΓÇö Eve cannot submit applications.
+- Do NOT ask "Shall I submit your application?" — Eve cannot submit applications.
 - The Apply Now button opens the company's actual careers/application page in a new tab. The candidate completes the application there.
 
-FIELD DEFINITIONS ΓÇö use exactly these keys:
+FIELD DEFINITIONS — use exactly these keys:
   current_role   : The candidate's job TITLE (e.g. "Python Backend Developer", "Data Analyst").
                    NEVER put a technology, tool, or database name here (e.g. PostgreSQL, FastAPI, Python are NOT job titles).
   experience_years: Total years of professional experience as a number.
@@ -5601,7 +5611,7 @@ FIELD DEFINITIONS ΓÇö use exactly these keys:
   education      : List of {{"degree": "", "institution": "", "start_date": "", "end_date": ""}}. A degree completed/studied at a university is Education, never Certification; retain the stated degree and institution even when dates are absent.
   certifications : List of certification names only. Use this only for an explicitly stated certificate, certification, credential, licence, or certification exam -- never infer it from a university, college, degree, Master's, Bachelor's, MBA, or PhD.
 
-EXAMPLE ΓÇö if candidate says "I worked at ABC Technologies as a Python Backend Developer. I built REST APIs with FastAPI and PostgreSQL.":
+EXAMPLE — if candidate says "I worked at ABC Technologies as a Python Backend Developer. I built REST APIs with FastAPI and PostgreSQL.":
   <<<PROFILE_UPDATES>>>
   {{"profile_updates": {{
     "current_role": "Python Backend Developer",
@@ -5628,7 +5638,7 @@ def _build_profile_context(profile: dict) -> tuple[str, list[str]]:
         elif required:
             missing.append(label)
 
-    # Core identity ΓÇö always collected during signup/resume; never ask again
+    # Core identity — always collected during signup/resume; never ask again
     add("Name", profile.get("name"), required=True)
     add("Email", profile.get("email"), required=False)   # known from LinkedIn auth
     add("Phone", profile.get("phone"), required=False)
@@ -5640,7 +5650,7 @@ def _build_profile_context(profile: dict) -> tuple[str, list[str]]:
     add("Work Experience", profile.get("experience") or profile.get("work_experience"), required=True)
     add("Education", profile.get("education"), required=False)
 
-    # Resume availability ΓÇö derived from parsing_status set during resume upload
+    # Resume availability — derived from parsing_status set during resume upload
     resume_available = profile.get("parsing_status") == "completed"
     lines.append(f"- Resume status: {'Available' if resume_available else 'Not available'}")
 
@@ -5835,7 +5845,7 @@ def _validate_profile_question_reply(reply: str, eligible_questions: list[dict])
         question = _clean_str(eligible_questions[0].get("question"))
         if question and str(eligible_questions[0].get("topic_id") or "") in eligible_topics:
             return f"To complete your profile, {question}"
-    return result or "IΓÇÖve captured the profile details available so far. What would you like to explore?"
+    return result or "I’ve captured the profile details available so far. What would you like to explore?"
 
 
 _CONTRADICTORY_PROFILE_COMPLETION_RE = re.compile(
@@ -5958,13 +5968,40 @@ def _classify_role_and_employment_preferences(
 
     def canonical(value: str) -> Optional[str]:
         key = re.sub(r"[\u2010-\u2015\-]+", "-", " ".join(value.casefold().split())).strip(" .,;:")
-        return _EMPLOYMENT_TYPE_ALIASES.get(key)
+        direct = _EMPLOYMENT_TYPE_ALIASES.get(key)
+        if direct:
+            return direct
+        if re.search(r"\bfull\s*[- ]?time\b", key):
+            return "full-time"
+        if re.search(r"\bpart\s*[- ]?time\b", key):
+            return "part-time"
+        if re.search(r"\bcontract(?:\s+work)?\b", key):
+            return "contract"
+        if re.search(r"\bfreelance(?:\s+work)?\b", key):
+            return "freelance"
+        return None
+
+    def is_relocation_statement(value: str) -> bool:
+        if re.search(r"\b(?:not|unwilling)\s+to\s+relocat|\bnot\s+open\s+to\s+relocation", value, re.IGNORECASE):
+            return False
+        return bool(
+            re.search(
+                r"\b(?:ready|willing|open|able|prepared|can)\s+to\s+(?:relocate|move)\b|"
+                r"\b(?:open|willing|ready)\s+to\s+relocation\b|"
+                r"\bflexible\b[^.!?\n]*\brelocat(?:e|ion|ing)\b",
+                value,
+                re.IGNORECASE,
+            )
+        )
 
     roles: list[str] = []
     types: list[str] = []
     seen_roles: set[str] = set()
     seen_types: set[str] = set()
     for item in values(preferred_roles):
+        if is_relocation_statement(item):
+            result["willing_to_relocate"] = True
+            continue
         employment = canonical(item)
         if employment:
             if employment not in seen_types:
@@ -5976,6 +6013,9 @@ def _classify_role_and_employment_preferences(
             roles.append(item)
             seen_roles.add(key)
     for item in values(employment_types):
+        if is_relocation_statement(item):
+            result["willing_to_relocate"] = True
+            continue
         employment = canonical(item)
         if employment and employment not in seen_types:
             types.append(employment)
@@ -6072,7 +6112,7 @@ def _sanitize_profile_updates(updates: dict) -> dict:
 _TIMELINE_ONLY_VALUE = re.compile(
     r"^\s*(?:\d{4}|(?:jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|"
     r"jul(?:y)?|aug(?:ust)?|sep(?:t(?:ember)?)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)\s+\d{4})"
-    r"\s*(?:[-ΓÇôΓÇö]|to|through|until)\s*(?:\d{4}|present|current|now|"
+    r"\s*(?:[-–—]|to|through|until)\s*(?:\d{4}|present|current|now|"
     r"(?:jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|"
     r"aug(?:ust)?|sep(?:t(?:ember)?)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)\s+\d{4})\s*$",
     re.IGNORECASE,
@@ -6269,7 +6309,7 @@ def _detect_deletion_intent(message: str) -> Optional[dict]:
         if field and item:
             return {"field": field, "item": item}
 
-    # Pattern 5: remove/delete <item> (no explicit section ΓÇö field unknown)
+        # Pattern 5: remove/delete <item> (no explicit section — field unknown)
     m2 = re.search(
         r"\b(?:remove|delete|drop)\s+(?P<item>[\w\s.+#-]{2,60})(?:[.!?;]|$)",
         message,
@@ -6306,7 +6346,7 @@ def _apply_deletion_to_profile_updates(updates: dict, deletion: dict) -> dict:
                 bucket.append(item)
         existing_deletions[field] = bucket
     else:
-        # Unknown field ΓÇö store under "_unknown" for best-effort matching
+        # Unknown field — store under "_unknown" for best-effort matching
         bucket = existing_deletions.get("_unknown") or []
         for item in items:
             if item not in bucket:
@@ -6403,14 +6443,14 @@ def _extract_profile_updates(reply_text: str, candidate_message: str = "") -> tu
 def _replace_generic_profile_update_reply(reply: str, updates: Optional[dict]) -> str:
     """Replace an empty LLM profile heading with a conversational save notice."""
     if not updates or not re.fullmatch(
-        r"(?:here(?:'|ΓÇÖ)s|here is) the (?:corrected|updated) profile\s*[:.!]?",
+        r"(?:here(?:'|’)s|here is) the (?:corrected|updated) profile\s*[:.!]?",
         (reply or "").strip(), flags=re.IGNORECASE,
     ):
         return reply
     deletions = updates.get("profile_deletions") or {}
     if deletions:
         items = [item for values in deletions.values() for item in (values if isinstance(values, list) else [values])]
-        return f"IΓÇÖm saving the removal of {', '.join(str(item) for item in items)} to your profile now." if items else "IΓÇÖm saving that profile update now."
+        return f"I’m saving the removal of {', '.join(str(item) for item in items)} to your profile now." if items else "I’m saving that profile update now."
     labels = {
         "location": "location", "country": "country", "certifications": "certifications",
         "skills": "skills", "preferred_locations": "preferred locations",
@@ -6422,8 +6462,8 @@ def _replace_generic_profile_update_reply(reply: str, updates: Optional[dict]) -
         field = next(field for field in labels if labels[field] == changed[0])
         value = updates.get(field)
         if field in {"location", "country", "bio"} and isinstance(value, str) and value.strip():
-            return f"IΓÇÖm saving your {changed[0]} as {value.strip()} now."
-    return f"IΓÇÖm saving your {', '.join(changed) or 'profile'} update now."
+            return f"I’m saving your {changed[0]} as {value.strip()} now."
+    return f"I’m saving your {', '.join(changed) or 'profile'} update now."
 
 
 def _acknowledge_candidate_reply(message: str, reply: str) -> str:
@@ -6432,9 +6472,9 @@ def _acknowledge_candidate_reply(message: str, reply: str) -> str:
     if not text_value or re.match(r"^(?:got it|thanks|thank you|understood|i see|absolutely|sure)\b", text_value, re.I):
         return text_value
     if re.search(r"\b(?:add|include|save|record)\b", message, re.I):
-        return f"Got it ΓÇö you want me to add that. {text_value}"
+        return f"Got it — you want me to add that. {text_value}"
     if re.search(r"\b(?:remove|delete)\b", message, re.I):
-        return f"Understood ΓÇö you want that removed. {text_value}"
+        return f"Understood — you want that removed. {text_value}"
     return f"Thanks for sharing that. {text_value}"
 
 
@@ -6472,7 +6512,7 @@ def _validate_chat_profile_updates(updates: Optional[dict]) -> tuple[Optional[di
         if value is None:
             continue
         if not isinstance(value, list) or not all(isinstance(item, str) and item.strip() for item in value):
-            problems.append(f"Please provide your {label} as one or more names, such as ΓÇ£PythonΓÇ¥ or ΓÇ£Project ManagerΓÇ¥.")
+            problems.append(f"Please provide your {label} as one or more names, such as “Python” or “Project Manager”.")
             clean.pop(field, None)
 
     return (clean or None), problems
@@ -6547,11 +6587,11 @@ def _normalize_salary_expectation(value: Any) -> str:
     if re.search(r"\b(?:lpa|lac|lakhs?|per annum|pa)\b", cleaned, re.I):
         # Preserve the established representation for a single amount; use
         # the richer display normalization for an explicit range.
-        is_range = bool(re.search(r"\d\s*(?:[-ΓÇôΓÇö]|to)\s*\d", cleaned))
-        if is_range and not re.match(r"^[Γé╣$Γé¼┬ú]", cleaned):
-            cleaned = "Γé╣" + cleaned
+        is_range = bool(re.search(r"\d\s*(?:[-–—]|to)\s*\d", cleaned))
+        if is_range and not re.match(r"^[₹$€£]", cleaned):
+            cleaned = "₹" + cleaned
         if is_range:
-            cleaned = re.sub(r"\s*[-ΓÇôΓÇö]\s*", "ΓÇô", cleaned)
+            cleaned = re.sub(r"\s*[-–—]\s*", "–", cleaned)
         cleaned = re.sub(r"\s+", " ", cleaned)
     return cleaned
 
@@ -6733,12 +6773,12 @@ def _infer_profile_updates_from_message(message: str) -> dict:
         [
             r"\b(?:salary expectation|expected salary|salary range|compensation expectation)\s*[:\-]\s*(?P<value>.+?)(?:[.!?;]|$)",
             r"\b(?:salary expectation|expected salary|salary range|compensation expectation)\s+(?:is|of)\s+(?P<value>.+?)(?:[.!?;]|$)",
-            r"\b(?:i(?:'m| am)?\s+(?:expecting|targeting|seeking|looking for|hoping for|want(?:ing)?|after)|expecting|targeting|seeking|looking for|hoping for|want(?:ing)?|after)\s+(?P<value>(?:[Γé╣$Γé¼┬ú]\s*)?\d[\d,]*(?:\s*(?:[-ΓÇôΓÇö]|to)\s*(?:[Γé╣$Γé¼┬ú]\s*)?\d[\d,]*)?(?:\s*(?:k|lpa|pa|per annum|annual(?:ly)?|year(?:ly)?|yr|month(?:ly)?|lac|lakhs?|crore|crores))?)(?:[.!?;]|$)",
+            r"\b(?:i(?:'m| am)?\s+(?:expecting|targeting|seeking|looking for|hoping for|want(?:ing)?|after)|expecting|targeting|seeking|looking for|hoping for|want(?:ing)?|after)\s+(?P<value>(?:[₹$€£]\s*)?\d[\d,]*(?:\s*(?:[-–—]|to)\s*(?:[₹$€£]\s*)?\d[\d,]*)?(?:\s*(?:k|lpa|pa|per annum|annual(?:ly)?|year(?:ly)?|yr|month(?:ly)?|lac|lakhs?|crore|crores))?)(?:[.!?;]|$)",
         ],
     )
     if not salary_expectation:
         salary_match = re.search(
-            r"\b(?:expecting|targeting|seeking)\s+(?P<value>(?:[Γé╣$Γé¼┬ú]\s*)?\d[\d,]*(?:\s*(?:[-ΓÇôΓÇö]|to)\s*(?:[Γé╣$Γé¼┬ú]\s*)?\d[\d,]*)?\s*(?:k|lpa|pa|per annum|annual(?:ly)?|year(?:ly)?|yr|month(?:ly)?|lac|lakhs?|crore|crores))\b",
+            r"\b(?:expecting|targeting|seeking)\s+(?P<value>(?:[₹$€£]\s*)?\d[\d,]*(?:\s*(?:[-–—]|to)\s*(?:[₹$€£]\s*)?\d[\d,]*)?\s*(?:k|lpa|pa|per annum|annual(?:ly)?|year(?:ly)?|yr|month(?:ly)?|lac|lakhs?|crore|crores))\b",
             text,
             re.I,
         )
@@ -7121,12 +7161,12 @@ def _profile_record_label(section: str, record: object) -> str:
     """A short, human-readable label for a selectable profile record."""
     if isinstance(record, dict):
         if section == "Education":
-            return " ΓÇö ".join(part for part in (record.get("degree"), record.get("institution")) if part) or "Education record"
+            return " — ".join(part for part in (record.get("degree"), record.get("institution")) if part) or "Education record"
         if section == "Work Experience":
-            return " ΓÇö ".join(part for part in (record.get("title"), record.get("company")) if part) or "Work experience record"
+            return " — ".join(part for part in (record.get("title"), record.get("company")) if part) or "Work experience record"
         if section == "Projects":
             return str(record.get("name") or record.get("title") or "Project")
-        return " ΓÇö ".join(str(value) for value in record.values() if value)[:120] or section
+        return " — ".join(str(value) for value in record.values() if value)[:120] or section
     return str(record) or section
 
 
@@ -7447,7 +7487,7 @@ def _profile_guidance_answer(message: str, history: list[dict]) -> Optional[dict
         lower_answer = answer.lower()
         if re.search(r"\b(?:no|not|cannot|can't|won't|unwilling)\b", lower_answer):
             updates["willing_to_relocate"] = False
-        elif re.search(r"\b(?:yes|sure|willing|open|can|would)\b", lower_answer):
+        elif re.search(r"\b(?:yes|sure|willing|open|can|would|flexible)\b", lower_answer):
             updates["willing_to_relocate"] = True
         if updates:
             reply_subject = "your relocation preference"
@@ -7533,7 +7573,7 @@ def _chat_profile_preflight(message: str, candidate: dict, history: list[dict]) 
         separate_updates = _sanitize_profile_updates(_infer_profile_updates_from_message(prior_user))
         if separate_updates:
             return {
-                "reply": "Understood ΓÇö I'll keep the existing information and add this as a separate entry.",
+                "reply": "Understood — I'll keep the existing information and add this as a separate entry.",
                 "updates": separate_updates,
             }
     pending_selection = _pending_replacement_selection(text_value, candidate, history)
@@ -7617,7 +7657,7 @@ def _chat_profile_preflight(message: str, candidate: dict, history: list[dict]) 
     education_with_dates = re.search(
         r"\b(?:add|completed|studied|graduated(?:\s+from)?|earned)\s+(?:my\s+|a\s+|an\s+)?"
         r"(?P<degree>(?:master'?s|bachelor'?s|mba|m\.?(?:tech|sc|a)|b\.?(?:tech|sc|a)|ph\.?d)[^,.;]*?(?:degree)?)"
-        r"\s+(?:at|from|in)\s+(?P<institution>[^,.;]*?)\s+(?P<start>\d{4})\s*(?:-|ΓÇô|ΓÇö|to)\s*(?P<end>\d{4}|present)\b",
+        r"\s+(?:at|from|in)\s+(?P<institution>[^,.;]*?)\s+(?P<start>\d{4})\s*(?:-|–|—|to)\s*(?P<end>\d{4}|present)\b",
         text_value, re.I,
     )
     if education_with_dates:
@@ -7647,7 +7687,7 @@ def _chat_profile_preflight(message: str, candidate: dict, history: list[dict]) 
     # Complete an immediately preceding education/work timeline question using
     # the original statement retained in the chat history.
     period_pattern = r"(?:\d{1,2}[-/]\d{1,2}[-/]\d{4}|\d{4}[-/]\d{1,2}|(?:Jan(?:uary)?|Feb(?:ruary)?|Mar(?:ch)?|Apr(?:il)?|May|Jun(?:e)?|Jul(?:y)?|Aug(?:ust)?|Sep(?:t(?:ember)?)?|Oct(?:ober)?|Nov(?:ember)?|Dec(?:ember)?)\s+\d{4}|\d{4})"
-    years = re.fullmatch(rf"\s*({period_pattern})\s*(?:-|ΓÇô|ΓÇö|to)\s*({period_pattern}|present|current|now)\s*", text_value, re.I)
+    years = re.fullmatch(rf"\s*({period_pattern})\s*(?:-|–|—|to)\s*({period_pattern}|present|current|now)\s*", text_value, re.I)
     if years:
         prior_users = [m.get("content", "") for m in history[:-1] if m.get("role") == "user"]
         prior = prior_users[-1] if prior_users else ""
@@ -7700,7 +7740,7 @@ def _chat_profile_preflight(message: str, candidate: dict, history: list[dict]) 
             }
 
     new_education = re.search(r"(?:completed|add|my)\s+(?:a\s+)?([^,.]*(?:master'?s|bachelor'?s|mba|ph\.?d|m\.?tech|b\.?tech)[^,.]*)\s+(?:at|from)\s+([^,.]+)", text_value, re.I)
-    if new_education and not re.search(r"\b(?:change|update)\b.*\bfrom\b.*\bto\b", text_value, re.I) and not re.search(r"\b\d{4}\s*(?:-|ΓÇô|ΓÇö|to)\s*(?:\d{4}|present)\b", text_value, re.I):
+    if new_education and not re.search(r"\b(?:change|update)\b.*\bfrom\b.*\bto\b", text_value, re.I) and not re.search(r"\b\d{4}\s*(?:-|–|—|to)\s*(?:\d{4}|present)\b", text_value, re.I):
         degree = _normalize_profile_text(new_education.group(1))
         institution = _normalize_profile_text(new_education.group(2))
         completion_year = re.search(r"\b(19|20)\d{2}\b\s*[.!?]*$", text_value)
@@ -7718,9 +7758,9 @@ def _chat_profile_preflight(message: str, candidate: dict, history: list[dict]) 
             return {"reply": f"What was the start year for your {degree} at {institution}?", "updates": None}
         return {"reply": f"What was the time period for your {degree}? Please provide it like YYYY - YYYY.", "updates": None}
     new_work = _extract_employment_statement(text_value)
-    if new_work and not re.search(rf"{period_pattern}\s*(?:-|ΓÇô|ΓÇö|to)\s*(?:{period_pattern}|present|current|now)", text_value, re.I):
+    if new_work and not re.search(rf"{period_pattern}\s*(?:-|–|—|to)\s*(?:{period_pattern}|present|current|now)", text_value, re.I):
         if new_work["current"] == "true":
-            reply = f"When did you start working as {new_work['title']} at {new_work['company']}? If you still work there, include the start month and IΓÇÖll record the end as Present."
+            reply = f"When did you start working as {new_work['title']} at {new_work['company']}? If you still work there, include the start month and I’ll record the end as Present."
         else:
             reply = f"What was the time period for your {new_work['title']} at {new_work['company']}? Please provide it like YYYY - YYYY."
         return {"reply": reply, "updates": None}
@@ -7965,7 +8005,7 @@ def _remove_phrase_from_text(existing_text: Any, phrase_to_remove: str) -> tuple
     # Keep list-like prose tidy after an item is removed without altering the
     # remaining content or any other raw_data fields.
     updated_text = re.sub(r"([,;|])\s*(?:[,;|]\s*)+", r"\1 ", updated_text)
-    updated_text = re.sub(r"(?m)^[ \t]*[-*ΓÇó][ \t]*(?:\r?\n|$)", "", updated_text)
+    updated_text = re.sub(r"(?m)^[ \t]*[-*•][ \t]*(?:\r?\n|$)", "", updated_text)
     updated_text = re.sub(r"[ \t]{2,}", " ", updated_text)
     updated_text = re.sub(r"^[ \t,;|]+|[ \t,;|]+$", "", updated_text)
     return updated_text, True
@@ -8768,7 +8808,7 @@ def _format_jobs_for_context(jobs: list) -> str:
     for i, j in enumerate(jobs[:10], 1):  # cap at 10 for context length
         score = f"{j['match_score']:.0%}" if j.get("match_score") is not None else "N/A"
         lines.append(
-            f"{i}. {j['title']} at {j['company']} ΓÇö {j['location'] or 'Location not specified'}\n"
+            f"{i}. {j['title']} at {j['company']} — {j['location'] or 'Location not specified'}\n"
             f"   Salary: {j['salary'] or 'Not specified'} | Match: {score}\n"
             f"   {(j['description'] or '')[:200].strip()}"
         )
@@ -8944,9 +8984,9 @@ async def chat(request: ChatRequest, authorization: Optional[str] = Header(defau
                     persistence_failed = True
             reply = _acknowledge_candidate_reply(last_user.content, cache_decision["reply"])
             if updates and not persistence_failed:
-                reply += " IΓÇÖve saved that to your profile."
+                reply += " I’ve saved that to your profile."
             elif persistence_failed:
-                reply += " I couldnΓÇÖt save that update yet, so your profile is unchanged. Please try again."
+                reply += " I couldn’t save that update yet, so your profile is unchanged. Please try again."
             logger.info(
                 "[eve-cache-flow] candidate=%s decision=handled_before_llm confidence=high updates=%s",
                 request.candidate_id, bool(updates),
@@ -8980,9 +9020,9 @@ async def chat(request: ChatRequest, authorization: Optional[str] = Header(defau
             ]
             if questions:
                 if len(questions) == 1:
-                    reply = f"Sure ΓÇö the next detail I need is: {questions[0]}"
+                    reply = f"Sure — the next detail I need is: {questions[0]}"
                 else:
-                    reply = "Sure ΓÇö here are the remaining details I need:\n" + "\n".join(
+                    reply = "Sure — here are the remaining details I need:\n" + "\n".join(
                         f"{index}. {question}" for index, question in enumerate(questions, 1)
                     )
                 await _save_chat_window(
@@ -8996,7 +9036,7 @@ async def chat(request: ChatRequest, authorization: Optional[str] = Header(defau
                     len(questions),
                 )
                 return ChatResponse(reply=reply, session_id=request.session_id)
-            reply = "YouΓÇÖve covered the details I currently need for your profile. If youΓÇÖd like, we can refine any section or add more context."
+            reply = "You’ve covered the details I currently need for your profile. If you’d like, we can refine any section or add more context."
             await _save_chat_window(
                 request.candidate_id,
                 request.session_id,
@@ -9018,7 +9058,7 @@ async def chat(request: ChatRequest, authorization: Optional[str] = Header(defau
                     status_code=409,
                     detail="Voice Intake must be completed before personalized recommendations are available.",
                 )
-            # Check if this is a preference update + job search ΓÇö refresh matching with new prefs
+        # Check if this is a preference update + job search — refresh matching with new prefs
             if _is_preference_update_with_job_search(last_user.content):
                 new_roles = await _extract_preferred_roles_from_message(last_user.content, request.candidate_id, request.session_id)
                 if new_roles:
@@ -9140,7 +9180,7 @@ async def chat(request: ChatRequest, authorization: Optional[str] = Header(defau
     except Exception as e:
         _log_groq_chat_exception(e, groq_diagnostic_request_id)
         logger.exception("LLM chat failure")
-        clarification = "IΓÇÖm unable to determine the right profile section safely right now. Which section should I update?"
+        clarification = "I’m unable to determine the right profile section safely right now. Which section should I update?"
         if request.candidate_id:
             try:
                 await _save_chat_window(
@@ -9184,7 +9224,7 @@ async def chat(request: ChatRequest, authorization: Optional[str] = Header(defau
         and (missing_fields or missing_preference_fields)
         and last_user.content.strip()
     ):
-        # Skip [PROFILE_QUESTION] instructions ΓÇö they are not candidate answers
+        # Skip [PROFILE_QUESTION] instructions — they are not candidate answers
         candidate_text = last_user.content
         if not candidate_text.startswith("[PROFILE_QUESTION]"):
             try:
@@ -9234,10 +9274,10 @@ async def chat(request: ChatRequest, authorization: Optional[str] = Header(defau
     if profile_updates and request.candidate_id:
         try:
             await _persist_chat_profile_update_background(request.candidate_id, profile_updates)
-            clean_reply += " IΓÇÖve saved that to your profile."
+            clean_reply += " I’ve saved that to your profile."
         except Exception:
             logger.exception("[chat-update] synchronous persistence failed for candidate=%s", request.candidate_id)
-            clean_reply += " I couldnΓÇÖt save that update yet, so your profile is unchanged. Please try again."
+            clean_reply += " I couldn’t save that update yet, so your profile is unchanged. Please try again."
 
     # Do not show an empty model-generated profile heading after a successful
     # update; confirm the exact fields that survived persistence instead.
@@ -9749,8 +9789,8 @@ def _normalize_certifications(certifications: Any) -> list[str]:
             cleaned,
             flags=re.IGNORECASE,
         ).strip()
-        # Normalize common abbreviations so a follow-up such as ΓÇ£AWS solution
-        # archΓÇ¥ matches an existing ΓÇ£AWS Solution ArchitectΓÇ¥ credential.
+        # Normalize common abbreviations so a follow-up such as “AWS solution
+        # arch” matches an existing “AWS Solution Architect” credential.
         cleaned = re.sub(r"\barch\b", "architect", cleaned, flags=re.IGNORECASE)
         cleaned = re.sub(
             r"^(?:my\s+)?certification\s+(?:is|:|-\s*)\s*",
@@ -10158,7 +10198,7 @@ def _dedupe_experience_description(value: Any) -> str:
     # Accept both normal prose and parser/LLM concatenation without whitespace
     # after the sentence terminator.  Newline bullets are handled separately so
     # distinct responsibilities remain distinct while repeats are removed.
-    for fragment in re.split(r"(?<=[.!?;])\s*|\n+|(?:^|\s)[ΓÇó*-]\s+", text_value):
+    for fragment in re.split(r"(?<=[.!?;])\s*|\n+|(?:^|\s)[•*-]\s+", text_value):
         cleaned = re.sub(r"\s+([.!?])", r"\1", _normalize_profile_text(fragment))
         key = re.sub(r"[^\w\s]+", " ", cleaned.lower())
         key = re.sub(r"\s+", " ", key).strip()
@@ -11406,7 +11446,7 @@ async def candidate_voice_intake(request: VoiceCandidateIntakeRequest, authoriza
                                  x_request_id: Optional[str] = Header(default=None, alias="X-Request-ID")):
     """
     Receive voice intake transcript, extract structured info, merge into candidate profile.
-    candidate_id is validated against the DB ΓÇö never trusted blindly from the browser.
+    candidate_id is validated against the DB — never trusted blindly from the browser.
     """
     # Request validation must precede every candidate/database or transcript
     # processing operation.  In particular, do not let an empty submission
@@ -11725,7 +11765,7 @@ async def get_opportunities(candidate_id: str, authorization: Optional[str] = He
     _authorize_candidate(candidate_id, authorization)
     """
     Return recruiter-interested job opportunities for the given candidate.
-    Scoped strictly by candidate_id ΓÇö never returns another candidate's data.
+    Scoped strictly by candidate_id — never returns another candidate's data.
     """
     candidate = await _get_candidate_row(candidate_id)
     if await _effective_profile_strength_percent(candidate_id, candidate) < 90:
@@ -11801,7 +11841,7 @@ async def respond_to_opportunity(candidate_id: str, rec_id: str, body: Opportuni
     _authorize_candidate(candidate_id, authorization)
     """
     Store the candidate's interest/rejection for a specific opportunity.
-    Enforces candidate_id ownership ΓÇö a candidate cannot respond on behalf of another.
+    Enforces candidate_id ownership — a candidate cannot respond on behalf of another.
     Prevents duplicate responses.
     On first response, durably enqueues an eve_outbound_events row and triggers delivery to Adam.
     """
@@ -11823,7 +11863,7 @@ async def respond_to_opportunity(candidate_id: str, rec_id: str, body: Opportuni
         if rec["candidate_response"] is not None:
             return {"status": "already_responded", "candidate_response": rec["candidate_response"]}
 
-        # Update candidate response state (existing logic ΓÇö unchanged)
+        # Update candidate response state (existing logic — unchanged)
         await db.execute(
             text("""
                 UPDATE recruiter_interest_requests
@@ -11845,7 +11885,7 @@ async def respond_to_opportunity(candidate_id: str, rec_id: str, body: Opportuni
                     {"cid": candidate_id, "jid": str(rec["job_id"])},
                 )
 
-        # Enqueue outbound event to Adam ΓÇö only if adam_event_id is present
+        # Enqueue outbound event to Adam — only if adam_event_id is present
         eve_event_id: Optional[str] = None
         if rec["adam_event_id"] and rec["job_id"] and rec["agency_id"]:
             eve_event_id = str(uuid.uuid4())
@@ -11953,7 +11993,7 @@ async def _claim_resume_fix_credits(candidate_id: str, candidate: dict, usage_da
             """), {"cid": candidate_id, "usage_date": usage_date})
             claim_id = str(inserted.scalar())
             # Surface the newly active daily balance immediately after the
-            # last usable starter action, rather than showing an unusable 1ΓÇô2.
+            # last usable starter action, rather than showing an unusable 1–2.
             if remaining < RESUME_FIX_CREDIT_COST:
                 daily_result = await db.execute(text("""
                     SELECT COUNT(*) FROM candidate_resume_fix_credit_claims
@@ -12004,7 +12044,7 @@ async def _claim_resume_fix_credits(candidate_id: str, candidate: dict, usage_da
 
 
 RAZORPAY_PLAN_AMOUNT_PAISE = 300000
-RAZORPAY_PLAN_NAME = "Eve Candidate ΓÇö 3 months"
+RAZORPAY_PLAN_NAME = "Eve Candidate — 3 months"
 RAZORPAY_PLAN_ID = "candidate_3_month"
 
 
@@ -12129,7 +12169,7 @@ async def create_candidate_billing_order(candidate_id: str, body: CouponApplyReq
              "amount": amount, "order_id": order["id"], "receipt": receipt, "payload": json.dumps(order)})
         await db.commit()
     return {"key_id": key_id, "order_id": order["id"], "amount": amount,
-            "currency": "INR", "name": "Eve", "description": f"Γé╣{amount / 100:,.0f} / {duration} months", "prefill": {"name": candidate.get("name") or "", "email": candidate.get("email") or ""}}
+            "currency": "INR", "name": "Eve", "description": f"₹{amount / 100:,.0f} / {duration} months", "prefill": {"name": candidate.get("name") or "", "email": candidate.get("email") or ""}}
 
 
 @api_router.post("/candidate/{candidate_id}/billing/verify")
@@ -12186,7 +12226,7 @@ async def get_candidate_billing(candidate_id: str, authorization: Optional[str] 
         history = (await db.execute(text("""SELECT status, amount_paise, razorpay_order_id, razorpay_payment_id, receipt, created_at
             FROM candidate_payment_attempts WHERE candidate_id = :cid ORDER BY created_at DESC"""), {"cid": candidate_id})).mappings().fetchall()
     active = bool(sub and sub["status"] == "active" and sub["expires_at"] and sub["expires_at"] > datetime.now(timezone.utc))
-    return {"status": "Active" if active else "Free", "plan": "Γé╣3,000 / 3 months" if active else "Free",
+    return {"status": "Active" if active else "Free", "plan": "₹3,000 / 3 months" if active else "Free",
             "subscription_start": sub["starts_at"].isoformat() if active and sub["starts_at"] else None,
             "subscription_expiry": sub["expires_at"].isoformat() if active and sub["expires_at"] else None,
             "payment_status": "paid" if active else (sub["status"] if sub else "not_started"),
@@ -12801,8 +12841,8 @@ def _extract_required_skills_from_jd(job_text: str) -> list[str]:
     text_value = re.sub(r"</?(?:p|li|ul|ol|h[1-6]|br)\b[^>]*>", "\n", text_value, flags=re.I)
     text_value = re.sub(r"<[^>]+>", "", text_value)
     text_value = re.sub(r"\*\*([^*]+)\*\*", r"\n\1\n", text_value)
-    text_value = re.sub(r"(?<!^)[ \t]+[*ΓÇó][ \t]+", "\n", text_value)
-    lines = [line.strip(" \t-ΓÇó*") for line in text_value.splitlines()]
+    text_value = re.sub(r"(?<!^)[ \t]+[*•][ \t]+", "\n", text_value)
+    lines = [line.strip(" \t-•*") for line in text_value.splitlines()]
     collecting = False
     extracted: list[str] = []
     # Some ATS feeds label their explicit skill list "Competencies" instead
@@ -12815,7 +12855,7 @@ def _extract_required_skills_from_jd(job_text: str) -> list[str]:
             continue
         if markers.search(line):
             collecting = True
-            line = re.sub(r"^.*?(?:requirements?|required qualifications?|must[- ]have|minimum qualifications?|what you (?:need|bring)|competencies)\s*:?┬á?", "", line, flags=re.I)
+            line = re.sub(r"^.*?(?:requirements?|required qualifications?|must[- ]have|minimum qualifications?|what you (?:need|bring)|competencies)\s*:?\s*", "", line, flags=re.I)
         elif collecting and stop.search(line):
             break
         if not collecting:
@@ -12824,7 +12864,7 @@ def _extract_required_skills_from_jd(job_text: str) -> list[str]:
         # example, ``relational databases (viz: PostgreSQL, SQL)`` should
         # contribute the explicitly named technologies, not the prose label.
         line = re.sub(r"[^,;]*\(\s*(?:e\.?g\.?|eg|viz\.?)\s*:?\s*([^)]+)\)", r"\1", line, flags=re.I)
-        for item in re.split(r"[,;ΓÇó]|\band\b", line, flags=re.I):
+        for item in re.split(r"[,;•]|\band\b", line, flags=re.I):
             item = re.sub(r"^(?:(?:strong|proven|demonstrated)\s+)?(?:hands[- ]on\s+)?(?:experience|proficiency|knowledge|expertise|familiarity)\s+(?:with|of|in\s+(?:designing|building)\s+|designing\s+|building\s+)\s*", "", item.strip(" .:-()"), flags=re.I)
             item = re.sub(r"^\d+\+?\s+years?\s+(?:of\s+)?(?:experience\s+)?(?:with|in)\s+", "", item, flags=re.I)
             item = re.sub(r"^(?:the|a|an)\s+", "", item, flags=re.I)
@@ -12876,8 +12916,8 @@ def _job_missing_requirements(job_skills: Any, requirements: Any, candidate: dic
             seen_job_skills.add(key)
     # Requirement prose is supplied as context for confirmation; it is never added to a profile.
     requirement_text = clean(requirements)
-    requirement_lines = [line.strip(" -ΓÇó\t") for line in re.split(r"[\r\n]+|(?<=[.!?])\s+", requirement_text)
-                         if len(line.strip(" -ΓÇó\t")) > 3]
+    requirement_lines = [line.strip(" -•\t") for line in re.split(r"[\r\n]+|(?<=[.!?])\s+", requirement_text)
+                         if len(line.strip(" -•\t")) > 3]
     # Lever and other ATS feeds can provide qualification lists only inside
     # the full JD, leaving the legacy ``requirements`` column empty.  When
     # that happens, return the same extracted requirement labels used for the
@@ -13377,7 +13417,7 @@ async def apply_job(candidate_id: str, rec_id: str, authorization: Optional[str]
         if not rec:
             raise HTTPException(status_code=404, detail="Recommendation not found.")
 
-        # Fetch agency_id and title from the job ΓÇö never from the candidate row
+        # Fetch agency_id and title from the job — never from the candidate row
         job_agency_id = None
         job_role = None
         if rec["job_id"]:
@@ -14215,21 +14255,21 @@ async def google_callback(
 
 # ---------- Service-to-service auth ----------
 
-# Adam ΓåÆ Eve: Adam must present this token
+# Adam → Eve: Adam must present this token
 EVE_INTERNAL_TOKEN = os.environ.get("EVE_INTERNAL_TOKEN", "")
-# Eve ΓåÆ Adam: Eve presents this token when calling Adam
+# Eve → Adam: Eve presents this token when calling Adam
 ADAM_INTERNAL_TOKEN = os.environ.get("ADAM_INTERNAL_TOKEN", "")
 
 
 def _verify_eve_token(authorization: str = "") -> None:
-    """Verify inbound requests from Adam (Adam ΓåÆ Eve direction)."""
+    """Verify inbound requests from Adam (Adam → Eve direction)."""
     if not EVE_INTERNAL_TOKEN:
         raise HTTPException(status_code=503, detail="EVE_INTERNAL_TOKEN not configured")
     if not authorization.startswith("Bearer ") or authorization[7:] != EVE_INTERNAL_TOKEN:
         raise HTTPException(status_code=401, detail="Unauthorized")
 
 
-# ---------- Adam ΓåÆ Eve: candidate notification (slot booking / second round) ----------
+# ---------- Adam → Eve: candidate notification (slot booking / second round) ----------
 
 class CandidateNotificationIn(BaseModel):
     event_id: str
@@ -14254,7 +14294,7 @@ async def internal_candidate_notification(
     authorization: Optional[str] = Header(default=None),
 ):
     """
-    Adam ΓåÆ Eve: create a candidate-facing notification for slot booking or second round.
+    Adam → Eve: create a candidate-facing notification for slot booking or second round.
     Idempotent on event_id.
     """
     _verify_eve_token(authorization or "")
@@ -14483,10 +14523,10 @@ async def vapi_webhook(request: StarletteRequest):
     return {"status": "ok"}
 
 
-# ---------- Adam ΓåÆ Eve: recruiter interest ----------
+# ---------- Adam → Eve: recruiter interest ----------
 
 class RecruiterInterestIn(BaseModel):
-    adam_event_id: str          # UUID ΓÇö idempotency key from Adam
+    adam_event_id: str          # UUID — idempotency key from Adam
     candidate_id: str           # candidates.id UUID
     job_id: str                 # job_descriptions.id UUID
     agency_id: str              # agencies.id UUID
@@ -14500,7 +14540,7 @@ async def internal_recruiter_interest(
     authorization: Optional[str] = Header(default=None),
 ):
     """
-    Adam ΓåÆ Eve: notify Eve that a recruiter is interested in a candidate.
+    Adam → Eve: notify Eve that a recruiter is interested in a candidate.
     Validates candidate/job/agency existence and their relationship.
     Idempotent on adam_event_id.
     """
@@ -14573,7 +14613,7 @@ async def internal_recruiter_interest(
     return {"status": "created", "rir_id": rir_id}
 
 
-# ---------- Eve ΓåÆ Adam: candidate response ----------
+# ---------- Eve → Adam: candidate response ----------
 
 ADAM_URL = os.environ.get("ADAM_INTERNAL_URL", os.environ.get("DASHBOARD_INTERNAL_URL", "")).rstrip("/")
 
@@ -14583,7 +14623,7 @@ _MAX_ATTEMPTS = 5
 
 
 class CandidateResponseIn(BaseModel):
-    eve_event_id: str           # UUID ΓÇö idempotency key from Eve
+    eve_event_id: str           # UUID — idempotency key from Eve
     adam_event_id: str          # original Adam event UUID
     candidate_id: str           # candidates.id UUID
     job_id: str                 # job_descriptions.id UUID
@@ -14724,7 +14764,7 @@ async def _attempt_delivery(eve_event_id: str) -> bool:
     except Exception as e:
         error = str(e)
 
-    # Delivery failed ΓÇö schedule next retry or mark failed
+    # Delivery failed — schedule next retry or mark failed
     if new_attempt >= _MAX_ATTEMPTS:
         async with SessionLocal() as db:
             await db.execute(

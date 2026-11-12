@@ -285,12 +285,12 @@ def test_candidate_total_experience_years_handles_historical_and_present_month_r
             {
                 "company": "Deepija Telecom",
                 "title": "Engineer",
-                "dates": "01-11-2023 â€” 09-10-2024",
+                "dates": "01-11-2023 — 09-10-2024",
             },
             {
                 "company": "Viral Bug",
                 "title": "Engineer",
-                "dates": "Aug 2025 â€” Present",
+                "dates": "Aug 2025 — Present",
             },
         ],
     }
