@@ -2,6 +2,7 @@ import React from "react";
 import axios from "axios";
 import { useSearchParams } from "react-router-dom";
 import { API } from "../lib/apiConfig";
+import { useApplicationFollowUp } from "../components/ApplicationFollowUp";
 const plain = (value) => (value == null ? "" : String(value));
 const list = (value) => Array.isArray(value) ? value : [];
 const skillKey = (value) => plain(value).trim().toLowerCase();
@@ -80,6 +81,7 @@ export default function ResumeEditor() {
   }, [params]);
   const [resume, setResume] = React.useState(null);
   const [guidance, setGuidance] = React.useState(null);
+  const { openApplication, applicationFollowUpModal } = useApplicationFollowUp(candidateId);
   // This is the server-authoritative list used for confirmation payloads.
   // guidance.missing_skills may intentionally hide skills selected in the UI.
   const [missingSkills, setMissingSkills] = React.useState([]);
@@ -224,7 +226,8 @@ export default function ResumeEditor() {
         {list(resume.certifications).length > 0 && <section className="mt-7"><h2 className="border-b text-sm font-bold tracking-[.18em]">CERTIFICATIONS</h2><Editable value={list(resume.certifications).join(" • ")} onChange={(v) => update("certifications", v.split(/[,•\n]/).map((x) => x.trim()).filter(Boolean))} className="mt-3" multiline testId="resume-certifications" /></section>}
       </article>
       <aside className="order-1 space-y-4"><section className="rounded-xl bg-[#EEEAF8] p-5 shadow-sm"><p className="text-sm font-semibold">ATS-friendly draft created</p><p className="mt-4 text-xs font-semibold uppercase tracking-wide text-[#62578F]">What changed</p><ul className="mt-3 space-y-2 text-sm"><li>• Summary shortened to the strongest two sentences</li><li>• Selected missing skills added</li><li>• Experience converted into concise bullet points</li><li>• Project descriptions reduced to key evidence</li></ul><p className="mt-4 text-xs text-slate-600">Only your existing information was reorganized. Review before saving.</p></section><section className="rounded-xl bg-white p-5 shadow-sm"><p className="text-xs font-bold tracking-wide text-slate-500">JOB MATCH</p><p className="mt-2 text-3xl font-bold">{oldScore == null ? "—" : `${oldScore}%`}</p><p className="mt-5 text-sm font-medium">Missing skills from the job description:</p><div className="mt-2 flex flex-wrap gap-2">{list(guidance?.missing_skills).map((skill) => <button type="button" key={skill} onClick={() => addSuggestedSkill(skill)} className="rounded-full bg-slate-100 px-2.5 py-1 text-xs hover:bg-slate-200">+ {skill}</button>)}</div>{guidance?.experience_requirement ? <div className="mt-5 border-t pt-4"><p className="text-xs font-medium">Experience comparison</p><p className="mt-2 text-xs text-slate-600">Required: {guidance.experience_requirement}</p><p className="text-xs text-slate-600">Your resume: {resume.experience_years ? `${resume.experience_years} years` : "Not specified"}</p></div> : <p className="mt-5 text-xs text-slate-600">No specific experience requirement provided.</p>}</section>
-        {result && <section className="rounded-xl bg-emerald-50 p-5" data-testid="resume-save-result"><p className="font-semibold text-emerald-900">Resume updated ✓</p><p className="mt-3 text-sm">Previous match: {oldScore == null ? "—" : `${oldScore}%`}</p><p className="text-sm">New match: <strong><MatchOdometer from={oldScore} to={newScore} /></strong></p><p className="text-sm">Improvement: {change == null ? "—" : `${change >= 0 ? "+" : ""}${change}%`}</p><button onClick={download} className="mt-4 w-full rounded-lg bg-white py-2 text-sm font-medium">Download Updated Resume</button><button onClick={() => { if (guidance?.job_url) window.open(guidance.job_url, "_blank", "noopener,noreferrer"); }} disabled={!guidance?.job_url} className="mt-2 w-full rounded-lg bg-slate-900 py-2 text-sm font-medium text-white disabled:opacity-50">Apply Now</button></section>}</aside>
+        {result && <section className="rounded-xl bg-emerald-50 p-5" data-testid="resume-save-result"><p className="font-semibold text-emerald-900">Resume updated ✓</p><p className="mt-3 text-sm">Previous match: {oldScore == null ? "—" : `${oldScore}%`}</p><p className="text-sm">New match: <strong><MatchOdometer from={oldScore} to={newScore} /></strong></p><p className="text-sm">Improvement: {change == null ? "—" : `${change >= 0 ? "+" : ""}${change}%`}</p><button onClick={download} className="mt-4 w-full rounded-lg bg-white py-2 text-sm font-medium">Download Updated Resume</button><button onClick={() => openApplication({ ...guidance, id: guidance?.id || recommendationId })} disabled={!guidance?.job_url} className="mt-2 w-full rounded-lg bg-slate-900 py-2 text-sm font-medium text-white disabled:opacity-50">Apply Now</button></section>}
+        {applicationFollowUpModal}</aside>
     </div>{claimWarning && <p className="mx-auto mt-4 max-w-[1180px] text-sm text-amber-700" data-testid="resume-claim-warning">{claimWarning}</p>}{error && <p className="mx-auto mt-4 max-w-[1180px] text-sm text-red-700">{error}</p>}
   </main>;
 }
