@@ -898,14 +898,20 @@ def _normalize_for_frontend(c: dict) -> dict:
     _ps_result = _apply_profile_strength_test_override(c, _ps_result)
     strength_percent = _ps_result["percent"]
     strength_label = _ps_result["label"]
+    canonical_preferences = c.get("_prefs_row") or {}
+
+    def preference_value(field: str, fallback: Any = None) -> Any:
+        value = canonical_preferences.get(field)
+        return fallback if value is None else value
+
     certifications = _normalize_certifications(raw_data.get("certifications") or [])
     key_skills = _normalize_skills(c.get("skills") or [], certifications=certifications)
 
     preference_view = _classify_role_and_employment_preferences(
-        raw_data.get("preferred_roles") or [],
-        raw_data.get("employment_types") or [],
+        preference_value("preferred_roles", raw_data.get("preferred_roles")) or [],
+        preference_value("employment_types", raw_data.get("employment_types")) or [],
         {
-            "willing_to_relocate": raw_data.get("willing_to_relocate"),
+            "willing_to_relocate": preference_value("willing_to_relocate", raw_data.get("willing_to_relocate")),
         },
     )
 
@@ -5988,7 +5994,8 @@ def _classify_role_and_employment_preferences(
             re.search(
                 r"\b(?:ready|willing|open|able|prepared|can)\s+to\s+(?:relocate|move)\b|"
                 r"\b(?:open|willing|ready)\s+to\s+relocation\b|"
-                r"\bflexible\b[^.!?\n]*\brelocat(?:e|ion|ing)\b",
+                r"\bflexible\b[^.!?\n]*\brelocat(?:e|ion|ing)\b|"
+                r"\brelocat(?:e|ion|ing)\b[^.!?\n]*(?:\byes\b|\bi\s+am\b|\bready\b|\bopen\b|\bwilling\b)",
                 value,
                 re.IGNORECASE,
             )
