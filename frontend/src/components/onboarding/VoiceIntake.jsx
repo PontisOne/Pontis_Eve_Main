@@ -240,6 +240,7 @@ export default function VoiceIntake({ firstName, candidateId, onComplete, candid
       })) return;
       axios.post(`${API}/voice/candidate-intake/progress`, payload, {
         headers: { "X-Request-ID": progressRequestId },
+        __eveSilentError: true,
       }).catch(() => {});
     }, 900);
 
@@ -296,7 +297,10 @@ export default function VoiceIntake({ firstName, candidateId, onComplete, candid
           vapi_call_id: callId.current || null,
           transcript_revision: String(finalTranscript.length),
           termination_reason: terminationReason || "disconnect",
-        }, { headers: { "X-Request-ID": terminalRequestId } });
+        }, {
+          headers: { "X-Request-ID": terminalRequestId },
+          __eveSilentError: true,
+        });
       } catch (err) {
         console.warn("[voice-intake] interrupted-state save failed");
       }

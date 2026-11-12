@@ -8380,9 +8380,17 @@ async def _apply_profile_updates(candidate_id: str, updates: dict) -> dict:
             if not isinstance(value, list):
                 continue
             has_preference_payload = True
-            old_values = _normalize_preference_list(existing_raw.get(field) or [])
+            old_values = (
+                _normalize_employment_types(existing_raw.get(field) or [])
+                if field == "employment_types"
+                else _normalize_preference_list(existing_raw.get(field) or [])
+            )
             replace = field == "preferred_locations" and safe.get("replace_preferred_locations") is True
-            merged_values = _normalize_preference_list(value if replace else old_values + value)
+            merged_values = (
+                _normalize_employment_types(value if replace else old_values + value)
+                if field == "employment_types"
+                else _normalize_preference_list(value if replace else old_values + value)
+            )
             if merged_values != old_values:
                 existing_raw[field] = merged_values
                 raw_data_changed = True
@@ -10960,6 +10968,34 @@ def _normalize_preference_list(values: Any) -> list[str]:
     return _normalize_preferred_roles(values)
 
 
+def _normalize_employment_types(values: Any) -> list[str]:
+    """Normalize employment labels without routing them through role filtering."""
+    if isinstance(values, str):
+        values = [values]
+    if not isinstance(values, list):
+        return []
+    normalized: list[str] = []
+    seen: set[str] = set()
+    for value in values:
+        if not isinstance(value, str):
+            continue
+        key = " ".join(value.casefold().split())
+        canonical = _EMPLOYMENT_TYPE_ALIASES.get(key)
+        if canonical is None:
+            if re.search(r"\bfull\s*[- ]?time\b", key):
+                canonical = "full-time"
+            elif re.search(r"\bpart\s*[- ]?time\b", key):
+                canonical = "part-time"
+            elif re.search(r"\bcontract(?:\s+work)?\b", key):
+                canonical = "contract"
+            elif re.search(r"\bfreelance(?:\s+work)?\b", key):
+                canonical = "freelance"
+        if canonical and canonical not in seen:
+            normalized.append(canonical)
+            seen.add(canonical)
+    return normalized
+
+
 def _availability_to_notice_period(availability: Any) -> str:
     """Map the extracted availability answer onto the preferences schema."""
     if not isinstance(availability, str):
@@ -11024,7 +11060,11 @@ async def _upsert_candidate_preferences(candidate_id: str, voice: dict) -> None:
             params["notice_period"] = merged_notice_period
         for field, incoming in list_fields.items():
             old = existing_classified.get("employment_types", []) if field == "employment_types" else _normalize_preference_list(existing.get(field) or [])
-            combined = _normalize_preference_list(old + incoming)
+            combined = (
+                _normalize_employment_types(old + incoming)
+                if field == "employment_types"
+                else _normalize_preference_list(old + incoming)
+            )
             if combined != old:
                 set_parts.append(f"{field} = CAST(:{field} AS jsonb)")
                 params[field] = json.dumps(combined)

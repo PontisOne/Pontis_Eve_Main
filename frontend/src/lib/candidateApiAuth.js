@@ -47,7 +47,12 @@ axios.interceptors.response.use(
     // A single response interceptor provides visible, consistent feedback for
     // every Axios request. notifyApiError marks the error so component-level
     // handlers can safely add inline context without duplicate notifications.
-    notifyApiError(error);
+    // Background voice-progress snapshots are best-effort. A transient
+    // failure must not interrupt the candidate with a misleading network
+    // toast; the terminal intake submission remains visible.
+    if (!config?.__eveSilentError) {
+      notifyApiError(error);
+    }
     return Promise.reject(error);
   },
 );

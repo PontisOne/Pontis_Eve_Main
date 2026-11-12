@@ -192,7 +192,9 @@ export default function ChatHub({
               resizeInput();
             }}
             onKeyDown={(e) => {
-              if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) {
+              // Enter sends the message; Shift+Enter remains available for
+              // composing a multiline message.
+              if (e.key === "Enter" && !e.shiftKey) {
                 e.preventDefault();
                 e.currentTarget.form?.requestSubmit();
               }

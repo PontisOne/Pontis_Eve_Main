@@ -78,12 +78,6 @@ export default function ResumeEditor() {
     try { const value = JSON.parse(params.get("selected_skills") || "[]"); return Array.isArray(value) ? value : []; }
     catch { return []; }
   }, [params]);
-  const selectedSections = React.useMemo(() => {
-    try {
-      const value = JSON.parse(params.get("selected_sections") || "{}");
-      return { summary: value.summary !== false, skills: value.skills !== false, experience: value.experience !== false, projects: value.projects !== false };
-    } catch { return { summary: true, skills: true, experience: true, projects: true }; }
-  }, [params]);
   const [resume, setResume] = React.useState(null);
   const [guidance, setGuidance] = React.useState(null);
   // This is the server-authoritative list used for confirmation payloads.
@@ -96,7 +90,6 @@ export default function ResumeEditor() {
   const [newlyAddedSkills, setNewlyAddedSkills] = React.useState([]);
   const [error, setError] = React.useState("");
   const [remainingCredits] = React.useState(initialRemainingCredits === null ? null : Number(initialRemainingCredits));
-  const [generating, setGenerating] = React.useState(Boolean(params.get("selected_sections") || params.get("selected_skills")));
   const [confirmedSkills, setConfirmedSkills] = React.useState(selectedSkills);
   const [fixCreditClaimId, setFixCreditClaimId] = React.useState(initialFixCreditClaimId);
   // ContentEditable blur and button click can share one event turn. Keep the
@@ -109,10 +102,8 @@ export default function ResumeEditor() {
     axios.get(`${API}/candidate/${candidateId}/jobs/${recommendationId}/match-improvement`)
       .then(({ data }) => {
         const existing = list(data.resume?.skills);
-        const mergedSkills = selectedSections.skills
-          ? [...existing, ...selectedSkills.filter((skill) => !existing.some((item) => plain(item).trim().toLowerCase() === plain(skill).trim().toLowerCase()))]
-          : existing;
-        const draft = makeAtsDraft({ ...data.resume, skills: mergedSkills }, selectedSections);
+        const mergedSkills = [...existing, ...selectedSkills.filter((skill) => !existing.some((item) => plain(item).trim().toLowerCase() === plain(skill).trim().toLowerCase()))];
+        const draft = makeAtsDraft({ ...data.resume, skills: mergedSkills }, { summary: true, experience: true, projects: true });
         skillsDraftRef.current = mergedSkills;
         setResume(draft);
         const jdSkills = list(data.required_skills);
@@ -120,15 +111,10 @@ export default function ResumeEditor() {
           ? list(data.missing_skills)
           : jdSkills.filter((skill) => !mergedSkills.some((item) => plain(item).trim().toLowerCase() === plain(skill).trim().toLowerCase()));
         setMissingSkills(missingSkills);
-        setGuidance({ ...data, required_skills: jdSkills, missing_skills: selectedSections.skills ? missingSkills.filter((skill) => !selectedSkills.some((selected) => skillKey(selected) === skillKey(skill))) : missingSkills });
-        if (params.get("selected_sections") || params.get("selected_skills")) {
-          window.setTimeout(() => setGenerating(false), 900);
-        } else {
-          setGenerating(false);
-        }
+        setGuidance({ ...data, required_skills: jdSkills, missing_skills: missingSkills.filter((skill) => !selectedSkills.some((selected) => skillKey(selected) === skillKey(skill))) });
       })
       .catch((e) => setError(e?.response?.data?.detail || "Unable to load your resume."));
-  }, [candidateId, recommendationId, selectedSections, selectedSkills, params]);
+  }, [candidateId, recommendationId, selectedSkills, params]);
 
   const update = (key, value) => setResume((old) => ({ ...old, [key]: value }));
   const addSuggestedSkill = (skill) => {
@@ -209,11 +195,6 @@ export default function ResumeEditor() {
   };
   if (error && !resume) return <main className="p-8 text-red-700">{error}</main>;
   if (!resume) return <main className="p-8 text-slate-600">Loading your resume…</main>;
-  if (generating) return <main className="flex min-h-screen flex-col bg-[#FBFBF9] text-slate-900">
-    <header className="border-b px-6 py-5"><p className="text-xl font-semibold">Generate Your Custom Resume</p></header>
-    <div className="mx-auto flex w-full max-w-[720px] items-center px-6 py-7 text-sm"><span className="flex items-center gap-2"><b className="flex h-6 w-6 items-center justify-center rounded-full bg-[#70659A] text-white">1</b> See Your Difference</span><span className="mx-4 h-px flex-1 bg-[#70659A]"/><span className="flex items-center gap-2"><b className="flex h-6 w-6 items-center justify-center rounded-full bg-[#70659A] text-white">2</b> Align Your Resume</span><span className="mx-4 h-px flex-1 bg-black/10"/><span className="flex items-center gap-2 text-slate-500"><b className="flex h-6 w-6 items-center justify-center rounded-full bg-black/10">3</b> Review Your New Resume</span></div>
-    <section className="m-auto w-full max-w-[700px] rounded-3xl border bg-white px-8 py-24 text-center shadow-sm"><div className="mx-auto h-1.5 w-72 overflow-hidden rounded-full bg-slate-100"><div className="h-full w-2/3 animate-pulse rounded-full bg-[#70659A]"/></div><h1 className="mt-10 text-xl font-semibold">Finalizing Your New Resume…</h1><p className="mt-8 text-sm text-slate-600">Creating a concise, ATS-friendly version using your confirmed information.</p></section>
-  </main>;
   const oldScore = score(guidance?.match_score) ?? previous;
   const newScore = score(result?.match_score);
   const change = oldScore != null && newScore != null ? newScore - oldScore : null;
