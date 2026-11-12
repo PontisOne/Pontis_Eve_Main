@@ -22,6 +22,7 @@ import {
 import React from "react";
 import { API, BACKEND_URL } from "../lib/apiConfig";
 import { normalizeJobDescription } from "../lib/jobDescription";
+import { formatEmploymentType } from "../lib/jobFormatting";
 import { loadOnboardingState } from "../lib/onboardingStorage";
 import { buildProfileBio } from "../lib/profileBio";
 import {
@@ -1404,7 +1405,9 @@ export function JobsTab({
             const companyName = job.company || job.company_name || job.employer || "";
             const location =
               job.location || [job.city, job.state, job.country].filter(Boolean).join(", ");
-            const jobType = job.employment_type || job.job_type || job.employmentType || job.type;
+            const jobType = formatEmploymentType(
+              job.employment_type || job.job_type || job.employmentType || job.type,
+            );
             const rawWorkMode =
               job.work_mode ||
               job.workplace_type ||
