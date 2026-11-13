@@ -584,23 +584,23 @@ export function ProfileEditor({ profile, candidateId, onClose, onSaved }) {
   };
   return (
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/35 p-4"
+      className="fixed inset-0 z-50 flex items-center justify-center overflow-y-auto bg-black/35 p-3 sm:p-6"
       role="dialog"
       aria-modal="true"
       aria-label="Edit profile"
     >
-      <div className="flex max-h-[92vh] w-full max-w-3xl flex-col overflow-hidden rounded-2xl bg-[#FDFDFC] shadow-2xl">
-        <div className="flex items-center justify-between border-b px-6 py-4">
-          <div>
+      <div className="flex max-h-[calc(100vh-1.5rem)] w-full max-w-3xl flex-col overflow-hidden rounded-2xl bg-[#FDFDFC] shadow-2xl sm:max-h-[92vh]">
+        <div className="flex shrink-0 items-start justify-between gap-4 border-b px-5 py-4 sm:px-6">
+          <div className="min-w-0 pr-2">
             <h2 className="text-lg font-semibold">Edit profile</h2>
             <p className="text-xs text-[#777774]">Update any section of your candidate profile.</p>
           </div>
-          <button type="button" onClick={onClose} aria-label="Close profile editor">
+          <button type="button" onClick={onClose} aria-label="Close profile editor" className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-full text-[#555552] transition-colors hover:bg-black/[0.06] hover:text-[#1F1F1F] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#7B6FB8]">
             <X className="h-5 w-5" />
           </button>
         </div>
-        <div className="space-y-7 overflow-y-auto px-6 py-5">
-          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+        <div className="min-h-0 space-y-7 overflow-y-auto px-5 py-5 sm:px-6">
+          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
             {[
               ["name", "Full name"],
               ["headline", "Professional headline"],
@@ -651,12 +651,12 @@ export function ProfileEditor({ profile, candidateId, onClose, onSaved }) {
             {draft.work_experience.map((item, index) => (
               <div
                 key={`${item.title}-${item.company}-${item.dates}`}
-                className="relative mb-3 grid gap-2 rounded-xl border p-3 sm:grid-cols-2"
+                className="relative mb-4 grid gap-3 rounded-xl border p-3 pt-12 sm:grid-cols-2"
               >
                 <button
                   type="button"
                   onClick={() => removeRecord("work_experience", index)}
-                  className="absolute right-2 top-2"
+                  className="absolute right-2 top-2 inline-flex h-8 w-8 items-center justify-center rounded-full text-[#777774] transition-colors hover:bg-black/[0.06] hover:text-[#1F1F1F] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#7B6FB8]"
                   aria-label="Remove experience"
                 >
                   <X className="h-4 w-4" />
@@ -708,12 +708,12 @@ export function ProfileEditor({ profile, candidateId, onClose, onSaved }) {
             {draft.education.map((item, index) => (
               <div
                 key={`${item.degree}-${item.institution}-${item.dates}`}
-                className="relative mb-3 grid gap-2 rounded-xl border p-3 sm:grid-cols-3"
+                className="relative mb-4 grid gap-3 rounded-xl border p-3 pt-12 sm:grid-cols-3"
               >
                 <button
                   type="button"
                   onClick={() => removeRecord("education", index)}
-                  className="absolute right-2 top-2"
+                  className="absolute right-2 top-2 inline-flex h-8 w-8 items-center justify-center rounded-full text-[#777774] transition-colors hover:bg-black/[0.06] hover:text-[#1F1F1F] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#7B6FB8]"
                   aria-label="Remove education"
                 >
                   <X className="h-4 w-4" />
@@ -818,7 +818,7 @@ export function ProfileEditor({ profile, candidateId, onClose, onSaved }) {
             </p>
           )}
         </div>
-        <div className="flex justify-end gap-2 border-t px-6 py-4">
+        <div className="flex shrink-0 justify-end gap-3 border-t px-5 py-4 sm:px-6">
           <button
             type="button"
             onClick={onClose}
@@ -1143,7 +1143,7 @@ export function JobsTab({
   // jobs a candidate can open before the subscription-locked placeholders.
   // Confirmed applications belong in Tracked Jobs. Regularly tracked jobs
   // remain visible here so the existing Track workflow is unchanged.
-  const accessibleJobs = jobs.filter((job) => !job.locked && !job.applied);
+  const accessibleJobs = jobs.filter((job) => !job.locked);
   const lockedJobs = jobs.filter((job) => job.locked);
   const orderedJobs = [...accessibleJobs, ...lockedJobs];
 
@@ -1791,11 +1791,17 @@ function TrackedTab({ jobs, onTrack, onDismissJob, candidateId, onApplied }) {
                 type="button"
                 onClick={(e) => {
                   e.stopPropagation();
+                  if (job.applied && !window.confirm("This job is marked as an application. Are you sure you want to untrack this application?")) {
+                    return;
+                  }
                   onTrack(job.id);
                 }}
                 onKeyDown={(e) => {
                   if (e.key === "Enter") {
                     e.stopPropagation();
+                    if (job.applied && !window.confirm("This job is marked as an application. Are you sure you want to untrack this application?")) {
+                      return;
+                    }
                     onTrack(job.id);
                   }
                 }}

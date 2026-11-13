@@ -1160,6 +1160,19 @@ export function mergeProfilesForDisplay(resumeProfile = {}, voiceProfile = {}) {
         .map((role) => [normalizeKey(role), role]),
     ).values(),
   );
+  const preferredIndustries = new Set(
+    [
+      ...collectProfileList(resume, ["preferred_industries"]),
+      ...collectProfileList(voice, ["preferred_industries"]),
+      ...toArray(mergedRaw.preferred_industries),
+      ...toArray(mergedRaw.target_industries),
+    ]
+      .map((value) => normalizeKey(value))
+      .filter(Boolean),
+  );
+  const rolesWithoutIndustries = preferredRoles.filter(
+    (role) => !preferredIndustries.has(normalizeKey(role)),
+  );
   const employmentTypes = Array.from(
     new Map(
       collectProfileList(resume, ["employment_types"])
@@ -1180,7 +1193,7 @@ export function mergeProfilesForDisplay(resumeProfile = {}, voiceProfile = {}) {
     experience,
     work_experience: experience,
     education,
-    preferred_roles: preferredRoles,
+    preferred_roles: rolesWithoutIndustries,
     employment_types: employmentTypes,
   };
 

@@ -182,6 +182,13 @@ class TestBug1AnyNotAddedAsCertification:
         assert any("java full stack" in c.lower() for c in result)
         assert any("aws certificate" in c.lower() for c in result)
 
+    def test_normalize_certifications_keeps_only_credential_names(self):
+        result = server._normalize_certifications([
+            "karate certificate",
+            "i am a black belt holder",
+        ])
+        assert result == ["karate", "black belt"]
+
 
 # ---------------------------------------------------------------------------
 # BUG 2 — Certification deletion persisted and reflected

@@ -25,6 +25,23 @@ def _normalize_text(value: Any) -> str:
     return re.sub(r"\s+", " ", str(value)).strip()
 
 
+def _format_experience_duration(value: Any) -> str:
+    try:
+        years = float(value)
+    except (TypeError, ValueError):
+        return ""
+    if years < 0:
+        return ""
+    total_months = round(years * 12)
+    whole_years, months = divmod(total_months, 12)
+    parts = []
+    if whole_years:
+        parts.append(f"{whole_years} year{'s' if whole_years != 1 else ''}")
+    if months:
+        parts.append(f"{months} month{'s' if months != 1 else ''}")
+    return " ".join(parts) or "0 months"
+
+
 def _normalize_key(value: Any) -> str:
     return _normalize_text(value).lower()
 
@@ -126,7 +143,9 @@ def build_candidate_text(candidate: Dict[str, Any]) -> str:
 
     exp_years = candidate.get("experience_years") or candidate.get("total_experience_years")
     if exp_years is not None:
-        parts.append(f"Experience:\n{exp_years} years of professional experience")
+        duration = _format_experience_duration(exp_years)
+        if duration:
+            parts.append(f"Experience:\n{duration} of professional experience")
 
     skills_raw = candidate.get("skills") or []
     if isinstance(skills_raw, str):

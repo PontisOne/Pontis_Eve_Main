@@ -1395,8 +1395,6 @@ def _build_ninety_percent_guidance(percent: int, explain: dict, dimensions: Opti
         intent = dims.get("career_intent", {})
         intent_signals = set(intent.get("signals") or [])
         if float(intent.get("score") or 0) < 100:
-            if "target_industries" not in intent_signals:
-                add("Add your preferred industries", "Preferred industries", "additional-information", "Which industries are you most interested in working in?")
             if "career_summary" not in intent_signals:
                 add("Add your career summary", "Career summary", "additional-information", "In two or three sentences, what is your background and what do you want to do next?")
 
@@ -1404,7 +1402,6 @@ def _build_ninety_percent_guidance(percent: int, explain: dict, dimensions: Opti
         pref_questions = {
             "location_preferences": ("Add preferred locations", "Preferred locations", "Which locations are you open to working in?"),
             "employment_types": ("Add preferred employment types", "Employment type", "Are you looking for full-time, part-time, contract, or freelance work?"),
-            "target_industries": ("Add your preferred industries", "Preferred industries", "Which industries are you most interested in working in?"),
             "relocation": ("Confirm relocation preference", "Relocation", "Are you willing to relocate for the right role?"),
         }
         for key in prefs.get("unknown", []) or []:

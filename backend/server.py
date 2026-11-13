@@ -12,6 +12,7 @@ from jose import JWTError, jwt
 import jwt as pyjwt
 import os
 import json
+import math
 import logging
 import hashlib
 import hmac
@@ -937,6 +938,7 @@ def _normalize_for_frontend(c: dict) -> dict:
         "certifications": certifications,
         "projects": _normalize_projects(raw_data.get("projects")),
         "additional_information": raw_data.get("additional_information", ""),
+        "hobbies": raw_data.get("hobbies") or raw_data.get("interests") or [],
         "parsing_status": c.get("parsing_status", ""),
         "photo_url": _candidate_photo_url(c, raw_data),
         "profile_strength_percent": strength_percent,
@@ -3077,8 +3079,9 @@ Rules:
 - Do NOT ask about information already present in the candidate profile
 - Do NOT create duplicate questions for the same topic
 - A topic is covered if the candidate provided meaningful information about it anywhere in the conversation or profile
-- Before completing career_preferences/availability_location, explicitly collect any still-unknown work mode (Remote/Hybrid/On-site/Flexible), preferred industries, employment type, preferred locations, expected salary, and relocation preference. A candidate may decline a field; record that rather than guessing.
+- Before completing career_preferences/availability_location, explicitly collect any still-unknown work mode (Remote/Hybrid/On-site/Flexible), employment type, preferred locations, expected salary, and relocation preference. A candidate may decline a field; record that rather than guessing.
 - Employment history is not complete until every newly introduced or updated job has a start date. For a current job, ask "When did you start working as <role>?" when missing and record end_date exactly as "Present". For a previous job, collect both start and end dates. Do not complete the employment-history topic while these dates are missing unless the candidate explicitly cannot provide them.
+- Before accepting any new work or education record, compare its start/end period with every saved record in that section. If periods overlap, or if more than one record would be current (end_date Present), do not save it yet. Tell the candidate which records overlap and ask whether they were concurrent or which dates should be corrected. This confirmation is required for both work experience and education.
 - next_question must be a natural, conversational question — not a hardcoded template
 - If all important topics are covered, set next_question to null and completed to true
 
@@ -3728,7 +3731,7 @@ INTAKE_TOPIC_PRIORITY = (
     "name", "location", "bio", "current_role", "current_company", "experience_years", "skills",
     "work_experience",
     "preferred_roles", "preferred_locations", "remote_preference",
-    "preferred_industries", "employment_types", "willing_to_relocate",
+    "employment_types", "willing_to_relocate",
     "open_to_opportunities", "notice_period", "expected_salary", "education", "certifications", "projects",
 )
 _PROFILE_FIELD_TOPICS = {
@@ -6049,7 +6052,7 @@ def _sanitize_profile_updates(updates: dict) -> dict:
                 sanitized[field] = value
             continue
         if field in ("skills", "certifications", "preferred_roles", "preferred_locations",
-                     "preferred_industries", "employment_types"):
+                 "preferred_industries", "employment_types", "hobbies"):
             if not isinstance(value, list):
                 continue
             clean_items = _sanitize_structured_list_items(value)
@@ -6687,6 +6690,20 @@ def _infer_profile_updates_from_message(message: str) -> dict:
     text = " ".join(message.split())
     lower = text.lower()
     updates: dict[str, Any] = {}
+    hobby_text = _extract_first_match(message, [
+        r"\b(?:my\s+)?hobbies?(?:\s+and\s+interests?)?\s*(?:are|include|:)?\s*(?P<value>.+?)(?:[.!?;]|$)",
+        r"\b(?:i\s+)?(?:love|enjoy|like)\s+to\s+(?P<value>.+?)(?:[.!?;]|$)",
+        r"\b(?:i\s+)?(?:love|enjoy|like)\s+(?P<value>.+?)(?:[.!?;]|$)",
+    ])
+    if hobby_text:
+        hobby_items = _split_update_list(hobby_text)
+        hobby_items = [
+            re.sub(r"^(?:to\s+)?(?:play|read|watch|listen\s+to|go\s+|do\s+)", "", item, flags=re.I).strip()
+            for item in hobby_items
+        ]
+        hobby_items = [item.title() for item in hobby_items if item]
+        if hobby_items:
+            updates["hobbies"] = hobby_items
 
     opportunity_type = _infer_opportunity_type_from_text(text)
     if opportunity_type:
@@ -7069,7 +7086,7 @@ def _correct_profile_categories(updates: dict, candidate_message: str) -> dict:
     deterministic_fields = {
         "preferred_roles", "skills", "work_experience", "education",
         "certifications", "projects", "preferred_locations",
-        "preferred_industries", "employment_types",
+        "preferred_industries", "employment_types", "hobbies",
     }
     for field, value in inferred.items():
         if field == "education":
@@ -7088,7 +7105,7 @@ def _correct_profile_categories(updates: dict, candidate_message: str) -> dict:
     typed_fields = {
         "certifications", "projects", "work_experience", "education", "skills",
         "preferred_roles", "preferred_locations", "preferred_industries",
-        "employment_types", "current_role", "experience_years", "location",
+        "employment_types", "hobbies", "current_role", "experience_years", "location",
     }
     if not re.search(
         r"\b(?:additional information|additional info|about me|other information)\b",
@@ -7120,7 +7137,7 @@ VALID_UPDATE_FIELDS = {
     "name", "email", "phone", "location", "country", "country_code", "headline", "bio",
     "current_role", "experience_years", "skills", "work_experience", "education",
     "preferred_roles", "availability", "notice_period", "salary_expectation", "certifications",
-    "projects", "preferred_locations", "preferred_industries", "employment_types",
+    "projects", "preferred_locations", "preferred_industries", "employment_types", "hobbies",
     "remote_preference", "expected_salary", "willing_to_relocate",
     "open_to_opportunities", "additional_information",
     "opportunity_type",
@@ -7400,6 +7417,12 @@ def _pending_chat_work_experience_completion(message: str, candidate: dict, hist
     missing = _incomplete_new_chat_experience({"work_experience": [entry]}, candidate)
     if missing:
         return {"reply": "Before I add that work experience, please share the " + ", ".join(missing[:-1]) + (" and " if len(missing) > 1 else "") + missing[-1] + ".", "updates": None}
+    collision = _timeline_collision(candidate.get("work_experience") or [], [entry], "work_experience")
+    if collision:
+        old_item, new_item = collision
+        old_name = f"{old_item.get('title') or 'a role'} at {old_item.get('company') or 'a company'}"
+        new_name = f"{new_item.get('title') or 'a role'} at {new_item.get('company') or 'a company'}"
+        return {"reply": f"The dates for {new_name} overlap with {old_name}. Were these happening at the same time, or should I correct one of the date ranges? Please confirm before I save this.", "updates": None}
     return {"reply": f"Added your {title} experience at {company} from {start} to {end}.", "updates": {"work_experience": [entry]}}
 
 
@@ -7626,6 +7649,23 @@ def _chat_profile_preflight(message: str, candidate: dict, history: list[dict]) 
         "preferred_industries": "preferred industry",
         "employment_types": "employment preference",
     }
+    for field, label in (("work_experience", "work experience"), ("education", "education")):
+        collision = _timeline_collision(
+            candidate.get(field) or [], inferred_now.get(field) or [], field
+        )
+        if collision:
+            existing_item, incoming_item = collision
+            if field == "work_experience":
+                old_name = f"{existing_item.get('title') or existing_item.get('role') or 'a role'} at {existing_item.get('company') or existing_item.get('company_name') or 'a company'}"
+                new_name = f"{incoming_item.get('title') or incoming_item.get('role') or 'a role'} at {incoming_item.get('company') or incoming_item.get('company_name') or 'a company'}"
+            else:
+                old_name = f"{existing_item.get('degree') or 'a course'} at {existing_item.get('institution') or existing_item.get('school') or 'an institution'}"
+                new_name = f"{incoming_item.get('degree') or 'a course'} at {incoming_item.get('institution') or incoming_item.get('school') or 'an institution'}"
+            return {"reply": (
+                f"The dates for {new_name} overlap with {old_name}. "
+                f"Were these happening at the same time, or should I correct one of the date ranges? "
+                "Please confirm the start and end dates before I save this."
+            ), "updates": None}
     for field, label in list_sections.items():
         incoming_items = inferred_now.get(field) or []
         existing_items = _existing_profile_list(candidate, field)
@@ -7679,6 +7719,18 @@ def _chat_profile_preflight(message: str, candidate: dict, history: list[dict]) 
                 f"I already have your {existing.get('degree') or degree} in your profile. "
                 "Should I update/replace that education record, or add this as a separate degree? Please say update or add."
             ), "updates": None}
+        education_entry = {
+            "degree": degree,
+            "institution": _normalize_profile_text(education_with_dates.group("institution")),
+            "start_date": education_with_dates.group("start"),
+            "end_date": education_with_dates.group("end"),
+        }
+        collision = _timeline_collision(candidate.get("education") or [], [education_entry], "education")
+        if collision:
+            old_item, new_item = collision
+            old_name = f"{old_item.get('degree') or 'a course'} at {old_item.get('institution') or 'an institution'}"
+            new_name = f"{new_item.get('degree') or 'a course'} at {new_item.get('institution') or 'an institution'}"
+            return {"reply": f"The dates for {new_name} overlap with {old_name}. Were these happening at the same time, or should I correct one of the date ranges? Please confirm before I save this.", "updates": None}
         return {"reply": f"Added your {degree} at {education_with_dates.group('institution').strip()}.", "updates": {"education": [{
             "degree": degree,
             "institution": _normalize_profile_text(education_with_dates.group("institution")),
@@ -8043,6 +8095,7 @@ Return ONLY valid JSON with the exact keys below (omit keys where nothing was fo
   "expected_salary": "",
   "willing_to_relocate": null,
   "certifications": [],
+  "hobbies": [],
   "additional_information": ""
 }
 Rules:
@@ -8393,6 +8446,17 @@ async def _apply_profile_updates(candidate_id: str, updates: dict) -> dict:
             )
             if merged_values != old_values:
                 existing_raw[field] = merged_values
+                raw_data_changed = True
+        elif field == "hobbies":
+            if not isinstance(value, list):
+                continue
+            hobbies = _sanitize_structured_list_items(value)
+            existing_hobbies = _sanitize_structured_list_items(
+                existing_raw.get("hobbies") or existing_raw.get("interests") or []
+            )
+            merged_hobbies = list(dict.fromkeys(existing_hobbies + hobbies))
+            if merged_hobbies != existing_hobbies:
+                existing_raw["hobbies"] = merged_hobbies
                 raw_data_changed = True
         elif field in ("remote_preference", "open_to_opportunities", "willing_to_relocate"):
             if field == "remote_preference":
@@ -9804,6 +9868,13 @@ def _normalize_certifications(certifications: Any) -> list[str]:
             cleaned,
             flags=re.IGNORECASE,
         ).strip()
+        cleaned = re.sub(
+            r"^(?:i\s+)?(?:am|was)\s+(?:a|an|the)\s+",
+            "",
+            cleaned,
+            flags=re.IGNORECASE,
+        ).strip()
+        cleaned = re.sub(r"\s+holder\s*$", "", cleaned, flags=re.IGNORECASE).strip()
         # Normalize common abbreviations so a follow-up such as “AWS solution
         # arch” matches an existing “AWS Solution Architect” credential.
         cleaned = re.sub(r"\barch\b", "architect", cleaned, flags=re.IGNORECASE)
@@ -10104,6 +10175,55 @@ def _parse_experience_window(item: dict) -> tuple[Optional[int], Optional[int], 
                 open_ended = True
 
     return start, end, open_ended
+
+
+def _timeline_periods_overlap(first: dict, second: dict) -> bool:
+    """Return whether two dated profile records occupy overlapping time."""
+    first_start, first_end, first_open = _parse_experience_window(first)
+    second_start, second_end, second_open = _parse_experience_window(second)
+    if first_start is None or second_start is None:
+        return False
+    first_end = first_end if first_end is not None else (2**63 - 1 if first_open else None)
+    second_end = second_end if second_end is not None else (2**63 - 1 if second_open else None)
+    if first_end is None or second_end is None:
+        return False
+    return first_start <= second_end and second_start <= first_end
+
+
+def _timeline_collision(
+    existing: Any,
+    incoming: Any,
+    field: str,
+) -> Optional[tuple[dict, dict]]:
+    """Find the first dated collision before a new profile record is saved."""
+    existing_items = existing if isinstance(existing, list) else []
+    incoming_items = incoming if isinstance(incoming, list) else []
+    for new_item in incoming_items:
+        if not isinstance(new_item, dict):
+            continue
+        for old_item in existing_items:
+            if not isinstance(old_item, dict) or not _timeline_periods_overlap(old_item, new_item):
+                continue
+            # Same logical record is an update/enrichment, not a collision.
+            if field == "work_experience":
+                same_record = (
+                    _experience_text_matches(old_item.get("company") or old_item.get("company_name"), new_item.get("company") or new_item.get("company_name"))
+                    and _experience_text_matches(old_item.get("title") or old_item.get("role"), new_item.get("title") or new_item.get("role"))
+                )
+            else:
+                same_record = (
+                    _experience_text_matches(old_item.get("institution") or old_item.get("school"), new_item.get("institution") or new_item.get("school"))
+                    and _experience_text_matches(old_item.get("degree") or old_item.get("field_of_study"), new_item.get("degree") or new_item.get("field_of_study"))
+                )
+            if not same_record:
+                return old_item, new_item
+    for index, first in enumerate(incoming_items):
+        if not isinstance(first, dict):
+            continue
+        for second in incoming_items[index + 1:]:
+            if isinstance(second, dict) and _timeline_periods_overlap(first, second):
+                return first, second
+    return None
 
 
 def _experience_entries_compatible(existing: dict, new_item: dict) -> bool:
@@ -10618,9 +10738,16 @@ def _format_years_of_experience(value: Any) -> str:
         years = float(value)
     except (TypeError, ValueError):
         return ""
-    if years.is_integer():
-        return f"{int(years)} years of experience"
-    return f"{years:g} years of experience"
+    if not math.isfinite(years) or years < 0:
+        return ""
+    total_months = round(years * 12)
+    whole_years, months = divmod(total_months, 12)
+    parts = []
+    if whole_years:
+        parts.append(f"{whole_years} year{'s' if whole_years != 1 else ''}")
+    if months:
+        parts.append(f"{months} month{'s' if months != 1 else ''}")
+    return f"{' '.join(parts) or '0 months'} of experience"
 
 
 def _summary_natural_join(items: list[str]) -> str:
@@ -10916,6 +11043,10 @@ def _merge_voice_into_profile(existing: dict, voice: dict) -> dict:
     )
     if voice.get("additional_information"):
         raw_data["additional_information"] = voice["additional_information"]
+    if isinstance(voice.get("hobbies"), list):
+        raw_data["hobbies"] = list(dict.fromkeys(
+            [*(raw_data.get("hobbies") or raw_data.get("interests") or []), *voice["hobbies"]]
+        ))
     if raw_data.get("projects") or voice.get("projects") or _projects_explicitly_named_in_work_experience(voice.get("work_experience")):
         raw_data["projects"] = _merge_projects(
             raw_data.get("projects"),

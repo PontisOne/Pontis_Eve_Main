@@ -919,6 +919,18 @@ function Dashboard() {
     }
   };
 
+  const handleApplicationApplied = React.useCallback((jobId) => {
+    setAvailableJobs((prev) => prev.map((job) => (
+      job.id === jobId ? { ...job, tracked: true, applied: true } : job
+    )));
+    setSelectedJob((prev) => (
+      prev?.id === jobId ? { ...prev, tracked: true, applied: true } : prev
+    ));
+    // Reconcile server metadata in the background without making the local UI
+    // wait for a refresh before moving the job to Tracked Jobs.
+    fetchJobs();
+  }, [fetchJobs]);
+
   const handleDismissJob = async (jobId, reason = null) => {
     const job = availableJobs.find((j) => j.id === jobId);
     if (!job || job.locked || !candidateId) return;
@@ -1175,7 +1187,7 @@ function Dashboard() {
                 onCertReplaced={handleCertReplaced}
                 onResumeDeleted={handleResumeDeleted}
                 onCertDeleted={handleCertDeleted}
-                onInterested={fetchJobs}
+                onInterested={handleApplicationApplied}
                 onPhotoChange={handlePhotoChange}
                 onProfileUpdated={refreshProfile}
                 onJobViewed={(jobId) => setAvailableJobs((prev) => prev.map((j) => (j.id === jobId ? { ...j, viewed: true } : j)))}
@@ -1314,7 +1326,7 @@ function Dashboard() {
                       )
                     }
                     onLockedJobClick={() => setShowSubscriptionPopup(true)}
-                    onApplied={fetchJobs}
+                    onApplied={handleApplicationApplied}
                   />
                 </div>
               )
@@ -1369,7 +1381,7 @@ function Dashboard() {
             onCertReplaced={handleCertReplaced}
             onResumeDeleted={handleResumeDeleted}
             onCertDeleted={handleCertDeleted}
-            onInterested={fetchJobs}
+            onInterested={handleApplicationApplied}
             onPhotoChange={handlePhotoChange}
             onProfileUpdated={refreshProfile}
             onJobViewed={(jobId) =>
