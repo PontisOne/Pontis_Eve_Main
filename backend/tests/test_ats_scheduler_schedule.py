@@ -1,6 +1,8 @@
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
+import pytest
+
 from app.job_ingestion.scheduler import IST, _ats_sync_trigger, _fantastic_sync_trigger
 from app.job_ingestion import scheduler
 
@@ -18,10 +20,22 @@ def test_ats_sync_schedule_runs_every_six_hours_in_ist():
 
 def test_next_ats_sync_is_aligned_independently_of_startup_time():
     startup_times_and_expected_runs = [
-        (datetime(2026, 9, 24, 0, 1, tzinfo=IST), datetime(2026, 9, 24, 6, 0, tzinfo=IST)),
-        (datetime(2026, 9, 24, 17, 59, 59, tzinfo=IST), datetime(2026, 9, 24, 18, 0, tzinfo=IST)),
-        (datetime(2026, 9, 24, 18, 1, tzinfo=IST), datetime(2026, 9, 25, 0, 0, tzinfo=IST)),
-        (datetime(2026, 9, 24, 23, 59, 59, tzinfo=IST), datetime(2026, 9, 25, 0, 0, tzinfo=IST)),
+        (
+            datetime(2026, 9, 24, 0, 1, tzinfo=IST),
+            datetime(2026, 9, 24, 6, 0, tzinfo=IST),
+        ),
+        (
+            datetime(2026, 9, 24, 17, 59, 59, tzinfo=IST),
+            datetime(2026, 9, 24, 18, 0, tzinfo=IST),
+        ),
+        (
+            datetime(2026, 9, 24, 18, 1, tzinfo=IST),
+            datetime(2026, 9, 25, 0, 0, tzinfo=IST),
+        ),
+        (
+            datetime(2026, 9, 24, 23, 59, 59, tzinfo=IST),
+            datetime(2026, 9, 25, 0, 0, tzinfo=IST),
+        ),
     ]
 
     for startup_time, expected_run in startup_times_and_expected_runs:
@@ -38,7 +52,9 @@ def test_next_ats_sync_from_utc_startup_remains_an_ist_clock_slot():
 
 def test_ats_sync_slots_are_exactly_six_hours_apart_in_ist():
     trigger = _ats_sync_trigger()
-    first_run = trigger.get_next_fire_time(None, datetime(2026, 9, 24, 0, 0, 0, tzinfo=IST))
+    first_run = trigger.get_next_fire_time(
+        None, datetime(2026, 9, 24, 0, 0, 0, tzinfo=IST)
+    )
     second_run = trigger.get_next_fire_time(first_run, first_run)
 
     assert first_run == datetime(2026, 9, 24, 0, 0, tzinfo=IST)
@@ -46,19 +62,22 @@ def test_ats_sync_slots_are_exactly_six_hours_apart_in_ist():
     assert second_run - first_run == timedelta(hours=6)
 
 
-def test_fantastic_sync_schedule_matches_the_six_hour_ats_slots_in_ist():
+def test_fantastic_sync_schedule_runs_daily_at_seven_am_in_ist():
     trigger = _fantastic_sync_trigger()
-    first_run = trigger.get_next_fire_time(None, datetime(2026, 9, 24, 0, 1, tzinfo=IST))
+    first_run = trigger.get_next_fire_time(
+        None, datetime(2026, 9, 24, 0, 1, tzinfo=IST)
+    )
     second_run = trigger.get_next_fire_time(first_run, first_run)
 
     assert trigger.timezone == IST
-    assert trigger.fields[5].__str__() == "0,6,12,18"
-    assert first_run == datetime(2026, 9, 24, 6, 0, tzinfo=IST)
-    assert second_run == datetime(2026, 9, 24, 12, 0, tzinfo=IST)
-    assert second_run - first_run == timedelta(hours=6)
+    assert trigger.fields[5].__str__() == "7"
+    assert first_run == datetime(2026, 9, 24, 7, 0, tzinfo=IST)
+    assert second_run == datetime(2026, 9, 25, 7, 0, tzinfo=IST)
+    assert second_run - first_run == timedelta(days=1)
 
 
-def test_scheduler_initialization_is_idempotent_and_does_not_sync(monkeypatch):
+@pytest.mark.asyncio
+async def test_scheduler_initialization_is_idempotent_and_does_not_sync(monkeypatch):
     """Registering cron jobs must not execute an ingestion cycle at startup."""
     calls = []
 
@@ -73,12 +92,15 @@ def test_scheduler_initialization_is_idempotent_and_does_not_sync(monkeypatch):
         scheduler.start_scheduler()
         first = scheduler._scheduler
         assert first is not None and first.running
-        assert [job.id for job in first.get_jobs()] == ["job_sync"]
-        assert first.get_job("job_sync").trigger.timezone == IST
+        first_jobs = first.get_jobs()
+        first_job = first.get_job("job_sync")
+        assert [job.id for job in first_jobs] == ["job_sync"]
+        assert first_job is not None and first_job.trigger.timezone == IST
         assert calls == []
 
         scheduler.start_scheduler()
         assert scheduler._scheduler is first
+        assert first is not None
         assert [job.id for job in first.get_jobs()] == ["job_sync"]
         assert calls == []
     finally:
@@ -95,7 +117,8 @@ def test_disabled_scheduler_has_no_instance_or_jobs(monkeypatch):
     assert scheduler._sync_lock is None
 
 
-def test_disabled_startup_stops_an_existing_scheduler(monkeypatch):
+@pytest.mark.asyncio
+async def test_disabled_startup_stops_an_existing_scheduler(monkeypatch):
     scheduler.stop_scheduler()
     monkeypatch.setenv("JOB_SCHEDULER_ENABLED", "true")
     scheduler.start_scheduler()
@@ -131,6 +154,7 @@ def test_disabled_guarded_sync_does_not_call_ingestion(monkeypatch):
     monkeypatch.setattr(scheduler, "_sync_lock", __import__("asyncio").Lock())
 
     import asyncio
+
     asyncio.run(scheduler._sync_jobs_guarded())
 
     assert calls == []
