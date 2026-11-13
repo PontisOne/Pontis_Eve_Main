@@ -4995,12 +4995,30 @@ async def update_candidate_profile(candidate_id: str, body: ManualProfileUpdateR
 
     work_experience = []
     for record in body.work_experience[:50]:
-        item = {key: clean_text(record.get(key), 5000 if key == "description" else 300) for key in ("title", "company", "dates", "description")}
+        item = {
+            key: clean_text(record.get(key), 5000 if key in ("description", "summary") else 300)
+            for key in (
+                "title", "company", "dates", "description", "summary", "duration",
+                "start_date", "startDate", "end_date", "endDate", "location", "role",
+            )
+            if record.get(key) not in (None, "")
+        }
+        for key in ("title", "company", "dates", "description"):
+            item.setdefault(key, "")
         if item["title"] or item["company"]:
             work_experience.append(item)
     education = []
     for record in body.education[:30]:
-        item = {key: clean_text(record.get(key), 300) for key in ("degree", "institution", "dates")}
+        item = {
+            key: clean_text(record.get(key), 300)
+            for key in (
+                "degree", "institution", "dates", "duration", "start_date", "startDate",
+                "end_date", "endDate", "field", "grade", "gpa", "cgpa", "percentage",
+            )
+            if record.get(key) not in (None, "")
+        }
+        for key in ("degree", "institution", "dates"):
+            item.setdefault(key, "")
         if item["degree"] or item["institution"]:
             education.append(item)
 
@@ -9859,6 +9877,37 @@ def _normalize_certifications(certifications: Any) -> list[str]:
         cleaned = _normalize_profile_text(cert)
         if not cleaned:
             continue
+        # Extract the credential phrase from conversational statements without
+        # assuming a particular domain, activity, vendor, or certificate type.
+        cleaned = re.sub(
+            r"^(?:yes\s*[,;:]?\s*)?(?:i\s+(?:have|ahve|hold|possess|earned|obtained|completed|did|am|was)\s+|"
+            r"(?:my|the)\s+(?:credential|qualification|certification)\s+(?:is|was)\s+)",
+            "",
+            cleaned,
+            flags=re.IGNORECASE,
+        ).strip()
+        cleaned = re.sub(r"\s+(?:in|under|within)\s+it\b", "", cleaned, flags=re.IGNORECASE).strip()
+        clauses = re.split(r"\s+(?:and|or)\s+(?=(?:i|you|they|we)\s+(?:have|hold|am|are|was|were)\b)", cleaned, flags=re.IGNORECASE)
+        credential_clause = next(
+            (
+                clause.strip()
+                for clause in reversed(clauses)
+                if re.search(
+                    r"\b(?:certificate|certification|credential|licen[cs]e|diploma|degree|badge|award|belt|level|dan|grade|rank)\b",
+                    clause,
+                    re.IGNORECASE,
+                )
+            ),
+            cleaned,
+        )
+        cleaned = credential_clause
+        rank_in_field = re.fullmatch(
+            r"(?P<rank>.+?)\s+in\s+(?P<field>[A-Za-z][A-Za-z0-9 &'/-]{1,80})",
+            cleaned,
+            flags=re.IGNORECASE,
+        )
+        if rank_in_field and re.search(r"\b(?:belt|level|dan|grade|rank)\b", rank_in_field.group("rank"), re.I):
+            cleaned = f"{rank_in_field.group('field').strip()} {rank_in_field.group('rank').strip()}"
         # LLMs and fallback extraction can return the candidate's whole
         # sentence (including a typo such as "ahve") instead of the named
         # credential. Persist only the credential name.

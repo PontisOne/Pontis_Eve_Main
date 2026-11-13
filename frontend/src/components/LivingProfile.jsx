@@ -517,22 +517,33 @@ function parseCsv(value) {
     .filter(Boolean);
 }
 
+function parseExperienceDuration(value) {
+  const text = String(value ?? "").trim().toLowerCase();
+  if (!text) return 0;
+  const years = Number(text.match(/(\d+(?:\.\d+)?)\s*years?/)?.[1] || 0);
+  const months = Number(text.match(/(\d+)\s*months?/)?.[1] || 0);
+  if (years || months) return years + months / 12;
+  return Number(text) || 0;
+}
+
 export function ProfileEditor({ profile, candidateId, onClose, onSaved }) {
   const [draft, setDraft] = React.useState(() => ({
     name: profile.name || "",
     headline: profile.headline || profile.current_role || "",
     location: profile.location || "",
-    experience_years: profile.experience_years ?? "",
+    experience_years: formatExperienceDuration(profile.experience_years),
     availability: profile.availability || "",
     salary_expectation: profile.salary_expectation || "",
     bio: profile.bio || generateBio(profile),
     work_experience: (profile.experience || []).map((item) => ({
+      ...item,
       title: item.title || "",
       company: item.company || "",
       dates: item.dates || "",
       description: item.description || item.summary || "",
     })),
     education: (profile.education || []).map((item) => ({
+      ...item,
       degree: item.degree || "",
       institution: item.institution || "",
       dates: item.dates || "",
@@ -566,7 +577,7 @@ export function ProfileEditor({ profile, candidateId, onClose, onSaved }) {
     try {
       await axios.put(`${API}/candidate/${candidateId}/profile`, {
         ...draft,
-        experience_years: draft.experience_years === "" ? 0 : Number(draft.experience_years),
+        experience_years: parseExperienceDuration(draft.experience_years),
         skills: parseCsv(draft.skills),
         certifications: draft.certifications
           .map((certification) => certification.trim())
@@ -612,9 +623,8 @@ export function ProfileEditor({ profile, candidateId, onClose, onSaved }) {
               <label key={key} className="text-xs font-medium text-[#4A4A48]">
                 {label}
                 <input
-                  type={key === "experience_years" ? "number" : "text"}
+                  type="text"
                   min="0"
-                  step="0.1"
                   value={draft[key]}
                   onChange={(e) => field(key, e.target.value)}
                   className={`${editorInput} mt-1`}

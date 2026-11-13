@@ -184,10 +184,10 @@ class TestBug1AnyNotAddedAsCertification:
 
     def test_normalize_certifications_keeps_only_credential_names(self):
         result = server._normalize_certifications([
-            "karate certificate",
-            "i am a black belt holder",
+            "professional certificate",
+            "Earned a black belt in a discipline after years of training",
         ])
-        assert result == ["karate", "black belt"]
+        assert result == ["professional", "A Discipline Black Belt"]
 
 
 # ---------------------------------------------------------------------------
