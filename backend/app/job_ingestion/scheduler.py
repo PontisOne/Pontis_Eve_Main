@@ -1,16 +1,18 @@
 import asyncio
 import logging
-import sys
 import os
-from pathlib import Path
+import sys
 from datetime import datetime
+from pathlib import Path
 from zoneinfo import ZoneInfo
 
-from sqlalchemy import text
-from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.events import EVENT_JOB_ERROR, EVENT_JOB_EXECUTED
+from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
+from sqlalchemy import text
+
 from app.job_ingestion.feature_flags import provider_enabled
+from app.job_ingestion.normalize import parse_ats_datetime
 
 logger = logging.getLogger(__name__)
 
@@ -28,16 +30,22 @@ def _scheduler_enabled() -> bool:
     ``JOB_SCHEDULER_ENABLED=false`` only when intentionally pausing ingestion.
     """
     return os.getenv("JOB_SCHEDULER_ENABLED", "true").strip().lower() in {
-        "1", "true", "yes", "on"
+        "1",
+        "true",
+        "yes",
+        "on",
     }
+
+
 METADATA_RETRY_BATCH_SIZE = 25
 
 _scheduler: AsyncIOScheduler | None = None
 _sync_lock: asyncio.Lock | None = None
 
 
-
-async def reconcile_missing_ats_jobs(db, *, company_registry_id, ats_type: str, current_ats_ids: set[str]) -> list[str]:
+async def reconcile_missing_ats_jobs(
+    db, *, company_registry_id, ats_type: str, current_ats_ids: set[str]
+) -> list[str]:
     """Close jobs absent from a *complete successful* current ATS board.
 
     The registry foreign key scopes this to one configured board, avoiding
@@ -46,141 +54,394 @@ async def reconcile_missing_ats_jobs(db, *, company_registry_id, ats_type: str, 
     # These collectors return the complete public board in one response.  Do
     # not add bounded/search-feed providers here: absence from those feeds is
     # not evidence that a stored job closed.
-    if ats_type in {"ashby", "lever", "greenhouse", "workable"} and not provider_enabled(ats_type):
-        logger.info("[job-lifecycle] provider=%s reconciliation skipped because provider is disabled", ats_type)
+    if ats_type in {
+        "ashby",
+        "lever",
+        "greenhouse",
+        "workable",
+    } and not provider_enabled(ats_type):
+        logger.info(
+            "[job-lifecycle] provider=%s reconciliation skipped because "
+            "provider is disabled",
+            ats_type,
+        )
         return []
     if ats_type not in {"ashby", "lever", "greenhouse", "workable"}:
         logger.info(
             "[job-lifecycle] provider=%s snapshot_status=unsupported_for_reconciliation "
-            "pages_fetched=0 jobs_seen=%d jobs_closed=0 jobs_reactivated=0 jobs_skipped=0 "
+            "pages_fetched=0 jobs_seen=%d jobs_closed=0 jobs_reactivated=0 "
+            "jobs_skipped=0 "
             "reason=provider_response_is_not_a_complete_board_snapshot",
-            ats_type, len(current_ats_ids),
+            ats_type,
+            len(current_ats_ids),
         )
         return []
-    stored = await db.execute(text("""
+    stored = await db.execute(
+        text("""
         SELECT id, ats_job_id
         FROM job_descriptions
         WHERE company_registry_id = :company_registry_id
           AND LOWER(ats_type) = :ats_type
           AND is_active IS TRUE
-    """), {"company_registry_id": company_registry_id, "ats_type": ats_type})
-    missing = [str(row[0]) for row in stored.fetchall() if str(row[1] or "").strip() not in current_ats_ids]
+    """),
+        {"company_registry_id": company_registry_id, "ats_type": ats_type},
+    )
+    missing = [
+        str(row[0])
+        for row in stored.fetchall()
+        if str(row[1] or "").strip() not in current_ats_ids
+    ]
     if not missing:
         logger.info(
             "[job-lifecycle] provider=%s snapshot_status=complete pages_fetched=1 "
             "jobs_seen=%d jobs_closed=0 jobs_reactivated=0 jobs_skipped=0 reason=none",
-            ats_type, len(current_ats_ids),
+            ats_type,
+            len(current_ats_ids),
         )
         return []
-    await db.execute(text("""
+    await db.execute(
+        text("""
         UPDATE job_descriptions
-        SET is_active = FALSE, status = 'closed', job_status = 'closed', updated_at = NOW()
+        SET is_active = FALSE, status = 'closed', job_status = 'closed',
+            updated_at = NOW()
         WHERE id = ANY(CAST(:job_ids AS uuid[]))
-    """), {"job_ids": missing})
+    """),
+        {"job_ids": missing},
+    )
     logger.info(
         "[job-lifecycle] provider=%s snapshot_status=complete pages_fetched=1 "
-        "jobs_seen=%d jobs_closed=%d jobs_reactivated=0 jobs_skipped=0 reason=missing_from_complete_board",
-        ats_type, len(current_ats_ids), len(missing),
+        "jobs_seen=%d jobs_closed=%d jobs_reactivated=0 jobs_skipped=0 "
+        "reason=missing_from_complete_board",
+        ats_type,
+        len(current_ats_ids),
+        len(missing),
     )
     # Preserve recommendation/application history while removing it from all
     # candidate-visible paths.
-    await db.execute(text("""
+    await db.execute(
+        text("""
         UPDATE candidate_job_recommendations
         SET hidden_at = COALESCE(hidden_at, NOW())
         WHERE job_id = ANY(CAST(:job_ids AS uuid[]))
-    """), {"job_ids": missing})
+    """),
+        {"job_ids": missing},
+    )
     return missing
 
 
-async def _close_confirmed_jobs(db, *, ats_type: str, ats_job_ids: set[str]) -> list[str]:
+async def _close_confirmed_jobs(
+    db, *, ats_type: str, ats_job_ids: set[str]
+) -> list[str]:
     """Close only provider-confirmed jobs and preserve their history."""
     if not ats_job_ids:
         return []
-    result = await db.execute(text("""
+    result = await db.execute(
+        text("""
         SELECT id, ats_job_id
         FROM job_descriptions
         WHERE LOWER(ats_type) = :ats_type
           AND is_active IS TRUE
           AND ats_job_id = ANY(:ats_job_ids)
-    """), {"ats_type": ats_type, "ats_job_ids": list(ats_job_ids)})
+    """),
+        {"ats_type": ats_type, "ats_job_ids": list(ats_job_ids)},
+    )
     db_ids = [str(row[0]) for row in result.fetchall()]
     if not db_ids:
         return []
-    await db.execute(text("""
+    await db.execute(
+        text("""
         UPDATE job_descriptions
         SET is_active = FALSE, status = 'closed', job_status = 'closed', updated_at = NOW()
         WHERE id = ANY(CAST(:job_ids AS uuid[]))
-    """), {"job_ids": db_ids})
-    await db.execute(text("""
+    """),
+        {"job_ids": db_ids},
+    )
+    await db.execute(
+        text("""
         UPDATE candidate_job_recommendations
         SET hidden_at = COALESCE(hidden_at, NOW())
         WHERE job_id = ANY(CAST(:job_ids AS uuid[]))
-    """), {"job_ids": db_ids})
+    """),
+        {"job_ids": db_ids},
+    )
     return db_ids
+
+
+async def _close_confirmed_fantastic_job_board_jobs(
+    db, *, ats_job_ids: set[str]
+) -> tuple[list[str], int]:
+    """Close only confirmed LinkedIn job-board rows from Fantastic."""
+    if not ats_job_ids:
+        return [], 0
+    result = await db.execute(
+        text("""
+        SELECT id, ats_job_id, structured_data
+        FROM job_descriptions
+        WHERE LOWER(ats_type) = 'fantastic'
+          AND is_active IS TRUE
+          AND ats_job_id = ANY(:ats_job_ids)
+    """),
+        {"ats_job_ids": list(ats_job_ids)},
+    )
+    eligible_ids = []
+    skipped = 0
+    for row in result.fetchall():
+        structured = row[2] if isinstance(row[2], dict) else {}
+        source = structured.get("source")
+        fantastic_data = structured.get("fantastic")
+        if not source and isinstance(fantastic_data, dict):
+            source = fantastic_data.get("source")
+        source = str(source or "").strip().casefold()
+        feed = str(structured.get("fantastic_feed") or "").strip().casefold()
+        if source == "linkedin" and feed == "active-jb":
+            eligible_ids.append(str(row[0]))
+        else:
+            skipped += 1
+    if not eligible_ids:
+        return [], skipped
+    await db.execute(
+        text("""
+        UPDATE job_descriptions
+        SET is_active = FALSE, status = 'closed', job_status = 'closed', updated_at = NOW()
+        WHERE id = ANY(CAST(:job_ids AS uuid[]))
+    """),
+        {"job_ids": eligible_ids},
+    )
+    await db.execute(
+        text("""
+        UPDATE candidate_job_recommendations
+        SET hidden_at = COALESCE(hidden_at, NOW())
+        WHERE job_id = ANY(CAST(:job_ids AS uuid[]))
+    """),
+        {"job_ids": eligible_ids},
+    )
+    return eligible_ids, skipped
+
+
+async def cleanup_fantastic_expired_job_boards(client=None) -> dict[str, int]:
+    """Close only confirmed LinkedIn job-board expirations from Fantastic."""
+    from app.job_ingestion.connectors.fantastic import FantasticClient
+
+    client = client or FantasticClient()
+    checked = confirmed = unresolved = skipped = qdrant_failures = 0
+    try:
+        expired_ids = await client.fetch_expired_job_boards("1d")
+        checked = len(expired_ids)
+        SessionLocal = _get_session_local()
+        async with SessionLocal() as db:
+            closed_db_ids, skipped = await _close_confirmed_fantastic_job_board_jobs(
+                db, ats_job_ids=set(expired_ids)
+            )
+            await db.commit()
+            confirmed = len(closed_db_ids)
+            unresolved = max(0, checked - confirmed - skipped)
+            for job_id in closed_db_ids:
+                try:
+                    from app.job_ingestion.qdrant_service import delete_job_embedding
+
+                    delete_job_embedding(job_id)
+                except Exception as exc:
+                    qdrant_failures += 1
+                    logger.warning(
+                        "[job-lifecycle] provider=fantastic feed=active-jb "
+                        "qdrant_cleanup_failed job_id=%s error=%s",
+                        job_id,
+                        exc,
+                    )
+    except Exception as exc:
+        logger.error(
+            "[job-lifecycle] provider=fantastic feed=active-jb "
+            "jobs_checked=%d jobs_confirmed_closed=0 jobs_unresolved=0 "
+            "jobs_skipped=%d qdrant_failures=0 errors=1 reason=%s",
+            checked,
+            skipped,
+            exc,
+        )
+        return {
+            "jobs_checked": checked,
+            "jobs_confirmed_closed": 0,
+            "jobs_unresolved": 0,
+            "jobs_skipped": skipped,
+            "qdrant_failures": 0,
+            "api_requests_made": getattr(client, "_requests_used", 0),
+            "errors": 1,
+        }
+    logger.info(
+        "[job-lifecycle] provider=fantastic feed=active-jb jobs_checked=%d "
+        "jobs_confirmed_closed=%d jobs_unresolved=%d jobs_skipped=%d "
+        "qdrant_failures=%d errors=0",
+        checked,
+        confirmed,
+        unresolved,
+        skipped,
+        qdrant_failures,
+    )
+    return {
+        "jobs_checked": checked,
+        "jobs_confirmed_closed": confirmed,
+        "jobs_unresolved": unresolved,
+        "jobs_skipped": skipped,
+        "qdrant_failures": qdrant_failures,
+        "api_requests_made": getattr(client, "_requests_used", 0),
+        "errors": 0,
+    }
 
 
 async def cleanup_fantastic_expired_jobs() -> dict[str, int]:
     """Apply only IDs explicitly returned by Fantastic's expiration feed."""
     from app.job_ingestion.connectors.fantastic import FantasticClient
+
     checked = confirmed = already_closed = unresolved = 0
+    client = FantasticClient()
     try:
-        expired_ids = await FantasticClient().fetch_expired_ats_ids("1d")
+        expired_ids = await client.fetch_expired_ats_ids("1d")
         checked = len(expired_ids)
         SessionLocal = _get_session_local()
         async with SessionLocal() as db:
-            closed_db_ids = await _close_confirmed_jobs(db, ats_type="fantastic", ats_job_ids=set(expired_ids))
+            closed_db_ids = await _close_confirmed_jobs(
+                db, ats_type="fantastic", ats_job_ids=set(expired_ids)
+            )
             await db.commit()
             confirmed = len(closed_db_ids)
             unresolved = max(0, checked - confirmed)
             for job_id in closed_db_ids:
                 try:
                     from app.job_ingestion.qdrant_service import delete_job_embedding
+
                     delete_job_embedding(job_id)
                 except Exception as exc:
-                    logger.warning("[job-lifecycle] provider=fantastic qdrant_cleanup_failed job_id=%s error=%s", job_id, exc)
+                    logger.warning(
+                        "[job-lifecycle] provider=fantastic qdrant_cleanup_failed "
+                        "job_id=%s error=%s",
+                        job_id,
+                        exc,
+                    )
     except Exception as exc:
-        logger.error("[job-lifecycle] provider=fantastic checked_at=%s jobs_checked=%d jobs_confirmed_closed=0 jobs_already_closed=0 jobs_unresolved=0 errors=1 reason=%s", datetime.now(IST).isoformat(), checked, exc)
-        return {"jobs_checked": checked, "jobs_confirmed_closed": 0, "jobs_already_closed": 0, "jobs_unresolved": 0, "errors": 1}
-    logger.info("[job-lifecycle] provider=fantastic checked_at=%s jobs_checked=%d jobs_confirmed_closed=%d jobs_already_closed=0 jobs_unresolved=%d errors=0", datetime.now(IST).isoformat(), checked, confirmed, unresolved)
-    return {"jobs_checked": checked, "jobs_confirmed_closed": confirmed, "jobs_already_closed": already_closed, "jobs_unresolved": unresolved, "errors": 0}
+        logger.error(
+            "[job-lifecycle] provider=fantastic checked_at=%s jobs_checked=%d "
+            "jobs_confirmed_closed=0 jobs_already_closed=0 jobs_unresolved=0 "
+            "errors=1 reason=%s",
+            datetime.now(IST).isoformat(),
+            checked,
+            exc,
+        )
+        return {
+            "jobs_checked": checked,
+            "jobs_confirmed_closed": 0,
+            "jobs_already_closed": 0,
+            "jobs_unresolved": 0,
+            "api_requests_made": getattr(client, "_requests_used", 0),
+            "errors": 1,
+        }
+    job_board_stats = await cleanup_fantastic_expired_job_boards(client)
+    logger.info(
+        "[job-lifecycle] provider=fantastic checked_at=%s jobs_checked=%d "
+        "jobs_confirmed_closed=%d jobs_already_closed=0 jobs_unresolved=%d "
+        "errors=0",
+        datetime.now(IST).isoformat(),
+        checked,
+        confirmed,
+        unresolved,
+    )
+    return {
+        "jobs_checked": checked,
+        "jobs_confirmed_closed": confirmed,
+        "jobs_already_closed": already_closed,
+        "jobs_unresolved": unresolved,
+        "errors": int(bool(job_board_stats["errors"])),
+        "api_requests_made": job_board_stats["api_requests_made"],
+        "job_board_jobs_checked": job_board_stats["jobs_checked"],
+        "job_board_jobs_confirmed_closed": job_board_stats["jobs_confirmed_closed"],
+        "job_board_jobs_unresolved": job_board_stats["jobs_unresolved"],
+        "job_board_jobs_skipped": job_board_stats["jobs_skipped"],
+        "job_board_qdrant_failures": job_board_stats["qdrant_failures"],
+        "job_board_errors": job_board_stats["errors"],
+    }
 
 
 async def cleanup_theirstack_closed_jobs() -> dict[str, int]:
     """Batch exact TheirStack ID lookups and close explicit closed_at rows only."""
     from app.job_ingestion.connectors.theirstack import TheirStackClient
+
     SessionLocal = _get_session_local()
     async with SessionLocal() as db:
-        result = await db.execute(text("""
+        result = await db.execute(
+            text("""
             SELECT ats_job_id FROM job_descriptions
             WHERE LOWER(ats_type) = 'theirstack' AND is_active IS TRUE AND ats_job_id IS NOT NULL
-        """))
-        stored_ids = [str(row[0]).strip() for row in result.fetchall() if str(row[0]).strip().isdigit()]
+        """)
+        )
+        stored_ids = [
+            str(row[0]).strip()
+            for row in result.fetchall()
+            if str(row[0]).strip().isdigit()
+        ]
     checked = confirmed = unresolved = errors = 0
     try:
         client = TheirStackClient()
         for offset in range(0, len(stored_ids), 100):
-            batch = stored_ids[offset:offset + 100]
+            batch = stored_ids[offset : offset + 100]
             jobs = await client.fetch_jobs_by_ids(batch)
             checked += len(batch)
-            closed_ids = {str(job.get("id")).strip() for job in jobs if job.get("closed_at") is not None}
+            batch_ids = set(batch)
+            closed_ids = {
+                job_id
+                for job in jobs
+                if isinstance(job, dict)
+                and (job_id := str(job.get("id") or "").strip()) in batch_ids
+                and parse_ats_datetime(job.get("closed_at")) is not None
+            }
             if closed_ids:
                 async with SessionLocal() as db:
-                    closed_db_ids = await _close_confirmed_jobs(db, ats_type="theirstack", ats_job_ids=closed_ids)
+                    closed_db_ids = await _close_confirmed_jobs(
+                        db, ats_type="theirstack", ats_job_ids=closed_ids
+                    )
                     await db.commit()
                     confirmed += len(closed_db_ids)
                     for job_id in closed_db_ids:
                         try:
-                            from app.job_ingestion.qdrant_service import delete_job_embedding
+                            from app.job_ingestion.qdrant_service import (
+                                delete_job_embedding,
+                            )
+
                             delete_job_embedding(job_id)
                         except Exception as exc:
-                            logger.warning("[job-lifecycle] provider=theirstack qdrant_cleanup_failed job_id=%s error=%s", job_id, exc)
+                            logger.warning(
+                                "[job-lifecycle] provider=theirstack "
+                                "qdrant_cleanup_failed job_id=%s error=%s",
+                                job_id,
+                                exc,
+                            )
             unresolved += len(set(batch) - closed_ids)
     except Exception as exc:
         errors = 1
-        logger.error("[job-lifecycle] provider=theirstack checked_at=%s jobs_checked=%d jobs_confirmed_closed=%d jobs_already_closed=0 jobs_unresolved=%d errors=1 reason=%s", datetime.now(IST).isoformat(), checked, confirmed, unresolved, exc)
+        logger.error(
+            "[job-lifecycle] provider=theirstack checked_at=%s jobs_checked=%d "
+            "jobs_confirmed_closed=%d jobs_already_closed=0 jobs_unresolved=%d "
+            "errors=1 reason=%s",
+            datetime.now(IST).isoformat(),
+            checked,
+            confirmed,
+            unresolved,
+            exc,
+        )
     else:
-        logger.info("[job-lifecycle] provider=theirstack checked_at=%s jobs_checked=%d jobs_confirmed_closed=%d jobs_already_closed=0 jobs_unresolved=%d errors=0", datetime.now(IST).isoformat(), checked, confirmed, unresolved)
-    return {"jobs_checked": checked, "jobs_confirmed_closed": confirmed, "jobs_already_closed": 0, "jobs_unresolved": unresolved, "errors": errors}
+        logger.info(
+            "[job-lifecycle] provider=theirstack checked_at=%s jobs_checked=%d "
+            "jobs_confirmed_closed=%d jobs_already_closed=0 jobs_unresolved=%d "
+            "errors=0",
+            datetime.now(IST).isoformat(),
+            checked,
+            confirmed,
+            unresolved,
+        )
+    return {
+        "jobs_checked": checked,
+        "jobs_confirmed_closed": confirmed,
+        "jobs_already_closed": 0,
+        "jobs_unresolved": unresolved,
+        "errors": errors,
+    }
 
 
 def _complete_board_payload(jobs) -> tuple[bool, set[str]]:
@@ -189,7 +450,9 @@ def _complete_board_payload(jobs) -> tuple[bool, set[str]]:
         return False, set()
     ids = set()
     for job in jobs:
-        job_id = str(job.get("ats_job_id") or "").strip() if isinstance(job, dict) else ""
+        job_id = (
+            str(job.get("ats_job_id") or "").strip() if isinstance(job, dict) else ""
+        )
         if not job_id:
             return False, set()
         ids.add(job_id)
@@ -200,14 +463,21 @@ def _get_session_local():
     """Import SessionLocal from server to reuse the existing DB setup."""
     sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
     from server import SessionLocal  # noqa: PLC0415
+
     return SessionLocal
 
 
 async def sync_jobs() -> None:
     """Fetch and upsert jobs for every active company in company_registry."""
     from app.job_ingestion.collect_jobs import JobCollector
-    from app.job_ingestion.job_ingestion_service import find_existing_ats_job, upsert_ats_job
-    from app.job_ingestion.job_skill_extraction import extract_missing_job_skills, has_sufficient_deterministic_metadata
+    from app.job_ingestion.job_ingestion_service import (
+        find_existing_ats_job,
+        upsert_ats_job,
+    )
+    from app.job_ingestion.job_skill_extraction import (
+        extract_missing_job_skills,
+        has_sufficient_deterministic_metadata,
+    )
 
     SessionLocal = _get_session_local()
     collector = JobCollector()
@@ -219,7 +489,9 @@ async def sync_jobs() -> None:
     except Exception as exc:
         # Metadata retries are auxiliary to the provider sync; one database or
         # row-level problem must not prevent the normal ATS cycle.
-        logger.error("[job-scheduler] pending metadata retry pass failed: %s", exc, exc_info=True)
+        logger.error(
+            "[job-scheduler] pending metadata retry pass failed: %s", exc, exc_info=True
+        )
 
     async with SessionLocal() as db:
         result = await db.execute(
@@ -243,18 +515,31 @@ async def sync_jobs() -> None:
 
         normalized_ats_type = str(ats_type or "").strip().casefold()
         if not provider_enabled(normalized_ats_type):
-            logger.info("[job-scheduler] skipping disabled provider company=%s ats=%s", company_name, normalized_ats_type)
+            logger.info(
+                "[job-scheduler] skipping disabled provider company=%s ats=%s",
+                company_name,
+                normalized_ats_type,
+            )
             continue
 
         try:
             jobs = collector.collect_company_jobs(ats_type, identifier, company_name)
         except Exception as exc:
-            logger.error("[job-scheduler] failed to fetch jobs for company=%s: %s", company_name, exc, exc_info=True)
+            logger.error(
+                "[job-scheduler] failed to fetch jobs for company=%s: %s",
+                company_name,
+                exc,
+                exc_info=True,
+            )
             continue
 
         complete, current_ats_ids = _complete_board_payload(jobs)
         if not complete:
-            logger.error("[job-scheduler] incomplete ATS payload for company=%s; reconciliation skipped", company_name)
+            logger.error(
+                "[job-scheduler] incomplete ATS payload for company=%s; "
+                "reconciliation skipped",
+                company_name,
+            )
             continue
 
         total = len(jobs)
@@ -269,15 +554,23 @@ async def sync_jobs() -> None:
             for job in jobs:
                 job_ats_id = str(job.get("ats_job_id") or "")
                 try:
-                    existing = await find_existing_ats_job(db, str(job.get("ats_type") or ""), job_ats_id)
-                    if _existing_ats_job_needs_extraction(job, existing, has_sufficient_deterministic_metadata):
+                    existing = await find_existing_ats_job(
+                        db, str(job.get("ats_type") or ""), job_ats_id
+                    )
+                    if _existing_ats_job_needs_extraction(
+                        job, existing, has_sufficient_deterministic_metadata
+                    ):
                         job = await extract_missing_job_skills(job)
                     else:
                         skipped += 1
                     await upsert_ats_job(db, job, existing_job=existing)
                     inserted += 1
                     if inserted % PROGRESS_INTERVAL == 0:
-                        logger.info("[job-scheduler] inserted %d new jobs for %s so far", inserted, company_name)
+                        logger.info(
+                            "[job-scheduler] inserted %d new jobs for %s so far",
+                            inserted,
+                            company_name,
+                        )
                 except Exception as exc:
                     failed += 1
                     # A provider-wide schema failure can affect every job on
@@ -285,13 +578,18 @@ async def sync_jobs() -> None:
                     # exhausting Railway's log-rate allowance.
                     if logged_failures < MAX_LOGGED_JOB_FAILURES:
                         logger.error(
-                            "[job-scheduler] failed job id=%s title=%r for company=%s: %s",
-                            job_ats_id, job.get("title"), company_name, exc,
+                            "[job-scheduler] failed job id=%s title=%r for "
+                            "company=%s: %s",
+                            job_ats_id,
+                            job.get("title"),
+                            company_name,
+                            exc,
                         )
                         logged_failures += 1
                     elif logged_failures == MAX_LOGGED_JOB_FAILURES:
                         logger.error(
-                            "[job-scheduler] additional per-job failures for company=%s are suppressed",
+                            "[job-scheduler] additional per-job failures for "
+                            "company=%s are suppressed",
                             company_name,
                         )
                         logged_failures += 1
@@ -304,7 +602,9 @@ async def sync_jobs() -> None:
             if failed == 0:
                 try:
                     missing_ids = await reconcile_missing_ats_jobs(
-                        db, company_registry_id=company_id, ats_type=str(ats_type).lower(),
+                        db,
+                        company_registry_id=company_id,
+                        ats_type=str(ats_type).lower(),
                         current_ats_ids=current_ats_ids,
                     )
                     await db.execute(
@@ -319,36 +619,59 @@ async def sync_jobs() -> None:
                     synced_at_updated = True
                     for job_id in missing_ids:
                         try:
-                            from app.job_ingestion.qdrant_service import delete_job_embedding
+                            from app.job_ingestion.qdrant_service import (
+                                delete_job_embedding,
+                            )
+
                             delete_job_embedding(job_id)
                         except Exception as exc:
                             # DB eligibility and hidden recommendations remain the safety net.
-                            logger.warning("[job-scheduler] Qdrant delete failed for job_id=%s: %s", job_id, exc)
+                            logger.warning(
+                                "[job-scheduler] Qdrant delete failed for "
+                                "job_id=%s: %s",
+                                job_id,
+                                exc,
+                            )
                 except Exception as exc:
-                    logger.error("[job-scheduler] failed to update last_synced_at for company=%s: %s", company_name, exc)
+                    logger.error(
+                        "[job-scheduler] failed to update last_synced_at for "
+                        "company=%s: %s",
+                        company_name,
+                        exc,
+                    )
 
         logger.info(
-            "[job-scheduler] ATS returned %d jobs", total,
+            "[job-scheduler] ATS returned %d jobs",
+            total,
         )
         logger.info("[job-scheduler] Existing jobs skipped: %d", skipped)
         logger.info("[job-scheduler] New jobs inserted: %d", inserted)
         logger.info("[job-scheduler] Embeddings generated: %d", inserted)
         logger.info(
             "[job-scheduler] company=%s failed=%d last_synced_at_updated=%s",
-            company_name, failed, synced_at_updated,
+            company_name,
+            failed,
+            synced_at_updated,
         )
 
     logger.info("[job-scheduler] Job sync completed")
 
 
 def _existing_ats_job_needs_extraction(
-    job: dict, existing: dict | None, sufficient_metadata, sufficient_global_provider_metadata=None
+    job: dict,
+    existing: dict | None,
+    sufficient_metadata,
+    sufficient_global_provider_metadata=None,
 ) -> bool:
     """Keep semantic extraction for new, changed, incomplete, or queued jobs."""
     if existing is None:
         return True
     structured = existing.get("structured_data")
-    status = structured.get("metadata_extraction_status") if isinstance(structured, dict) else None
+    status = (
+        structured.get("metadata_extraction_status")
+        if isinstance(structured, dict)
+        else None
+    )
     if status in {"pending", "pending_retry"}:
         return True
     incoming_description = str(job.get("description") or "").strip()
@@ -359,6 +682,7 @@ def _existing_ats_job_needs_extraction(
         # however, its fingerprint proves that repeatedly receiving the same
         # lower-quality response is not a new extraction event.
         from app.job_ingestion.job_ingestion_service import description_fingerprint
+
         processed = (
             structured.get("description_extraction_fingerprint")
             if isinstance(structured, dict)
@@ -406,13 +730,20 @@ def _same_ats_identity(job: dict, existing: dict | None) -> bool:
 async def _sync_jobs_guarded() -> None:
     """Wrapper that prevents overlapping runs."""
     if not _scheduler_enabled():
-        logger.info("[job-scheduler] job_id=job_sync skipped because JOB_SCHEDULER_ENABLED=false")
+        logger.info(
+            "[job-scheduler] job_id=job_sync skipped because "
+            "JOB_SCHEDULER_ENABLED=false"
+        )
         return
     if _sync_lock is None:
-        logger.warning("[job-scheduler] sync called before scheduler was started — skipping")
+        logger.warning(
+            "[job-scheduler] sync called before scheduler was started — skipping"
+        )
         return
     if _sync_lock.locked():
-        logger.info("[job-scheduler] previous sync still running — skipping this interval")
+        logger.info(
+            "[job-scheduler] previous sync still running — skipping this interval"
+        )
         return
     async with _sync_lock:
         logger.info("[job-scheduler] job_id=job_sync started")
@@ -437,7 +768,8 @@ async def retry_pending_metadata_extraction() -> int:
     SessionLocal = _get_session_local()
     completed = 0
     async with SessionLocal() as db:
-        result = await db.execute(text("""
+        result = await db.execute(
+            text("""
             SELECT id, ats_type, ats_job_id, title, company_name, department,
                    location, responsibilities, city, state, country, remote,
                    company_website_url, company_logo_url, industry, valid_through,
@@ -448,13 +780,20 @@ async def retry_pending_metadata_extraction() -> int:
             WHERE structured_data->>'metadata_extraction_status' = 'pending_retry'
             ORDER BY updated_at NULLS FIRST, id
             LIMIT :batch_size
-        """), {"batch_size": METADATA_RETRY_BATCH_SIZE})
+        """),
+            {"batch_size": METADATA_RETRY_BATCH_SIZE},
+        )
         rows = result.mappings().all()
 
         for row in rows:
             ats_type = str(row.get("ats_type") or "").strip().casefold()
             if not provider_enabled(ats_type):
-                logger.info("[job-scheduler] skipping metadata retry for disabled provider=%s job_id=%s", ats_type, row.get("id"))
+                logger.info(
+                    "[job-scheduler] skipping metadata retry for disabled "
+                    "provider=%s job_id=%s",
+                    ats_type,
+                    row.get("id"),
+                )
                 continue
             job = dict(row)
             try:
@@ -463,46 +802,97 @@ async def retry_pending_metadata_extraction() -> int:
                 # Do not persist an unavailable/failed attempt.  In
                 # particular, this avoids replacing existing metadata with
                 # the incomplete retry payload.
-                if not isinstance(structured, dict) or structured.get("metadata_extraction_status") != "complete":
+                if (
+                    not isinstance(structured, dict)
+                    or structured.get("metadata_extraction_status") != "complete"
+                ):
                     continue
                 await upsert_ats_job(db, job)
                 completed += 1
             except Exception as exc:
-                logger.warning("[job-scheduler] metadata retry failed id=%s: %s", row.get("id"), exc)
+                logger.warning(
+                    "[job-scheduler] metadata retry failed id=%s: %s",
+                    row.get("id"),
+                    exc,
+                )
                 await db.rollback()
         if completed:
             await db.commit()
-    logger.info("[job-scheduler] metadata retries completed=%d batch=%d", completed, len(rows))
+    logger.info(
+        "[job-scheduler] metadata retries completed=%d batch=%d", completed, len(rows)
+    )
     return completed
 
 
 async def sync_fantastic_jobs() -> dict:
     """Sync both bounded Fantastic active feeds through the shared persistence path."""
     from app.job_ingestion.connectors.fantastic import FantasticClient
-    from app.job_ingestion.job_ingestion_service import find_existing_ats_job_by_id_or_url, upsert_ats_job
-    from app.job_ingestion.job_skill_extraction import extract_missing_job_skills, has_sufficient_deterministic_metadata, has_sufficient_global_provider_metadata
+    from app.job_ingestion.job_ingestion_service import (
+        find_existing_ats_job_by_id_or_url,
+        upsert_ats_job,
+    )
+    from app.job_ingestion.job_skill_extraction import (
+        extract_missing_job_skills,
+        has_sufficient_deterministic_metadata,
+        has_sufficient_global_provider_metadata,
+    )
+
     if not provider_enabled("fantastic"):
         return {"fetched": 0, "inserted": 0, "updated": 0, "skipped": 0, "failed": 0}
     logger.info("[fantastic] starting sync")
     client = FantasticClient()
-    feeds = (("active-ats", client.fetch_active_ats), ("active-jb", client.fetch_active_job_boards))
+    feeds = (
+        ("active-ats", client.fetch_active_ats),
+        ("active-jb", client.fetch_active_job_boards),
+    )
     from app.job_ingestion.normalize import normalize_fantastic
     from location_matching import country_code
+
     per_feed = {}
     accepted = []
     seen_ids, seen_urls, seen_fingerprints = set(), set(), set()
+
+    def _feed_stats(endpoint: str, *, capture_current: bool = True) -> dict:
+        stats = {
+            "endpoint": endpoint,
+            "fetched": 0,
+            "pages_requested": 0,
+            "requests_made": 0,
+            "success": True,
+            "partial": False,
+            "budget_exhausted": False,
+            "stop_reason": None,
+            "error": None,
+        }
+        if capture_current:
+            current = getattr(client, "last_fetch_stats", None)
+            if isinstance(current, dict) and current.get("endpoint") == endpoint:
+                stats.update(current)
+        stats.update(
+            {
+                "accepted_india": 0,
+                "rejected_country": 0,
+                "rejected_expired": 0,
+                "duplicates": 0,
+            }
+        )
+        return stats
+
     for feed_name, fetch in feeds:
-        feed_stats = {"fetched": 0, "accepted_india": 0, "rejected_country": 0,
-                      "rejected_expired": 0, "duplicates": 0, "pages_requested": 0, "requests_made": 0}
+        feed_stats = _feed_stats(feed_name, capture_current=False)
         try:
             raw_jobs = await fetch()
-            feed_stats.update({key: value for key, value in getattr(client, "last_fetch_stats", {}).items()
-                               if key in {"fetched", "pages_requested", "requests_made"}})
         except Exception as exc:
             logger.error("[fantastic] %s fetch failed: %s", feed_name, exc)
+            feed_stats = _feed_stats(feed_name)
+            feed_stats["success"] = False
+            feed_stats["partial"] = True
+            feed_stats["stop_reason"] = feed_stats.get("stop_reason") or "request_error"
+            feed_stats["error"] = feed_stats.get("error") or "request_error"
             feed_stats["failed"] = 1
             per_feed[feed_name] = feed_stats
             continue
+        feed_stats = _feed_stats(feed_name)
         for raw in raw_jobs:
             job = normalize_fantastic(raw)
             job.setdefault("structured_data", {})["fantastic_feed"] = feed_name
@@ -510,38 +900,69 @@ async def sync_fantastic_jobs() -> dict:
                 feed_stats["rejected_country"] += 1
                 continue
             valid_through = job.get("valid_through")
-            if valid_through is not None and valid_through < datetime.now(valid_through.tzinfo or IST):
+            if valid_through is not None and valid_through < datetime.now(
+                valid_through.tzinfo or IST
+            ):
                 feed_stats["rejected_expired"] += 1
                 continue
             identity = (job.get("ats_job_id") or "").strip()
             url = (job.get("job_url") or "").strip().casefold()
-            fingerprint = tuple(str(job.get(key) or "").strip().casefold()
-                                for key in ("company_name", "title", "city", "state", "country"))
-            duplicate = ((identity and identity in seen_ids) or (url and url in seen_urls)
-                         or (all(fingerprint) and fingerprint in seen_fingerprints))
+            fingerprint = tuple(
+                str(job.get(key) or "").strip().casefold()
+                for key in ("company_name", "title", "city", "state", "country")
+            )
+            duplicate = (
+                (identity and identity in seen_ids)
+                or (url and url in seen_urls)
+                or (all(fingerprint) and fingerprint in seen_fingerprints)
+            )
             if duplicate:
                 feed_stats["duplicates"] += 1
                 continue
-            if identity: seen_ids.add(identity)
-            if url: seen_urls.add(url)
-            if all(fingerprint): seen_fingerprints.add(fingerprint)
+            if identity:
+                seen_ids.add(identity)
+            if url:
+                seen_urls.add(url)
+            if all(fingerprint):
+                seen_fingerprints.add(fingerprint)
             feed_stats["accepted_india"] += 1
             accepted.append((feed_name, job))
         per_feed[feed_name] = feed_stats
 
-    stats = {"fetched": sum(s["fetched"] for s in per_feed.values()),
-             "accepted": sum(s["accepted_india"] for s in per_feed.values()),
-             "rejected": sum(s["rejected_country"] for s in per_feed.values()),
-             "duplicates": sum(s["duplicates"] for s in per_feed.values()),
-             "inserted": 0, "updated": 0, "skipped": 0,
-             "failed": sum(s.get("failed", 0) for s in per_feed.values()),
-             "pages_requested": sum(s["pages_requested"] for s in per_feed.values()),
-             "requests_made": sum(s["requests_made"] for s in per_feed.values())}
+    accepted_india = sum(s["accepted_india"] for s in per_feed.values())
+    rejected_country = sum(s["rejected_country"] for s in per_feed.values())
+    rejected_expired = sum(s["rejected_expired"] for s in per_feed.values())
+    failed_feeds = sum(s.get("failed", 0) for s in per_feed.values())
+    stats = {
+        "fetched": sum(s["fetched"] for s in per_feed.values()),
+        "accepted_india": accepted_india,
+        "accepted": accepted_india,
+        "rejected_country": rejected_country,
+        "rejected": rejected_country,
+        "rejected_expired": rejected_expired,
+        "duplicates": sum(s["duplicates"] for s in per_feed.values()),
+        "inserted": 0,
+        "updated": 0,
+        "skipped": 0,
+        "failed": failed_feeds,
+        "failed_feeds": failed_feeds,
+        "pages_requested": sum(s["pages_requested"] for s in per_feed.values()),
+        "requests_made": sum(s["requests_made"] for s in per_feed.values()),
+        "requests_budget": client.config.max_requests_per_run,
+        "requests_remaining": max(
+            0, client.config.max_requests_per_run - client._requests_used
+        ),
+        "budget_exhausted": any(s["budget_exhausted"] for s in per_feed.values()),
+        "partial": any(s["partial"] for s in per_feed.values()),
+        "success": all(s["success"] for s in per_feed.values()),
+    }
     SessionLocal = _get_session_local()
+    persistence_failed = False
     async with SessionLocal() as db:
         for feed_name, job in accepted:
             if not job["ats_job_id"] or not job["title"] or not job["job_url"]:
-                stats["skipped"] += 1; continue
+                stats["skipped"] += 1
+                continue
             try:
                 existing_job = await find_existing_ats_job_by_id_or_url(
                     db, "fantastic", job["ats_job_id"], job["job_url"]
@@ -551,7 +972,9 @@ async def sync_fantastic_jobs() -> dict:
                     per_feed[feed_name]["duplicates"] += 1
                     continue
                 if _existing_ats_job_needs_extraction(
-                    job, existing_job, has_sufficient_deterministic_metadata,
+                    job,
+                    existing_job,
+                    has_sufficient_deterministic_metadata,
                     has_sufficient_global_provider_metadata,
                 ):
                     job = await extract_missing_job_skills(job)
@@ -561,37 +984,88 @@ async def sync_fantastic_jobs() -> dict:
                 stats["updated" if existing_job else "inserted"] += 1
             except Exception as exc:
                 stats["failed"] += 1
+                persistence_failed = True
                 _log_fantastic_upsert_error(exc, job)
                 await db.rollback()
+    if persistence_failed:
+        stats["success"] = False
+        stats["partial"] = True
     for feed_name, feed_stats in per_feed.items():
         logger.info("[fantastic] feed=%s stats=%s", feed_name, feed_stats)
+    logger.info(
+        "[fantastic] active sync fetched=%d accepted_india=%d rejected_country=%d "
+        "rejected_expired=%d duplicates=%d inserted=%d updated=%d skipped=%d "
+        "failed=%d failed_feeds=%d requests_made=%d requests_budget=%d "
+        "requests_remaining=%d budget_exhausted=%s partial=%s success=%s",
+        stats["fetched"],
+        stats["accepted_india"],
+        stats["rejected_country"],
+        stats["rejected_expired"],
+        stats["duplicates"],
+        stats["inserted"],
+        stats["updated"],
+        stats["skipped"],
+        stats["failed"],
+        stats["failed_feeds"],
+        stats["requests_made"],
+        stats["requests_budget"],
+        stats["requests_remaining"],
+        stats["budget_exhausted"],
+        stats["partial"],
+        stats["success"],
+    )
     logger.info(
         "[job-lifecycle] provider=fantastic snapshot_status=bounded_non_snapshot "
         "pages_fetched=%d jobs_seen=%d jobs_closed=0 jobs_reactivated=0 jobs_skipped=%d "
         "reason=bounded_active_feed_absence_is_not_safe_to_reconcile",
-        stats["pages_requested"], stats["fetched"], stats["skipped"],
+        stats["pages_requested"],
+        stats["fetched"],
+        stats["skipped"],
     )
     logger.info("[fantastic] sync completed stats=%s", stats)
     stats["feeds"] = per_feed
     return stats
 
+
 async def sync_theirstack_jobs() -> dict[str, int]:
     from app.job_ingestion.connectors.theirstack import TheirStackClient
-    from app.job_ingestion.job_ingestion_service import find_existing_ats_job_by_id_or_url, upsert_ats_job
-    from app.job_ingestion.job_skill_extraction import extract_missing_job_skills, has_sufficient_deterministic_metadata, has_sufficient_global_provider_metadata
+    from app.job_ingestion.job_ingestion_service import (
+        find_existing_ats_job_by_id_or_url,
+        upsert_ats_job,
+    )
+    from app.job_ingestion.job_skill_extraction import (
+        extract_missing_job_skills,
+        has_sufficient_deterministic_metadata,
+        has_sufficient_global_provider_metadata,
+    )
     from app.job_ingestion.normalize import normalize_theirstack
+
     if not provider_enabled("theirstack"):
         return {"fetched": 0, "inserted": 0, "updated": 0, "skipped": 0, "failed": 0}
-    try: raw_jobs = await TheirStackClient().fetch_jobs()
+    try:
+        raw_jobs = await TheirStackClient().fetch_jobs()
     except Exception as exc:
-        logger.error("[theirstack] sync fetch failed: %s", exc); return {"fetched": 0, "inserted": 0, "updated": 0, "skipped": 0, "failed": 1}
-    stats = {"fetched": len(raw_jobs), "inserted": 0, "updated": 0, "skipped": 0, "failed": 0}
+        logger.error("[theirstack] sync fetch failed: %s", exc)
+        return {"fetched": 0, "inserted": 0, "updated": 0, "skipped": 0, "failed": 1}
+    stats = {
+        "fetched": len(raw_jobs),
+        "inserted": 0,
+        "updated": 0,
+        "skipped": 0,
+        "failed": 0,
+    }
     SessionLocal = _get_session_local()
     async with SessionLocal() as db:
         for raw in raw_jobs:
             job = normalize_theirstack(raw)
-            if not job["ats_job_id"] or not job["title"] or not job["job_url"] or str(job.get("country") or "").casefold() not in {"india", "in"}:
-                stats["skipped"] += 1; continue
+            if (
+                not job["ats_job_id"]
+                or not job["title"]
+                or not job["job_url"]
+                or str(job.get("country") or "").casefold() not in {"india", "in"}
+            ):
+                stats["skipped"] += 1
+                continue
             try:
                 existing_job = await find_existing_ats_job_by_id_or_url(
                     db, "theirstack", job["ats_job_id"], job["job_url"]
@@ -599,28 +1073,46 @@ async def sync_theirstack_jobs() -> dict[str, int]:
                 # A URL is only a collision guard.  It must never select a
                 # row for a different TheirStack stable ID (or provider).
                 if existing_job and not _same_ats_identity(job, existing_job):
-                    stats["skipped"] += 1; continue
+                    stats["skipped"] += 1
+                    continue
                 if _existing_ats_job_needs_extraction(
-                    job, existing_job, has_sufficient_deterministic_metadata,
+                    job,
+                    existing_job,
+                    has_sufficient_deterministic_metadata,
                     has_sufficient_global_provider_metadata,
                 ):
                     job = await extract_missing_job_skills(job)
                 else:
                     stats["skipped"] += 1
-                await upsert_ats_job(db, job, existing_job=existing_job); stats["updated" if existing_job else "inserted"] += 1
+                await upsert_ats_job(db, job, existing_job=existing_job)
+                stats["updated" if existing_job else "inserted"] += 1
             except Exception as exc:
-                stats["failed"] += 1; logger.warning("[theirstack] job upsert failed id=%s title=%r: %s", job.get("ats_job_id"), job.get("title"), exc); await db.rollback()
+                stats["failed"] += 1
+                logger.warning(
+                    "[theirstack] job upsert failed id=%s title=%r: %s",
+                    job.get("ats_job_id"),
+                    job.get("title"),
+                    exc,
+                )
+                await db.rollback()
     logger.info(
         "[job-lifecycle] provider=theirstack snapshot_status=bounded_search_non_snapshot "
-        "pages_fetched=unknown jobs_seen=%d jobs_closed=0 jobs_reactivated=0 jobs_skipped=%d "
+        "pages_fetched=unknown jobs_seen=%d jobs_closed=0 jobs_reactivated=0 "
+        "jobs_skipped=%d "
         "reason=search_response_is_not_proven_complete",
-        stats["fetched"], stats["skipped"],
+        stats["fetched"],
+        stats["skipped"],
     )
-    logger.info("[theirstack] sync completed %s", stats); return stats
+    logger.info("[theirstack] sync completed %s", stats)
+    return stats
+
 
 async def _sync_theirstack_guarded() -> None:
     if not _scheduler_enabled():
-        logger.info("[job-scheduler] job_id=theirstack_job_sync skipped because JOB_SCHEDULER_ENABLED=false")
+        logger.info(
+            "[job-scheduler] job_id=theirstack_job_sync skipped because "
+            "JOB_SCHEDULER_ENABLED=false"
+        )
         return
     logger.info("[job-scheduler] job_id=theirstack_job_sync started")
     try:
@@ -640,11 +1132,14 @@ def _log_fantastic_upsert_error(exc: Exception, job: dict) -> None:
     limited to its public identity fields; ``structured_data`` can contain the
     provider's complete response and must never be logged here.
     """
-    database_error = exc
+    database_error: object | None = exc
     seen: set[int] = set()
     while database_error is not None and id(database_error) not in seen:
         seen.add(id(database_error))
-        if any(hasattr(database_error, name) for name in ("sqlstate", "constraint_name", "column_name")):
+        if any(
+            hasattr(database_error, name)
+            for name in ("sqlstate", "constraint_name", "column_name")
+        ):
             break
         database_error = (
             getattr(database_error, "orig", None)
@@ -667,7 +1162,10 @@ def _log_fantastic_upsert_error(exc: Exception, job: dict) -> None:
 
 async def _sync_fantastic_guarded() -> None:
     if not _scheduler_enabled():
-        logger.info("[job-scheduler] job_id=fantastic_job_sync skipped because JOB_SCHEDULER_ENABLED=false")
+        logger.info(
+            "[job-scheduler] job_id=fantastic_job_sync skipped because "
+            "JOB_SCHEDULER_ENABLED=false"
+        )
         return
     logger.info("[job-scheduler] job_id=fantastic_job_sync started")
     try:
@@ -680,7 +1178,10 @@ async def _sync_fantastic_guarded() -> None:
 
 async def _cleanup_fantastic_expired_jobs_guarded() -> None:
     if not _scheduler_enabled():
-        logger.info("[job-scheduler] job_id=fantastic_expiration_cleanup skipped because JOB_SCHEDULER_ENABLED=false")
+        logger.info(
+            "[job-scheduler] job_id=fantastic_expiration_cleanup skipped because "
+            "JOB_SCHEDULER_ENABLED=false"
+        )
         return
     logger.info("[job-scheduler] job_id=fantastic_expiration_cleanup started")
     try:
@@ -693,7 +1194,10 @@ async def _cleanup_fantastic_expired_jobs_guarded() -> None:
 
 async def _cleanup_theirstack_closed_jobs_guarded() -> None:
     if not _scheduler_enabled():
-        logger.info("[job-scheduler] job_id=theirstack_expiration_cleanup skipped because JOB_SCHEDULER_ENABLED=false")
+        logger.info(
+            "[job-scheduler] job_id=theirstack_expiration_cleanup skipped because "
+            "JOB_SCHEDULER_ENABLED=false"
+        )
         return
     logger.info("[job-scheduler] job_id=theirstack_expiration_cleanup started")
     try:
@@ -706,7 +1210,11 @@ async def _cleanup_theirstack_closed_jobs_guarded() -> None:
 
 def _apscheduler_listener(event) -> None:
     if event.exception:
-        logger.error("[job-scheduler] job_id=%s execution failed: %s", event.job_id, event.exception)
+        logger.error(
+            "[job-scheduler] job_id=%s execution failed: %s",
+            event.job_id,
+            event.exception,
+        )
     else:
         logger.info("[job-scheduler] job_id=%s execution completed", event.job_id)
 
@@ -717,8 +1225,8 @@ def _ats_sync_trigger() -> CronTrigger:
 
 
 def _fantastic_sync_trigger() -> CronTrigger:
-    """Return the Fantastic sync schedule aligned with the ATS schedule in IST."""
-    return CronTrigger(hour=SYNC_HOURS_IST, minute=0, second=0, timezone=IST)
+    """Return the daily Fantastic active-feed schedule at 07:00 IST."""
+    return CronTrigger(hour=7, minute=0, second=0, timezone=IST)
 
 
 def start_scheduler() -> None:
@@ -729,11 +1237,16 @@ def start_scheduler() -> None:
         # A lifecycle restart can reuse this module in-process. Ensure a
         # previously started instance cannot survive a disabled startup.
         stop_scheduler()
-        logger.info("[job-scheduler] scheduler skipped because JOB_SCHEDULER_ENABLED=false")
+        logger.info(
+            "[job-scheduler] scheduler skipped because JOB_SCHEDULER_ENABLED=false"
+        )
         return
 
     if _scheduler is not None and _scheduler.running:
-        logger.info("[job-scheduler] scheduler already running in this process; skipping duplicate startup")
+        logger.info(
+            "[job-scheduler] scheduler already running in this process; "
+            "skipping duplicate startup"
+        )
         return
 
     logger.info("[job-scheduler] Starting scheduler")
@@ -759,15 +1272,33 @@ def start_scheduler() -> None:
         fantastic_job = _scheduler.add_job(
             _sync_fantastic_guarded,
             trigger=_fantastic_sync_trigger(),
-            id="fantastic_job_sync", replace_existing=True,
+            id="fantastic_job_sync",
+            replace_existing=True,
         )
-        logger.info("[fantastic] next sync scheduled for %s", fantastic_job.next_run_time)
+        logger.info(
+            "[fantastic] next sync scheduled for %s", fantastic_job.next_run_time
+        )
     if provider_enabled("theirstack"):
-        _scheduler.add_job(_sync_theirstack_guarded, trigger=_fantastic_sync_trigger(), id="theirstack_job_sync", replace_existing=True)
+        _scheduler.add_job(
+            _sync_theirstack_guarded,
+            trigger=_fantastic_sync_trigger(),
+            id="theirstack_job_sync",
+            replace_existing=True,
+        )
     if provider_enabled("fantastic"):
-        _scheduler.add_job(_cleanup_fantastic_expired_jobs_guarded, trigger=CronTrigger(hour=12, minute=30, timezone=IST), id="fantastic_expiration_cleanup", replace_existing=True)
+        _scheduler.add_job(
+            _cleanup_fantastic_expired_jobs_guarded,
+            trigger=CronTrigger(hour=12, minute=30, timezone=IST),
+            id="fantastic_expiration_cleanup",
+            replace_existing=True,
+        )
     if provider_enabled("theirstack"):
-        _scheduler.add_job(_cleanup_theirstack_closed_jobs_guarded, trigger=CronTrigger(hour=12, minute=30, timezone=IST), id="theirstack_expiration_cleanup", replace_existing=True)
+        _scheduler.add_job(
+            _cleanup_theirstack_closed_jobs_guarded,
+            trigger=CronTrigger(hour=12, minute=30, timezone=IST),
+            id="theirstack_expiration_cleanup",
+            replace_existing=True,
+        )
     next_run = job.next_run_time
     if next_run is not None:
         logger.info(
@@ -779,7 +1310,9 @@ def start_scheduler() -> None:
         logger.info(
             "[job-scheduler] registered job_id=%s next_run_ist=%s",
             scheduled_job.id,
-            scheduled_next_run.astimezone(IST).strftime("%Y-%m-%d %H:%M:%S %Z") if scheduled_next_run else "none",
+            scheduled_next_run.astimezone(IST).strftime("%Y-%m-%d %H:%M:%S %Z")
+            if scheduled_next_run
+            else "none",
         )
     logger.info("[job-scheduler] scheduler started successfully timezone=Asia/Kolkata")
 
@@ -798,10 +1331,13 @@ def stop_scheduler() -> None:
 
 def run_sync() -> None:
     """Manual entry point: python -m app.job_ingestion.scheduler"""
-    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+    logging.basicConfig(
+        level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s"
+    )
 
     try:
         from dotenv import load_dotenv
+
         load_dotenv(Path(__file__).resolve().parents[2] / ".env")
     except ImportError:
         pass
