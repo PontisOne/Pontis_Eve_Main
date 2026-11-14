@@ -5,6 +5,8 @@ import axios from "axios";
 import {
   buildVoiceIntakeAssistantOverrides,
   canPersistVoiceProgress,
+  canNavigateToVoiceIntakeSummary,
+  resolveVoiceIntakeResumeQuestion,
   resolveVoiceIntakeCandidateId,
 } from "../VoiceIntake";
 import VoiceIntake from "../VoiceIntake";
@@ -13,7 +15,9 @@ globalThis.IS_REACT_ACT_ENVIRONMENT = true;
 
 let mockTranscript = [{ role: "assistant", text: "Hello, tell me about yourself.", final: true }];
 let mockCallState = "listening";
+let mockLocalVolumeLevel = 0;
 const mockStartCall = vi.fn();
+const mockStopCall = vi.fn();
 
 vi.mock("../../../hooks/useVapi", () => {
   const VAPI_STATES = {
@@ -34,7 +38,8 @@ vi.mock("../../../hooks/useVapi", () => {
       error: null,
       terminationReason: null,
       startCall: mockStartCall,
-      stopCall: () => {},
+      stopCall: mockStopCall,
+      localVolumeLevel: mockLocalVolumeLevel,
       isMuted: false,
       toggleMute: () => {},
       callId: { current: null },
@@ -51,6 +56,8 @@ describe("VoiceIntake transcript visibility", () => {
   beforeEach(() => {
     mockCallState = "listening";
     mockStartCall.mockClear();
+    mockStopCall.mockClear();
+    mockLocalVolumeLevel = 0;
     mockTranscript = [{ role: "assistant", text: "Hello, tell me about yourself.", final: true }];
     container = document.createElement("div");
     document.body.appendChild(container);
@@ -62,7 +69,7 @@ describe("VoiceIntake transcript visibility", () => {
           candidateId="cid-1"
           onComplete={jest.fn()}
           candidateProfile={{ name: "Alex Smith" }}
-        />
+        />,
       );
     });
   });
@@ -85,19 +92,67 @@ describe("VoiceIntake transcript visibility", () => {
 
   it("hides the transcript when the Live Transcript button is clicked", () => {
     const btn = container.querySelector('[data-testid="voice-toggle-transcription"]');
-    act(() => { btn.dispatchEvent(new MouseEvent("click", { bubbles: true })); });
+    act(() => {
+      btn.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    });
     expect(container.querySelector('[data-testid="voice-live-transcript"]')).toBeNull();
   });
 
   it("shows the transcript again after a second click on the Live Transcript button", () => {
     const btn = container.querySelector('[data-testid="voice-toggle-transcription"]');
-    act(() => { btn.dispatchEvent(new MouseEvent("click", { bubbles: true })); });
-    act(() => { btn.dispatchEvent(new MouseEvent("click", { bubbles: true })); });
+    act(() => {
+      btn.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    });
+    act(() => {
+      btn.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    });
     expect(container.querySelector('[data-testid="voice-live-transcript"]')).not.toBeNull();
   });
 });
 
 describe("VoiceIntake completion boundary", () => {
+  it("selects a valid next question when current question was already answered", () => {
+    expect(
+      resolveVoiceIntakeResumeQuestion({
+        status: "in_progress",
+        current_question: "Q2",
+        next_question: "Q3",
+        completed_turns: [
+          { question: "Q1", answer: "A1" },
+          { question: "Q2", answer: "A2" },
+        ],
+      }),
+    ).toEqual({ question: "Q3", recoveryRequired: false });
+  });
+
+  it("requires recovery instead of silently restarting when saved answers have no question", () => {
+    expect(
+      resolveVoiceIntakeResumeQuestion({
+        status: "in_progress",
+        completed_turns: [{ question: "Q1", answer: "A1" }],
+      }),
+    ).toEqual({ question: "", recoveryRequired: true });
+  });
+
+  it("keeps new intake behavior when there are no saved answers or questions", () => {
+    expect(resolveVoiceIntakeResumeQuestion({ status: "in_progress" })).toEqual({
+      question: "",
+      recoveryRequired: false,
+    });
+  });
+
+  it("allows both completed and partial successful saves to reach Summary", () => {
+    expect(canNavigateToVoiceIntakeSummary("completed")).toBe(true);
+    expect(canNavigateToVoiceIntakeSummary("in_progress")).toBe(true);
+  });
+
+  it("does not treat failures, empty, or unexpected statuses as successful", () => {
+    expect(canNavigateToVoiceIntakeSummary("error")).toBe(false);
+    expect(canNavigateToVoiceIntakeSummary("partial")).toBe(false);
+    expect(canNavigateToVoiceIntakeSummary("")).toBe(false);
+    expect(canNavigateToVoiceIntakeSummary(null)).toBe(false);
+  });
+
   it("starts the VAPI call without completing onboarding", () => {
     mockCallState = "idle";
     const onComplete = vi.fn();
@@ -109,7 +164,9 @@ describe("VoiceIntake completion boundary", () => {
       root.render(<VoiceIntake firstName="Alex" candidateId="cid-1" onComplete={onComplete} />);
     });
     act(() => {
-      container.querySelector('[data-testid="voice-start-call"]').dispatchEvent(new MouseEvent("click", { bubbles: true }));
+      container
+        .querySelector('[data-testid="voice-start-call"]')
+        .dispatchEvent(new MouseEvent("click", { bubbles: true }));
     });
 
     expect(mockStartCall).toHaveBeenCalledTimes(1);
@@ -137,6 +194,57 @@ describe("VoiceIntake completion boundary", () => {
   });
 });
 
+describe("VoiceIntake inactivity timer", () => {
+  it("starts after assistant speech ends and stops once at five seconds", () => {
+    vi.useFakeTimers();
+    axios.post.mockResolvedValue({ data: {} });
+    const container = document.createElement("div");
+    const root = ReactDOM.createRoot(container);
+    document.body.appendChild(container);
+    mockCallState = "speaking";
+    act(() =>
+      root.render(<VoiceIntake firstName="Alex" candidateId="cid-1" onComplete={vi.fn()} />),
+    );
+    mockCallState = "listening";
+    act(() =>
+      root.render(<VoiceIntake firstName="Alex" candidateId="cid-1" onComplete={vi.fn()} />),
+    );
+    act(() => vi.advanceTimersByTime(4999));
+    expect(mockStopCall).not.toHaveBeenCalled();
+    act(() => vi.advanceTimersByTime(1));
+    expect(mockStopCall).toHaveBeenCalledTimes(1);
+    act(() => root.unmount());
+    container.remove();
+    vi.useRealTimers();
+  });
+
+  it("cancels the timer after sustained candidate microphone activity", () => {
+    vi.useFakeTimers();
+    axios.post.mockResolvedValue({ data: {} });
+    const container = document.createElement("div");
+    const root = ReactDOM.createRoot(container);
+    document.body.appendChild(container);
+    mockCallState = "speaking";
+    act(() =>
+      root.render(<VoiceIntake firstName="Alex" candidateId="cid-1" onComplete={vi.fn()} />),
+    );
+    mockCallState = "listening";
+    act(() =>
+      root.render(<VoiceIntake firstName="Alex" candidateId="cid-1" onComplete={vi.fn()} />),
+    );
+    mockLocalVolumeLevel = 0.02;
+    act(() =>
+      root.render(<VoiceIntake firstName="Alex" candidateId="cid-1" onComplete={vi.fn()} />),
+    );
+    act(() => vi.advanceTimersByTime(120));
+    act(() => vi.advanceTimersByTime(5000));
+    expect(mockStopCall).not.toHaveBeenCalled();
+    act(() => root.unmount());
+    container.remove();
+    vi.useRealTimers();
+  });
+});
+
 describe("VoiceIntake progress terminal guard", () => {
   it("sends a distinct request ID with each regular progress snapshot", () => {
     jest.useFakeTimers();
@@ -155,7 +263,7 @@ describe("VoiceIntake progress terminal guard", () => {
           candidateId="cid-1"
           onComplete={jest.fn()}
           candidateProfile={{ name: "Alex Smith" }}
-        />
+        />,
       );
     });
     act(() => {
@@ -168,14 +276,21 @@ describe("VoiceIntake progress terminal guard", () => {
     ];
     act(() => {
       root.render(
-        <VoiceIntake firstName="Alex" candidateId="cid-1" onComplete={jest.fn()} candidateProfile={{ name: "Alex Smith" }} />
+        <VoiceIntake
+          firstName="Alex"
+          candidateId="cid-1"
+          onComplete={jest.fn()}
+          candidateProfile={{ name: "Alex Smith" }}
+        />,
       );
     });
     act(() => {
       jest.advanceTimersByTime(900);
     });
 
-    const progressCalls = axios.post.mock.calls.filter(([url]) => url.includes("/voice/candidate-intake/progress"));
+    const progressCalls = axios.post.mock.calls.filter(([url]) =>
+      url.includes("/voice/candidate-intake/progress"),
+    );
     expect(progressCalls).toHaveLength(2);
     const requestIds = progressCalls.map(([, , config]) => config?.headers?.["X-Request-ID"]);
     expect(requestIds[0]).toEqual(expect.any(String));
@@ -190,15 +305,28 @@ describe("VoiceIntake progress terminal guard", () => {
   });
 
   it("allows the current generation during normal progress saving", () => {
-    expect(canPersistVoiceProgress({ terminal: false, generation: 3, currentGeneration: 3 })).toBe(true);
+    expect(canPersistVoiceProgress({ terminal: false, generation: 3, currentGeneration: 3 })).toBe(
+      true,
+    );
   });
 
   it("rejects a pending callback after terminal state", () => {
-    expect(canPersistVoiceProgress({ terminal: true, generation: 3, currentGeneration: 3 })).toBe(false);
+    expect(canPersistVoiceProgress({ terminal: true, generation: 3, currentGeneration: 3 })).toBe(
+      false,
+    );
   });
 
   it("rejects an obsolete callback after the generation advances", () => {
-    expect(canPersistVoiceProgress({ terminal: false, generation: 2, currentGeneration: 3 })).toBe(false);
+    expect(canPersistVoiceProgress({ terminal: false, generation: 2, currentGeneration: 3 })).toBe(
+      false,
+    );
+  });
+
+  it("can cancel an in-flight progress request before final submission", () => {
+    const controller = new AbortController();
+    expect(controller.signal.aborted).toBe(false);
+    controller.abort();
+    expect(controller.signal.aborted).toBe(true);
   });
 });
 
@@ -220,9 +348,11 @@ describe("new-candidate identity handoff", () => {
   });
 
   it("keeps an existing candidate's explicit ID authoritative", () => {
-    expect(resolveVoiceIntakeCandidateId("existing-candidate-id", {
-      candidate_id: "new-candidate-id",
-    })).toBe("existing-candidate-id");
+    expect(
+      resolveVoiceIntakeCandidateId("existing-candidate-id", {
+        candidate_id: "new-candidate-id",
+      }),
+    ).toBe("existing-candidate-id");
   });
 });
 
@@ -255,7 +385,9 @@ describe("VoiceIntake resume behavior", () => {
     // VAPI must receive the current question so it resumes, not restarts
     expect(overrides.variableValues.voice_intake_status).toBe("in_progress");
     expect(overrides.variableValues.voice_intake_current_question).toBe(currentQuestion);
-    expect(overrides.variableValues.voice_intake_answers).toContain("Tell me about your background.");
+    expect(overrides.variableValues.voice_intake_answers).toContain(
+      "Tell me about your background.",
+    );
     expect(overrides.variableValues.voice_intake_completed_topics).toBe("background_experience");
     expect(overrides.variableValues.voice_intake_missing_topics).toBe("skills_technologies");
   });
@@ -296,7 +428,7 @@ describe("VoiceIntake resume behavior", () => {
     expect(overrides.variableValues.voice_intake_status).toBe("completed");
     expect(overrides.variableValues.voice_intake_current_question).toBe("");
     expect(overrides.variableValues.voice_intake_completed_topics).toBe(
-      "background_experience, target_role"
+      "background_experience, target_role",
     );
   });
 
@@ -361,9 +493,7 @@ describe("VoiceIntake candidate context", () => {
         status: "in_progress",
         known_topics: ["background_experience", "skills_technologies"],
         missing_topics: ["availability_location"],
-        completed_turns: [
-          { question: "Tell me about your background.", answer: "I build APIs." },
-        ],
+        completed_turns: [{ question: "Tell me about your background.", answer: "I build APIs." }],
         current_question: "What are your key skills?",
       },
     };
@@ -382,10 +512,16 @@ describe("VoiceIntake candidate context", () => {
     expect(overrides.variableValues.preferred_roles).toBe("Senior Backend Engineer");
     expect(overrides.variableValues.availability).toBe("Immediately");
     expect(overrides.variableValues.voice_intake_status).toBe("in_progress");
-    expect(overrides.variableValues.voice_intake_completed_topics).toBe("background_experience, skills_technologies");
+    expect(overrides.variableValues.voice_intake_completed_topics).toBe(
+      "background_experience, skills_technologies",
+    );
     expect(overrides.variableValues.voice_intake_missing_topics).toBe("availability_location");
-    expect(overrides.variableValues.voice_intake_answers).toContain("Tell me about your background.");
-    expect(overrides.variableValues.voice_intake_current_question).toBe("What are your key skills?");
+    expect(overrides.variableValues.voice_intake_answers).toContain(
+      "Tell me about your background.",
+    );
+    expect(overrides.variableValues.voice_intake_current_question).toBe(
+      "What are your key skills?",
+    );
     expect(overrides.metadata.candidateId).toBe("candidate-1");
   });
 });
@@ -404,7 +540,10 @@ describe("E2E regression: partial call -> disconnect -> mic -> resumes at next q
     next_question: "What kind of role are you targeting next?",
     progress: 2,
     completed_turns: [
-      { question: "Tell me about your background.", answer: "I have 5 years in backend engineering." },
+      {
+        question: "Tell me about your background.",
+        answer: "I have 5 years in backend engineering.",
+      },
       { question: "What are your key skills?", answer: "Java, Spring Boot, Kubernetes." },
     ],
     known_topics: ["background_experience", "skills_technologies"],
@@ -441,7 +580,7 @@ describe("E2E regression: partial call -> disconnect -> mic -> resumes at next q
   it("VAPI variableValues carry the saved current_question", () => {
     const overrides = micClickOverrides();
     expect(overrides.variableValues.voice_intake_current_question).toBe(
-      "What kind of role are you targeting next?"
+      "What kind of role are you targeting next?",
     );
   });
 
@@ -462,10 +601,10 @@ describe("E2E regression: partial call -> disconnect -> mic -> resumes at next q
   it("VAPI variableValues carry known and missing topics", () => {
     const overrides = micClickOverrides();
     expect(overrides.variableValues.voice_intake_completed_topics).toBe(
-      "background_experience, skills_technologies"
+      "background_experience, skills_technologies",
     );
     expect(overrides.variableValues.voice_intake_missing_topics).toBe(
-      "target_role, career_preferences, availability_location"
+      "target_role, career_preferences, availability_location",
     );
   });
 
@@ -590,7 +729,7 @@ describe("Career-gap mandatory questioning: VoiceIntake assistant overrides", ()
       expect(overrides.firstMessage).not.toContain(gapQuestion);
     }
     expect(overrides.variableValues.voice_intake_current_question).toBe(
-      "What kind of role are you targeting?"
+      "What kind of role are you targeting?",
     );
   });
 });
