@@ -1,7 +1,6 @@
 import asyncio
 import os
 import sys
-from types import SimpleNamespace
 
 from fastapi import UploadFile
 
@@ -45,7 +44,10 @@ def test_certificate_upload_persists_file_and_metadata(tmp_path, monkeypatch):
     monkeypatch.setattr(server, "_get_candidate_row", get_candidate)
     monkeypatch.setattr(server, "SessionLocal", lambda: FakeSession(inserted))
 
-    upload = UploadFile(filename="AWS Certificate.pdf", file=__import__("io").BytesIO(b"certificate-bytes"))
+    upload = UploadFile(
+        filename="AWS Certificate.pdf",
+        file=__import__("io").BytesIO(b"certificate-bytes"),
+    )
     response = asyncio.run(
         server.upload_certificate(
             candidate_id,
@@ -59,9 +61,11 @@ def test_certificate_upload_persists_file_and_metadata(tmp_path, monkeypatch):
     assert response["filename"] == "AWS Certificate.pdf"
     assert len(files) == 1
     assert files[0].read_bytes() == b"certificate-bytes"
-    assert inserted == [{
-        "id": response["id"],
-        "cid": candidate_id,
-        "fn": "AWS Certificate.pdf",
-        "fp": files[0].name,
-    }]
+    assert inserted == [
+        {
+            "id": response["id"],
+            "cid": candidate_id,
+            "fn": "AWS Certificate.pdf",
+            "fp": files[0].name,
+        }
+    ]

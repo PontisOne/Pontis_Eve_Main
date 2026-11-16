@@ -1,5 +1,4 @@
 import numpy as np
-from app.job_ingestion.embedding_service import build_job_text, generate_job_embedding
 
 sample_job = {
     "title": "Senior Software Engineer",
@@ -13,13 +12,24 @@ sample_job = {
     "experience_level": "Senior",
 }
 
-text = build_job_text(sample_job)
-embedding = generate_job_embedding(sample_job)
-norm = np.linalg.norm(embedding)
 
-print("=== Structured Job Text ===")
-print(text)
-print("\n=== Embedding Stats ===")
-print(f"Length     : {len(embedding)}  (expected 384)")
-print(f"First 5    : {embedding[:5]}")
-print(f"L2 Norm    : {norm:.6f}  (expected ~1.0)")
+def main():
+    from app.job_ingestion.embedding_service import (
+        build_job_text,
+        generate_job_embedding,
+    )
+
+    text = build_job_text(sample_job)
+    embedding = generate_job_embedding(sample_job)
+    norm = np.linalg.norm(embedding)
+
+    print("=== Structured Job Text ===")
+    print(text)
+    print("\n=== Embedding Stats ===")
+    print(f"Length     : {len(embedding)}  (expected 384)")
+    print(f"First 5    : {embedding[:5]}")
+    print(f"L2 Norm    : {norm:.6f}  (expected ~1.0)")
+
+
+if __name__ == "__main__":
+    main()

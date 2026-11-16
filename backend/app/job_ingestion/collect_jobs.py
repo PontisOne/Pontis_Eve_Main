@@ -2,13 +2,13 @@ import logging
 from typing import Any
 
 from app.job_ingestion.connectors import ashby, greenhouse, lever, workable
+from app.job_ingestion.feature_flags import provider_enabled
 from app.job_ingestion.normalize import (
     normalize_ashby,
     normalize_greenhouse,
     normalize_lever,
     normalize_workable,
 )
-from app.job_ingestion.feature_flags import provider_enabled
 
 logger = logging.getLogger(__name__)
 
@@ -64,38 +64,28 @@ class JobCollector:
             raw_jobs = greenhouse.collect_jobs(identifier)
 
             normalized_jobs = [
-                normalize_greenhouse(job, company_name)
-                for job in raw_jobs
+                normalize_greenhouse(job, company_name) for job in raw_jobs
             ]
 
         elif ats_type == "lever":
             raw_jobs = lever.collect_jobs(identifier)
 
-            normalized_jobs = [
-                normalize_lever(job, company_name)
-                for job in raw_jobs
-            ]
+            normalized_jobs = [normalize_lever(job, company_name) for job in raw_jobs]
 
         elif ats_type == "ashby":
             raw_jobs = ashby.collect_jobs(identifier)
 
-            normalized_jobs = [
-                normalize_ashby(job, company_name)
-                for job in raw_jobs
-            ]
+            normalized_jobs = [normalize_ashby(job, company_name) for job in raw_jobs]
 
         elif ats_type == "workable":
             raw_jobs = workable.collect_jobs(identifier)
 
             normalized_jobs = [
-                normalize_workable(job, company_name)
-                for job in raw_jobs
+                normalize_workable(job, company_name) for job in raw_jobs
             ]
 
         else:
-            raise ValueError(
-                f"Unsupported ATS type: {ats_type}"
-            )
+            raise ValueError(f"Unsupported ATS type: {ats_type}")
 
         logger.info(
             "Normalized %d jobs for %s",

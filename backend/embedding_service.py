@@ -1,6 +1,5 @@
-import os
 import logging
-from typing import List
+import os
 
 logger = logging.getLogger(__name__)
 
@@ -14,12 +13,13 @@ def _get_model():
     global _model
     if _model is None:
         from sentence_transformers import SentenceTransformer
+
         logger.info("Loading embedding model: %s", EMBEDDING_MODEL_NAME)
         _model = SentenceTransformer(EMBEDDING_MODEL_NAME)
     return _model
 
 
-def generate_embedding(text: str) -> List[float]:
+def generate_embedding(text: str) -> list[float]:
     """Generate a 384-dimensional embedding vector for the given text."""
     model = _get_model()
     vector = model.encode(text, normalize_embeddings=True)

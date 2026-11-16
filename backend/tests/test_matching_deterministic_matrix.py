@@ -8,8 +8,11 @@ import pytest
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 import candidate_job_matching_service as matcher
-from location_matching import candidate_location, country_eligible, location_preference_score
-
+from location_matching import (
+    candidate_location,
+    country_eligible,
+    location_preference_score,
+)
 
 INDIA_CANDIDATE = {
     "location": "Hyderabad, India",
@@ -34,7 +37,10 @@ def test_country_boundary_matrix(job, eligible):
 def test_city_only_never_infers_country_and_fails_closed():
     candidate = {"location": "Hyderabad", "raw_data": {}}
     assert candidate_location(candidate) == {
-        "country_code": "", "city": "hyderabad", "state": "", "preferred": ""
+        "country_code": "",
+        "city": "hyderabad",
+        "state": "",
+        "preferred": "",
     }
     assert not country_eligible(candidate, {"country": "India"})
 
@@ -58,24 +64,36 @@ def test_location_matrix(job, score, eligible):
 def test_skill_matrix_exact_partial_alias_missing_and_none():
     skills = ["Python", "FastAPI", "PostgreSQL", "Docker", "Qdrant"]
     intelligence = {"evidence": {"skills": {"evidence_level": 3}}}
-    assert matcher._evidence_weighted_skills_score(
-        skills, "", intelligence, skills
-    ) == 1.0
-    assert matcher._evidence_weighted_skills_score(
-        skills, "", intelligence, ["Python", "FastAPI", "AWS", "Docker"]
-    ) == 0.75
-    assert matcher._evidence_weighted_skills_score(
-        ["postgres"], "", intelligence, ["PostgreSQL"]
-    ) == 1.0
-    assert matcher._evidence_weighted_skills_score(
-        skills, "", intelligence, ["Rust", "Kafka"]
-    ) == 0.0
+    assert (
+        matcher._evidence_weighted_skills_score(skills, "", intelligence, skills) == 1.0
+    )
+    assert (
+        matcher._evidence_weighted_skills_score(
+            skills, "", intelligence, ["Python", "FastAPI", "AWS", "Docker"]
+        )
+        == 0.75
+    )
+    assert (
+        matcher._evidence_weighted_skills_score(
+            ["postgres"], "", intelligence, ["PostgreSQL"]
+        )
+        == 1.0
+    )
+    assert (
+        matcher._evidence_weighted_skills_score(
+            skills, "", intelligence, ["Rust", "Kafka"]
+        )
+        == 0.0
+    )
 
 
 def test_claimed_skill_evidence_is_weighted_at_point_six():
-    assert matcher._evidence_weighted_skills_score(
-        ["Python"], "", {"evidence": {"skills": {"evidence_level": 1}}}, ["Python"]
-    ) == 0.6
+    assert (
+        matcher._evidence_weighted_skills_score(
+            ["Python"], "", {"evidence": {"skills": {"evidence_level": 1}}}, ["Python"]
+        )
+        == 0.6
+    )
 
 
 @pytest.mark.parametrize(
@@ -111,7 +129,12 @@ def test_experience_matrix(requirement, eligible, fit):
 def test_employment_type_filter_matrix():
     signals = {"employment_types": ["Full-time"], "_candidate": INDIA_CANDIDATE}
     base = {"country": "India", "title": "Python Engineer", "description": "Python"}
-    for value, expected in [("Full-time", True), ("Contract", False), ("Part-time", False), ("", True)]:
+    for value, expected in [
+        ("Full-time", True),
+        ("Contract", False),
+        ("Part-time", False),
+        ("", True),
+    ]:
         job = {**base, "employment_type": value}
         assert matcher._preference_eligibility(signals, job, 3.0)[0] is expected
 
@@ -119,17 +142,29 @@ def test_employment_type_filter_matrix():
 def test_remote_only_does_not_bypass_country_and_rejects_onsite_or_hybrid():
     signals = {"remote_preference": "Remote only", "_candidate": INDIA_CANDIDATE}
     base = {"title": "Python Engineer", "description": "Python"}
-    assert matcher._preference_eligibility(signals, {**base, "country": "India", "remote": True}, 3.0)[0]
-    assert not matcher._preference_eligibility(signals, {**base, "country": "India", "remote_policy": "onsite"}, 3.0)[0]
-    assert not matcher._preference_eligibility(signals, {**base, "country": "India", "remote_policy": "hybrid"}, 3.0)[0]
-    assert not matcher._preference_eligibility(signals, {**base, "country": "USA", "remote": True}, 3.0)[0]
+    assert matcher._preference_eligibility(
+        signals, {**base, "country": "India", "remote": True}, 3.0
+    )[0]
+    assert not matcher._preference_eligibility(
+        signals, {**base, "country": "India", "remote_policy": "onsite"}, 3.0
+    )[0]
+    assert not matcher._preference_eligibility(
+        signals, {**base, "country": "India", "remote_policy": "hybrid"}, 3.0
+    )[0]
+    assert not matcher._preference_eligibility(
+        signals, {**base, "country": "USA", "remote": True}, 3.0
+    )[0]
 
 
 def test_relevance_gate_skill_or_role():
     signals = {"skills": ["Python"], "target_roles": ["Backend Engineer"]}
     assert matcher._job_passes_skills_or_role(signals, "Unrelated", "Python services")
-    assert matcher._job_passes_skills_or_role(signals, "Backend Engineer", "No matching technology")
-    assert not matcher._job_passes_skills_or_role(signals, "Data Analyst", "SQL reporting")
+    assert matcher._job_passes_skills_or_role(
+        signals, "Backend Engineer", "No matching technology"
+    )
+    assert not matcher._job_passes_skills_or_role(
+        signals, "Data Analyst", "SQL reporting"
+    )
 
 
 def test_relevant_history_requires_complete_role_phrase():
@@ -148,7 +183,12 @@ def test_hybrid_formula_and_semantic_weight(monkeypatch):
     monkeypatch.setattr(matcher, "_check_hard_constraints", lambda *args: (1.0, []))
     monkeypatch.setattr(matcher, "_extract_job_required_skills", lambda *args: [])
     monkeypatch.setattr(matcher, "_compute_job_specific_confidence", lambda *args: {})
-    signals = {"target_roles": [], "skills": [], "past_roles": [], "total_experience_years": 3}
+    signals = {
+        "target_roles": [],
+        "skills": [],
+        "past_roles": [],
+        "total_experience_years": 3,
+    }
     full, _ = matcher._hybrid_score(signals, "", "", "", [], 1.0)
     lower_semantic, _ = matcher._hybrid_score(signals, "", "", "", [], 0.3)
     assert full == pytest.approx(1.0)
@@ -161,17 +201,29 @@ def test_constraint_penalty_multiplies_final_score(monkeypatch):
     monkeypatch.setattr(matcher, "_experience_score", lambda *args: 1.0)
     monkeypatch.setattr(matcher, "_experience_fit_score", lambda *args: 1.0)
     monkeypatch.setattr(matcher, "_preference_score", lambda *args: (1.0, {}))
-    monkeypatch.setattr(matcher, "_check_hard_constraints", lambda *args: (0.5, ["test"]))
+    monkeypatch.setattr(
+        matcher, "_check_hard_constraints", lambda *args: (0.5, ["test"])
+    )
     monkeypatch.setattr(matcher, "_extract_job_required_skills", lambda *args: [])
     monkeypatch.setattr(matcher, "_compute_job_specific_confidence", lambda *args: {})
-    signals = {"target_roles": [], "skills": [], "past_roles": [], "total_experience_years": 3}
+    signals = {
+        "target_roles": [],
+        "skills": [],
+        "past_roles": [],
+        "total_experience_years": 3,
+    }
     score, components = matcher._hybrid_score(signals, "", "", "", [], 1.0)
     assert score == pytest.approx(0.5)
     assert components["constraint_penalty"] == 0.5
 
 
 def test_ats_type_has_no_scoring_effect():
-    signals = {"target_roles": ["Python Backend Engineer"], "skills": ["Python"], "past_roles": [], "total_experience_years": 3}
+    signals = {
+        "target_roles": ["Python Backend Engineer"],
+        "skills": ["Python"],
+        "past_roles": [],
+        "total_experience_years": 3,
+    }
     common = {"country": "India", "employment_type": "Full-time"}
     fantastic = matcher._preference_score(signals, {**common, "ats_type": "fantastic"})
     other = matcher._preference_score(signals, {**common, "ats_type": "greenhouse"})

@@ -5,10 +5,8 @@ import json
 import os
 import sys
 
-
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 import server
-
 
 CANDIDATE_ID = "11111111-1111-1111-1111-111111111111"
 
@@ -57,29 +55,40 @@ def test_duplicate_finalization_records_completion_timing(monkeypatch):
             return DuplicateResult()
 
     monkeypatch.setattr(server, "SessionLocal", lambda: Session())
-    monkeypatch.setattr(server, "_get_candidate_row", lambda _candidate_id: _async_value({}))
-    monkeypatch.setattr(server, "_voice_intake_timing", lambda event, **fields: captured.append((event, fields)))
+    monkeypatch.setattr(
+        server, "_get_candidate_row", lambda _candidate_id: _async_value({})
+    )
+    monkeypatch.setattr(
+        server,
+        "_voice_intake_timing",
+        lambda event, **fields: captured.append((event, fields)),
+    )
 
-    response = asyncio.run(server.candidate_voice_intake(
-        server.VoiceCandidateIntakeRequest(
-            candidate_id=CANDIDATE_ID,
-            transcript="Candidate: already submitted this.",
-            vapi_call_id="call-duplicate",
-            transcript_revision="7",
-        ),
-        authorization=_authorization(),
-        x_request_id="22222222-2222-4222-8222-222222222222",
-    ))
+    response = asyncio.run(
+        server.candidate_voice_intake(
+            server.VoiceCandidateIntakeRequest(
+                candidate_id=CANDIDATE_ID,
+                transcript="Candidate: already submitted this.",
+                vapi_call_id="call-duplicate",
+                transcript_revision="7",
+            ),
+            authorization=_authorization(),
+            x_request_id="22222222-2222-4222-8222-222222222222",
+        )
+    )
 
     assert response["status"] == "duplicate"
-    assert captured[-1] == ("request_finished", {
-        "request_id": "22222222-2222-4222-8222-222222222222",
-        "vapi_call_id": "call-duplicate",
-        "transcript_revision": "7",
-        "endpoint": "/api/voice/candidate-intake",
-        "duration_ms": captured[-1][1]["duration_ms"],
-        "outcome": "duplicate",
-    })
+    assert captured[-1] == (
+        "request_finished",
+        {
+            "request_id": "22222222-2222-4222-8222-222222222222",
+            "vapi_call_id": "call-duplicate",
+            "transcript_revision": "7",
+            "endpoint": "/api/voice/candidate-intake",
+            "duration_ms": captured[-1][1]["duration_ms"],
+            "outcome": "duplicate",
+        },
+    )
     assert captured[-1][1]["duration_ms"] >= 0
 
 
@@ -87,23 +96,34 @@ def test_stale_progress_records_completion_timing(monkeypatch):
     captured = []
 
     async def get_candidate(_candidate_id):
-        return {"raw_data": {"voice_intake": {
-            "vapi_call_id": "call-stale", "transcript_revision": 3,
-        }}}
+        return {
+            "raw_data": {
+                "voice_intake": {
+                    "vapi_call_id": "call-stale",
+                    "transcript_revision": 3,
+                }
+            }
+        }
 
     monkeypatch.setattr(server, "_get_candidate_row", get_candidate)
-    monkeypatch.setattr(server, "_voice_intake_timing", lambda event, **fields: captured.append((event, fields)))
+    monkeypatch.setattr(
+        server,
+        "_voice_intake_timing",
+        lambda event, **fields: captured.append((event, fields)),
+    )
 
-    response = asyncio.run(server.candidate_voice_intake_progress(
-        server.VoiceCandidateIntakeProgressRequest(
-            candidate_id=CANDIDATE_ID,
-            transcript="Candidate: outdated snapshot.",
-            vapi_call_id="call-stale",
-            transcript_revision="2",
-        ),
-        authorization=_authorization(),
-        x_request_id="33333333-3333-4333-8333-333333333333",
-    ))
+    response = asyncio.run(
+        server.candidate_voice_intake_progress(
+            server.VoiceCandidateIntakeProgressRequest(
+                candidate_id=CANDIDATE_ID,
+                transcript="Candidate: outdated snapshot.",
+                vapi_call_id="call-stale",
+                transcript_revision="2",
+            ),
+            authorization=_authorization(),
+            x_request_id="33333333-3333-4333-8333-333333333333",
+        )
+    )
 
     assert response["status"] == "ignored_stale"
     assert captured[-1][0] == "request_finished"
@@ -142,25 +162,37 @@ def test_invalid_client_metadata_is_omitted_from_endpoint_timing_logs(monkeypatc
             return DuplicateResult()
 
     monkeypatch.setattr(server, "SessionLocal", lambda: Session())
-    monkeypatch.setattr(server, "_get_candidate_row", lambda _candidate_id: _async_value({}))
+    monkeypatch.setattr(
+        server, "_get_candidate_row", lambda _candidate_id: _async_value({})
+    )
     monkeypatch.setattr(server.logger, "info", lambda *args: logged.append(args))
 
-    response = asyncio.run(server.candidate_voice_intake(
-        server.VoiceCandidateIntakeRequest(
-            candidate_id=CANDIDATE_ID,
-            transcript=transcript_marker,
-            vapi_call_id=malicious_vapi_id,
-            transcript_revision=malicious_revision,
-        ),
-        authorization=_authorization(),
-        x_request_id=malicious_request_id,
-    ))
+    response = asyncio.run(
+        server.candidate_voice_intake(
+            server.VoiceCandidateIntakeRequest(
+                candidate_id=CANDIDATE_ID,
+                transcript=transcript_marker,
+                vapi_call_id=malicious_vapi_id,
+                transcript_revision=malicious_revision,
+            ),
+            authorization=_authorization(),
+            x_request_id=malicious_request_id,
+        )
+    )
 
     assert response["status"] == "duplicate"
-    timing_logs = [json.loads(args[1]) for args in logged if args[0] == "[voice-intake-timing] %s"]
+    timing_logs = [
+        json.loads(args[1]) for args in logged if args[0] == "[voice-intake-timing] %s"
+    ]
     assert timing_logs
     serialized_logs = "\n".join(json.dumps(fields) for fields in timing_logs)
-    for unsafe_value in (candidate_marker, transcript_marker, malicious_request_id, malicious_vapi_id, malicious_revision):
+    for unsafe_value in (
+        candidate_marker,
+        transcript_marker,
+        malicious_request_id,
+        malicious_vapi_id,
+        malicious_revision,
+    ):
         assert unsafe_value not in serialized_logs
     for fields in timing_logs:
         assert fields["request_id"] != malicious_request_id
@@ -197,12 +229,17 @@ def test_valid_request_id_is_shared_by_analysis_and_extraction_telemetry(monkeyp
     monkeypatch.setattr(server, "_schedule_voice_intake_matching", lambda *_args: None)
     monkeypatch.setattr(server, "_load_candidate_certificates", noop)
 
-    asyncio.run(server.candidate_voice_intake_progress(
-        server.VoiceCandidateIntakeProgressRequest(
-            candidate_id=CANDIDATE_ID, transcript="Candidate: I build APIs.",
-            vapi_call_id="call-telemetry", transcript_revision="1",
-        ),
-        authorization=_authorization(), x_request_id=request_id,
-    ))
+    asyncio.run(
+        server.candidate_voice_intake_progress(
+            server.VoiceCandidateIntakeProgressRequest(
+                candidate_id=CANDIDATE_ID,
+                transcript="Candidate: I build APIs.",
+                vapi_call_id="call-telemetry",
+                transcript_revision="1",
+            ),
+            authorization=_authorization(),
+            x_request_id=request_id,
+        )
+    )
 
     assert captured == {"analysis": request_id, "extraction": request_id}

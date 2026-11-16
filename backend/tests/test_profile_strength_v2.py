@@ -4,30 +4,33 @@ Tests for the new Profile Strength & Recommendation Readiness system.
 Covers all 10 candidate scenarios from Phase 14 plus unit tests for
 evidence quality, consistency detection, and recommendation gating.
 """
+
 import os
 import sys
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
+from datetime import UTC
+
 from profile_strength_service import (
-    build_profile_strength_diagnostic,
-    calculate_profile_strength_v2,
-    calculate_profile_strength_compat,
-    get_voice_intake_state,
-    get_canonical_preferences,
-    build_attribute_evidence,
     EVIDENCE_CLAIMED,
     EVIDENCE_CORROBORATED,
     EVIDENCE_DEMONSTRATED,
     EVIDENCE_VERIFIED,
-    _role_aware_profile_weight,
     _build_ninety_percent_guidance,
+    _role_aware_profile_weight,
+    build_attribute_evidence,
+    build_profile_strength_diagnostic,
+    calculate_profile_strength_compat,
+    calculate_profile_strength_v2,
+    get_canonical_preferences,
+    get_voice_intake_state,
 )
-
 
 # ---------------------------------------------------------------------------
 # Fixtures
 # ---------------------------------------------------------------------------
+
 
 def _base():
     return {
@@ -49,15 +52,17 @@ def _base():
 
 def _with_resume(base=None):
     c = base or _base()
-    c.update({
-        "name": "Jane Doe",
-        "email": "jane@example.com",
-        "current_role": "Backend Engineer",
-        "skills": ["Python", "FastAPI", "PostgreSQL"],
-        "work_experience": [
-            {"title": "Engineer", "company": "Acme", "description": "Built APIs"}
-        ],
-    })
+    c.update(
+        {
+            "name": "Jane Doe",
+            "email": "jane@example.com",
+            "current_role": "Backend Engineer",
+            "skills": ["Python", "FastAPI", "PostgreSQL"],
+            "work_experience": [
+                {"title": "Engineer", "company": "Acme", "description": "Built APIs"}
+            ],
+        }
+    )
     return c
 
 
@@ -66,8 +71,12 @@ def _with_voice(c, topics=None, turns=None):
     raw = dict(c.get("raw_data") or {})
     raw["voice_intake"] = {
         "status": "in_progress",
-        "completed_turns": turns or [
-            {"question": "What roles are you targeting?", "answer": "Python backend roles."}
+        "completed_turns": turns
+        or [
+            {
+                "question": "What roles are you targeting?",
+                "answer": "Python backend roles.",
+            }
         ],
         "known_topics": topics or ["background_experience", "target_role"],
         "missing_topics": [],
@@ -98,8 +107,13 @@ def test_ninety_percent_guidance_is_derived_from_the_canonical_score_result():
     assert guidance["current_percent"] == result["percent"]
     assert guidance["remaining_percent_to_90"] == max(0, 90 - result["percent"])
     assert guidance["items"]
-    assert all({"title", "action", "section"} <= item.keys() for item in guidance["items"])
-    assert all("assessment" not in f"{item['title']} {item['action']}".lower() for item in guidance["items"])
+    assert all(
+        {"title", "action", "section"} <= item.keys() for item in guidance["items"]
+    )
+    assert all(
+        "assessment" not in f"{item['title']} {item['action']}".lower()
+        for item in guidance["items"]
+    )
 
 
 def test_ninety_percent_guidance_surfaces_partial_scoring_gaps_for_strong_profiles():
@@ -147,19 +161,23 @@ def test_empty_preference_lists_are_missing_not_completed():
 
 def test_saving_each_missing_preference_suggestion_increases_strength():
     candidate = _with_resume()
-    candidate.update({
-        "location": "Hyderabad, India",
-        "experience_years": 3,
-        "summary": "Backend engineer seeking API platform roles.",
-        "education": [{"degree": "B.Tech", "institution": "CMR University"}],
-        "work_experience": [{
-            "title": "Backend Engineer",
-            "company": "Acme",
-            "start_date": "2022",
-            "end_date": "2025",
-            "description": "Built Python APIs and improved performance by 20%.",
-        }],
-    })
+    candidate.update(
+        {
+            "location": "Hyderabad, India",
+            "experience_years": 3,
+            "summary": "Backend engineer seeking API platform roles.",
+            "education": [{"degree": "B.Tech", "institution": "CMR University"}],
+            "work_experience": [
+                {
+                    "title": "Backend Engineer",
+                    "company": "Acme",
+                    "start_date": "2022",
+                    "end_date": "2025",
+                    "description": "Built Python APIs and improved performance by 20%.",
+                }
+            ],
+        }
+    )
     baseline = calculate_profile_strength_v2(candidate)["percent"]
     suggested_answers = [
         {"preferred_locations": ["Hyderabad"]},
@@ -178,16 +196,32 @@ def test_saving_each_missing_preference_suggestion_increases_strength():
 
 
 def test_profile_strength_diagnostic_reports_existing_calculation_without_changing_it():
-    candidate = _with_prefs(_with_voice(_with_resume(), topics=["skills_technologies", "responsibilities_projects"]), roles=["Backend Engineer"])
+    candidate = _with_prefs(
+        _with_voice(
+            _with_resume(), topics=["skills_technologies", "responsibilities_projects"]
+        ),
+        roles=["Backend Engineer"],
+    )
     original = calculate_profile_strength_v2(candidate)
     diagnostic = build_profile_strength_diagnostic(candidate)
 
     assert diagnostic["calculator_result"]["percent"] == original["percent"]
-    assert diagnostic["skills_capability"]["score"] == original["dimensions"]["skills_capability"]["score"]
-    assert diagnostic["evidence_dimension"]["score"] == original["dimensions"]["evidence"]["score"]
-    assert diagnostic["career_readiness"]["score"] == original["dimensions"]["career_readiness"]["score"]
+    assert (
+        diagnostic["skills_capability"]["score"]
+        == original["dimensions"]["skills_capability"]["score"]
+    )
+    assert (
+        diagnostic["evidence_dimension"]["score"]
+        == original["dimensions"]["evidence"]["score"]
+    )
+    assert (
+        diagnostic["career_readiness"]["score"]
+        == original["dimensions"]["career_readiness"]["score"]
+    )
     assert diagnostic["final_calculation"] == original["calculation"]
-    assert diagnostic["evidence_dimension"]["responsibilities_projects_from_voice"] is True
+    assert (
+        diagnostic["evidence_dimension"]["responsibilities_projects_from_voice"] is True
+    )
 
 
 def test_approved_profile_strength_weights_sum_to_100_percent():
@@ -205,7 +239,9 @@ def test_approved_profile_strength_weights_sum_to_100_percent():
 
 
 def test_dimension_breakdowns_expose_earned_maximum_components_and_score():
-    result = calculate_profile_strength_v2(_with_prefs(_with_resume(), roles=["Backend Engineer"]))
+    result = calculate_profile_strength_v2(
+        _with_prefs(_with_resume(), roles=["Backend Engineer"])
+    )
     for key, maximum in {
         "identity_background": 10,
         "skills_capability": 20,
@@ -225,7 +261,9 @@ def test_dimension_breakdowns_expose_earned_maximum_components_and_score():
 
 
 def test_career_readiness_is_independent_of_overall_weighted_score():
-    result = calculate_profile_strength_v2(_with_prefs(_with_resume(), roles=["Backend Engineer"]))
+    result = calculate_profile_strength_v2(
+        _with_prefs(_with_resume(), roles=["Backend Engineer"])
+    )
     readiness = result["dimensions"]["career_readiness"]
     assert readiness["score"] != result["percent"]
     assert readiness["earned_points"] <= 8
@@ -234,6 +272,7 @@ def test_career_readiness_is_independent_of_overall_weighted_score():
 # ---------------------------------------------------------------------------
 # Candidate 1: Resume only
 # ---------------------------------------------------------------------------
+
 
 class TestCandidate1ResumeOnly:
     def test_has_meaningful_strength(self):
@@ -263,46 +302,72 @@ class TestCandidate1ResumeOnly:
 def test_existing_parsed_resume_summary_is_counted_in_ninety_percent_profile():
     """A normalised-column gap must not hide valid persisted resume data."""
     c = _base()
-    c.update({
-        "name": "Complete Dev",
-        "email": "complete@example.com",
-        "phone": "1234567890",
-        "location": "Remote",
-        "current_role": "Senior Backend Engineer",
-        "current_company": "Acme",
-        "experience_years": 7,
-        "skills": ["Python", "FastAPI", "PostgreSQL", "Docker", "AWS", "Kubernetes"],
-        "work_experience": [{
-            "title": "Lead Engineer", "company": "Acme", "description": "Led platform work",
-            "start_date": "2018-01-01", "end_date": "2023-01-01",
-        }],
-        "education": [{"degree": "B.Tech", "institution": "University"}],
-        "interview_technical_score": 10,
-        "interview_communication_score": 8.5,
-        "candidate_certificates": [{"id": "cert-1", "file_name": "aws.pdf"}],
-        # This is a realistic older import: the parsed resume has a valid
-        # summary while the newer summary column has not been backfilled.
-        "summary": "",
-        "parsed_resume_json": {"summary": "Backend engineer focused on reliable platforms."},
-        "raw_data": {
-            "preferred_roles": ["Senior Backend Engineer"],
-            "availability": "30 days",
-            "work_type_preference": "remote",
-            "projects": ["AI platform", "REST API service"],
-            "voice_intake": {
-                "status": "completed",
-                "completed_turns": [
-                    {"question": "What roles?", "answer": "Senior backend engineering roles."},
-                    {"question": "Skills?", "answer": "Python, FastAPI, PostgreSQL."},
-                    {"question": "Availability?", "answer": "30 days notice."},
-                ],
-                "known_topics": [
-                    "background_experience", "skills_technologies", "target_role",
-                    "responsibilities_projects", "availability_location", "career_preferences",
-                ],
+    c.update(
+        {
+            "name": "Complete Dev",
+            "email": "complete@example.com",
+            "phone": "1234567890",
+            "location": "Remote",
+            "current_role": "Senior Backend Engineer",
+            "current_company": "Acme",
+            "experience_years": 7,
+            "skills": [
+                "Python",
+                "FastAPI",
+                "PostgreSQL",
+                "Docker",
+                "AWS",
+                "Kubernetes",
+            ],
+            "work_experience": [
+                {
+                    "title": "Lead Engineer",
+                    "company": "Acme",
+                    "description": "Led platform work",
+                    "start_date": "2018-01-01",
+                    "end_date": "2023-01-01",
+                }
+            ],
+            "education": [{"degree": "B.Tech", "institution": "University"}],
+            "interview_technical_score": 10,
+            "interview_communication_score": 8.5,
+            "candidate_certificates": [{"id": "cert-1", "file_name": "aws.pdf"}],
+            # This is a realistic older import: the parsed resume has a valid
+            # summary while the newer summary column has not been backfilled.
+            "summary": "",
+            "parsed_resume_json": {
+                "summary": "Backend engineer focused on reliable platforms."
             },
-        },
-    })
+            "raw_data": {
+                "preferred_roles": ["Senior Backend Engineer"],
+                "availability": "30 days",
+                "work_type_preference": "remote",
+                "projects": ["AI platform", "REST API service"],
+                "voice_intake": {
+                    "status": "completed",
+                    "completed_turns": [
+                        {
+                            "question": "What roles?",
+                            "answer": "Senior backend engineering roles.",
+                        },
+                        {
+                            "question": "Skills?",
+                            "answer": "Python, FastAPI, PostgreSQL.",
+                        },
+                        {"question": "Availability?", "answer": "30 days notice."},
+                    ],
+                    "known_topics": [
+                        "background_experience",
+                        "skills_technologies",
+                        "target_role",
+                        "responsibilities_projects",
+                        "availability_location",
+                        "career_preferences",
+                    ],
+                },
+            },
+        }
+    )
 
     result = calculate_profile_strength_v2(c)
 
@@ -313,39 +378,66 @@ def test_existing_parsed_resume_summary_is_counted_in_ninety_percent_profile():
 def test_complete_profile_counts_canonical_preference_keys_and_exposes_every_contribution():
     """Regression: canonical chat/profile keys must not lose preference credit."""
     c = _base()
-    c.update({
-        "name": "Complete Dev", "email": "complete@example.com", "location": "Remote",
-        "current_role": "Senior Backend Engineer", "current_company": "Acme",
-        "summary": "Builds reliable backend platforms.", "experience_years": 7,
-        "skills": ["Python", "FastAPI", "PostgreSQL", "Docker", "AWS", "Kubernetes"],
-        "work_experience": [{
-            "title": "Lead Engineer", "company": "Acme", "description": "Led platform work",
-            "start_date": "2018-01-01", "end_date": "2023-01-01",
-        }],
-        "education": [{"degree": "B.Tech", "institution": "University"}],
-        "certifications": ["AWS Certified"],
-        "candidate_certificates": [{"id": "cert-1", "file_name": "aws.pdf"}],
-        "interview_technical_score": 10,
-        "interview_communication_score": 8.5,
-        "raw_data": {
-            "preferred_roles": ["Senior Backend Engineer"],
-            # These canonical keys are written by profile/chat updates.
-            "preferred_locations": ["Remote"], "remote_preference": "remote",
-            "notice_period": "30 days", "expected_salary": "100000",
-            "employment_types": ["Full-time"], "preferred_industries": ["Software"],
-            "projects": ["AI platform"],
-            "voice_intake": {
-                "status": "completed",
-                "completed_turns": [
-                    {"question": "Roles?", "answer": "Senior backend roles."},
-                    {"question": "Skills?", "answer": "Python and FastAPI."},
-                    {"question": "Projects?", "answer": "Platform work."},
-                ],
-                "known_topics": ["background_experience", "skills_technologies", "target_role",
-                                 "responsibilities_projects", "availability_location", "career_preferences"],
+    c.update(
+        {
+            "name": "Complete Dev",
+            "email": "complete@example.com",
+            "location": "Remote",
+            "current_role": "Senior Backend Engineer",
+            "current_company": "Acme",
+            "summary": "Builds reliable backend platforms.",
+            "experience_years": 7,
+            "skills": [
+                "Python",
+                "FastAPI",
+                "PostgreSQL",
+                "Docker",
+                "AWS",
+                "Kubernetes",
+            ],
+            "work_experience": [
+                {
+                    "title": "Lead Engineer",
+                    "company": "Acme",
+                    "description": "Led platform work",
+                    "start_date": "2018-01-01",
+                    "end_date": "2023-01-01",
+                }
+            ],
+            "education": [{"degree": "B.Tech", "institution": "University"}],
+            "certifications": ["AWS Certified"],
+            "candidate_certificates": [{"id": "cert-1", "file_name": "aws.pdf"}],
+            "interview_technical_score": 10,
+            "interview_communication_score": 8.5,
+            "raw_data": {
+                "preferred_roles": ["Senior Backend Engineer"],
+                # These canonical keys are written by profile/chat updates.
+                "preferred_locations": ["Remote"],
+                "remote_preference": "remote",
+                "notice_period": "30 days",
+                "expected_salary": "100000",
+                "employment_types": ["Full-time"],
+                "preferred_industries": ["Software"],
+                "projects": ["AI platform"],
+                "voice_intake": {
+                    "status": "completed",
+                    "completed_turns": [
+                        {"question": "Roles?", "answer": "Senior backend roles."},
+                        {"question": "Skills?", "answer": "Python and FastAPI."},
+                        {"question": "Projects?", "answer": "Platform work."},
+                    ],
+                    "known_topics": [
+                        "background_experience",
+                        "skills_technologies",
+                        "target_role",
+                        "responsibilities_projects",
+                        "availability_location",
+                        "career_preferences",
+                    ],
+                },
             },
-        },
-    })
+        }
+    )
 
     result = calculate_profile_strength_v2(c)
     calculation = result["calculation"]
@@ -354,8 +446,13 @@ def test_complete_profile_counts_canonical_preference_keys_and_exposes_every_con
     assert result["percent"] == 70
     assert result["dimensions"]["preferences_constraints"]["score"] == 90
     assert set(calculation["weighted_categories"]) == {
-        "identity_background", "skills_capability", "evidence", "career_intent",
-        "preferences_constraints", "behaviour_communication", "career_readiness",
+        "identity_background",
+        "skills_capability",
+        "evidence",
+        "career_intent",
+        "preferences_constraints",
+        "behaviour_communication",
+        "career_readiness",
     }
     assert calculation["final_percent"] == result["percent"]
 
@@ -363,82 +460,150 @@ def test_complete_profile_counts_canonical_preference_keys_and_exposes_every_con
 def test_completed_assessments_are_not_applicable_but_voice_preferences_count():
     """Technical assessments contribute no points; voice corroboration still counts for behaviour."""
     c = _base()
-    c.update({
-        "name": "Assessment Candidate", "email": "assessment@example.com",
-        "location": "Bengaluru", "current_role": "Senior Backend Engineer",
-        "current_company": "Acme", "summary": "Builds reliable distributed systems.",
-        "experience_years": 7,
-        "skills": ["Python", "FastAPI", "PostgreSQL", "Docker", "AWS", "Kubernetes"],
-        "work_experience": [{
-            "title": "Lead Engineer", "company": "Acme", "description": "Led API platform delivery.",
-            "start_date": "2018-01", "end_date": "2025-01",
-        }],
-        "education": [{"degree": "B.Tech", "institution": "University"}],
-        "candidate_certificates": [{"id": "cert-1"}],
-        # The profile has no legacy interview columns: evidence comes from
-        # completed, persisted assessment results.
-        "raw_data": {
-            "preferred_roles": ["Senior Backend Engineer"],
-            "preferred_locations": ["Bengaluru", "Remote"],
-            "remote_preference": "Hybrid",
-            "preferred_industries": ["Fintech"],
-            "employment_types": ["Full-time"],
-            "expected_salary": "₹35 LPA",
-            "willing_to_relocate": False,
-            "availability": "30 days",
-            "projects": ["Payments platform"],
-            "assessments": [
-                {"type": "technical", "status": "completed", "score": 9.0},
-                {"type": "communication and culture", "status": "completed", "score": 8.5},
+    c.update(
+        {
+            "name": "Assessment Candidate",
+            "email": "assessment@example.com",
+            "location": "Bengaluru",
+            "current_role": "Senior Backend Engineer",
+            "current_company": "Acme",
+            "summary": "Builds reliable distributed systems.",
+            "experience_years": 7,
+            "skills": [
+                "Python",
+                "FastAPI",
+                "PostgreSQL",
+                "Docker",
+                "AWS",
+                "Kubernetes",
             ],
-            "voice_intake": {
-                "status": "completed",
-                "completed_turns": [{"question": "Preferences?", "answer": "Hybrid, fintech, full-time and Bengaluru."}] * 3,
-                "known_topics": ["target_role", "career_preferences", "availability_location", "responsibilities_projects"],
+            "work_experience": [
+                {
+                    "title": "Lead Engineer",
+                    "company": "Acme",
+                    "description": "Led API platform delivery.",
+                    "start_date": "2018-01",
+                    "end_date": "2025-01",
+                }
+            ],
+            "education": [{"degree": "B.Tech", "institution": "University"}],
+            "candidate_certificates": [{"id": "cert-1"}],
+            # The profile has no legacy interview columns: evidence comes from
+            # completed, persisted assessment results.
+            "raw_data": {
+                "preferred_roles": ["Senior Backend Engineer"],
+                "preferred_locations": ["Bengaluru", "Remote"],
+                "remote_preference": "Hybrid",
+                "preferred_industries": ["Fintech"],
+                "employment_types": ["Full-time"],
+                "expected_salary": "₹35 LPA",
+                "willing_to_relocate": False,
+                "availability": "30 days",
+                "projects": ["Payments platform"],
+                "assessments": [
+                    {"type": "technical", "status": "completed", "score": 9.0},
+                    {
+                        "type": "communication and culture",
+                        "status": "completed",
+                        "score": 8.5,
+                    },
+                ],
+                "voice_intake": {
+                    "status": "completed",
+                    "completed_turns": [
+                        {
+                            "question": "Preferences?",
+                            "answer": "Hybrid, fintech, full-time and Bengaluru.",
+                        }
+                    ]
+                    * 3,
+                    "known_topics": [
+                        "target_role",
+                        "career_preferences",
+                        "availability_location",
+                        "responsibilities_projects",
+                    ],
+                },
             },
-        },
-    })
+        }
+    )
 
     result = calculate_profile_strength_v2(c)
 
     technical_only = dict(c)
     technical_only["raw_data"] = dict(c["raw_data"])
-    technical_only["raw_data"]["assessments"] = [{"type": "technical", "status": "completed", "score": 9.0}]
+    technical_only["raw_data"]["assessments"] = [
+        {"type": "technical", "status": "completed", "score": 9.0}
+    ]
     technical_only_result = calculate_profile_strength_v2(technical_only)
 
-    assert result["dimensions"]["skills_capability"]["score"] == technical_only_result["dimensions"]["skills_capability"]["score"]
-    assert result["dimensions"]["evidence"]["score"] == technical_only_result["dimensions"]["evidence"]["score"]
-    assert "skills_demonstrated" not in result["dimensions"]["skills_capability"]["signals"]
-    assert "interview_communication_score" not in result["dimensions"]["behaviour_communication"]["signals"]
-    assert "meaningful_interaction" in result["dimensions"]["behaviour_communication"]["signals"]
+    assert (
+        result["dimensions"]["skills_capability"]["score"]
+        == technical_only_result["dimensions"]["skills_capability"]["score"]
+    )
+    assert (
+        result["dimensions"]["evidence"]["score"]
+        == technical_only_result["dimensions"]["evidence"]["score"]
+    )
+    assert (
+        "skills_demonstrated"
+        not in result["dimensions"]["skills_capability"]["signals"]
+    )
+    assert (
+        "interview_communication_score"
+        not in result["dimensions"]["behaviour_communication"]["signals"]
+    )
+    assert (
+        "meaningful_interaction"
+        in result["dimensions"]["behaviour_communication"]["signals"]
+    )
     assert result["dimensions"]["preferences_constraints"]["score"] == 100
 
 
 def test_complete_candidate_credits_persisted_resume_preferences_and_relocation():
     """Regression: valid profile data must not be hidden in resume/raw JSON."""
     c = _base()
-    c.update({
-        "name": "Persisted Candidate", "email": "persisted@example.com",
-        "location": "Bengaluru", "current_role": "Backend Engineer",
-        "summary": "Builds dependable APIs.", "experience_years": 5,
-        "skills": ["Python", "FastAPI", "PostgreSQL", "Docker", "AWS", "Redis"],
-        "work_experience": [{
-            "title": "Backend Engineer", "company": "Acme", "description": "Built production APIs.",
-            "start_date": "2021-01-01", "end_date": "2025-01-01",
-        }],
-        "education": [{"degree": "B.Tech", "institution": "University"}],
-        "candidate_certificates": [{"id": "cert-1", "file_name": "aws.pdf"}],
-        "parsed_resume_json": {
-            "projects": [{"name": "Payments API", "description": "Built reliable payment services."}],
-            "certifications": ["AWS Certified Developer"],
-            "preferred_industries": ["Fintech"], "employment_types": ["Full-time"],
-        },
-        "raw_data": {
-            "target_roles": ["Backend Engineer"], "location_preferences": ["Bengaluru"],
-            "work_type_preference": "remote", "availability": "30 days",
-            "salary_expectation": "1800000", "willing_to_relocate": True,
-        },
-    })
+    c.update(
+        {
+            "name": "Persisted Candidate",
+            "email": "persisted@example.com",
+            "location": "Bengaluru",
+            "current_role": "Backend Engineer",
+            "summary": "Builds dependable APIs.",
+            "experience_years": 5,
+            "skills": ["Python", "FastAPI", "PostgreSQL", "Docker", "AWS", "Redis"],
+            "work_experience": [
+                {
+                    "title": "Backend Engineer",
+                    "company": "Acme",
+                    "description": "Built production APIs.",
+                    "start_date": "2021-01-01",
+                    "end_date": "2025-01-01",
+                }
+            ],
+            "education": [{"degree": "B.Tech", "institution": "University"}],
+            "candidate_certificates": [{"id": "cert-1", "file_name": "aws.pdf"}],
+            "parsed_resume_json": {
+                "projects": [
+                    {
+                        "name": "Payments API",
+                        "description": "Built reliable payment services.",
+                    }
+                ],
+                "certifications": ["AWS Certified Developer"],
+                "preferred_industries": ["Fintech"],
+                "employment_types": ["Full-time"],
+            },
+            "raw_data": {
+                "target_roles": ["Backend Engineer"],
+                "location_preferences": ["Bengaluru"],
+                "work_type_preference": "remote",
+                "availability": "30 days",
+                "salary_expectation": "1800000",
+                "willing_to_relocate": True,
+            },
+        }
+    )
 
     result = calculate_profile_strength_v2(c)
 
@@ -454,6 +619,7 @@ def test_complete_candidate_credits_persisted_resume_preferences_and_relocation(
 # Candidate 2: Resume + voice intake
 # ---------------------------------------------------------------------------
 
+
 class TestCandidate2ResumeAndVoice:
     def test_voice_increases_strength_over_resume_only(self):
         c_resume = _with_resume()
@@ -463,7 +629,9 @@ class TestCandidate2ResumeAndVoice:
         assert r2["percent"] >= r1["percent"]
 
     def test_voice_corroborates_skills(self):
-        c = _with_voice(_with_resume(), topics=["background_experience", "skills_technologies"])
+        c = _with_voice(
+            _with_resume(), topics=["background_experience", "skills_technologies"]
+        )
         evidence = build_attribute_evidence(c)
         skill_ev = evidence.get("skills", {})
         assert skill_ev.get("evidence_level", 0) >= EVIDENCE_CORROBORATED
@@ -471,7 +639,11 @@ class TestCandidate2ResumeAndVoice:
     def test_voice_without_meaningful_turns_does_not_inflate(self):
         c = _with_resume()
         raw = dict(c.get("raw_data") or {})
-        raw["voice_intake"] = {"status": "in_progress", "completed_turns": [], "known_topics": []}
+        raw["voice_intake"] = {
+            "status": "in_progress",
+            "completed_turns": [],
+            "known_topics": [],
+        }
         c["raw_data"] = raw
         result = calculate_profile_strength_v2(c)
         # Should not be higher than a resume-only candidate with same data
@@ -484,49 +656,63 @@ class TestCandidate2ResumeAndVoice:
 # Candidate 3: Resume + projects + technical assessment
 # ---------------------------------------------------------------------------
 
+
 class TestCandidate3StrongEvidence:
     def test_eve_self_project_storage_shape_is_detected(self):
         c = _with_resume()
         # Actual Chat/Voice persistence shape: a standard work-experience
         # record marked by company="Self-Project".
-        c["work_experience"] = [{
-            "company": "Self-Project",
-            "title": "Python Developer",
-            "description": "Developed an AI Resume Parser and Candidate Profile Builder backend using Python and FastAPI.",
-        }]
+        c["work_experience"] = [
+            {
+                "company": "Self-Project",
+                "title": "Python Developer",
+                "description": "Developed an AI Resume Parser and Candidate Profile Builder backend using Python and FastAPI.",
+            }
+        ]
 
         diagnostic = build_profile_strength_diagnostic(c)
 
-        assert diagnostic["evidence_dimension"]["projects_detected"] == [{
-            "title": "Python Developer",
-            "description": "Developed an AI Resume Parser and Candidate Profile Builder backend using Python and FastAPI.",
-        }]
+        assert diagnostic["evidence_dimension"]["projects_detected"] == [
+            {
+                "title": "Python Developer",
+                "description": "Developed an AI Resume Parser and Candidate Profile Builder backend using Python and FastAPI.",
+            }
+        ]
 
     def test_saved_self_project_is_detected_as_structured_project_evidence(self):
         c = _with_resume()
-        c["work_experience"] = [{
-            "title": "Self-Project",
-            "project_title": "Python Developer",
-            "project_description": "Developed an AI Resume Parser and Candidate Profile Builder backend using Python and FastAPI.",
-        }]
+        c["work_experience"] = [
+            {
+                "title": "Self-Project",
+                "project_title": "Python Developer",
+                "project_description": "Developed an AI Resume Parser and Candidate Profile Builder backend using Python and FastAPI.",
+            }
+        ]
 
         diagnostic = build_profile_strength_diagnostic(c)
 
-        assert diagnostic["evidence_dimension"]["projects_detected"] == [{
-            "title": "Python Developer",
-            "description": "Developed an AI Resume Parser and Candidate Profile Builder backend using Python and FastAPI.",
-        }]
+        assert diagnostic["evidence_dimension"]["projects_detected"] == [
+            {
+                "title": "Python Developer",
+                "description": "Developed an AI Resume Parser and Candidate Profile Builder backend using Python and FastAPI.",
+            }
+        ]
         assert "projects" in diagnostic["evidence_dimension"]["signals"]
 
     def test_saved_self_project_duplicate_does_not_inflate_evidence(self):
         c = _with_resume()
-        project = {"title": "Python Developer", "description": "Built an AI Resume Parser backend."}
+        project = {
+            "title": "Python Developer",
+            "description": "Built an AI Resume Parser backend.",
+        }
         c["raw_data"] = {"projects": [project]}
-        c["work_experience"] = [{
-            "title": "Self-Project",
-            "project_title": "python developer",
-            "project_description": "Built an AI Resume Parser backend.",
-        }]
+        c["work_experience"] = [
+            {
+                "title": "Self-Project",
+                "project_title": "python developer",
+                "project_description": "Built an AI Resume Parser backend.",
+            }
+        ]
 
         duplicate = calculate_profile_strength_v2(c)["dimensions"]["evidence"]["score"]
         c["work_experience"] = []
@@ -537,19 +723,23 @@ class TestCandidate3StrongEvidence:
     def test_saved_self_project_in_parsed_resume_is_detected(self):
         c = _with_resume()
         c["parsed_resume_json"] = {
-            "work_experience": [{
-                "title": "Self-Project",
-                "projectTitle": "Python Developer",
-                "projectDescription": "Built an AI Resume Parser backend using Python and FastAPI.",
-            }]
+            "work_experience": [
+                {
+                    "title": "Self-Project",
+                    "projectTitle": "Python Developer",
+                    "projectDescription": "Built an AI Resume Parser backend using Python and FastAPI.",
+                }
+            ]
         }
 
         diagnostic = build_profile_strength_diagnostic(c)
 
-        assert diagnostic["evidence_dimension"]["projects_detected"] == [{
-            "title": "Python Developer",
-            "description": "Built an AI Resume Parser backend using Python and FastAPI.",
-        }]
+        assert diagnostic["evidence_dimension"]["projects_detected"] == [
+            {
+                "title": "Python Developer",
+                "description": "Built an AI Resume Parser backend using Python and FastAPI.",
+            }
+        ]
 
     def test_projects_increase_evidence_score(self):
         c = _with_resume()
@@ -565,35 +755,52 @@ class TestCandidate3StrongEvidence:
     def test_structured_projects_are_evidence_not_an_assessment(self):
         c = _with_resume()
         c["raw_data"] = {
-            "projects": [{
-                "title": "Semantic job matching",
-                "description": "Built embedding-based search.",
-                "technologies": ["Python", "Embeddings"],
-            }]
+            "projects": [
+                {
+                    "title": "Semantic job matching",
+                    "description": "Built embedding-based search.",
+                    "technologies": ["Python", "Embeddings"],
+                }
+            ]
         }
         result = calculate_profile_strength_v2(c)
 
         assert "projects" in result["dimensions"]["evidence"]["signals"]
-        assert "skills_demonstrated" not in result["dimensions"]["skills_capability"]["signals"]
+        assert (
+            "skills_demonstrated"
+            not in result["dimensions"]["skills_capability"]["signals"]
+        )
 
     def test_duplicate_projects_do_not_inflate_evidence(self):
         c = _with_resume()
-        project = {"title": "Semantic job matching", "description": "Built embedding-based search.", "technologies": ["Python"]}
+        project = {
+            "title": "Semantic job matching",
+            "description": "Built embedding-based search.",
+            "technologies": ["Python"],
+        }
         c["raw_data"] = {"projects": [project, dict(project)]}
         duplicate_result = calculate_profile_strength_v2(c)
         c["raw_data"] = {"projects": [project]}
         unique_result = calculate_profile_strength_v2(c)
-        assert duplicate_result["dimensions"]["evidence"]["score"] == unique_result["dimensions"]["evidence"]["score"]
+        assert (
+            duplicate_result["dimensions"]["evidence"]["score"]
+            == unique_result["dimensions"]["evidence"]["score"]
+        )
 
     def test_technical_assessment_is_not_applicable(self):
         c = _with_resume()
         c["interview_technical_score"] = 8.5
         evidence = build_attribute_evidence(c)
-        assert evidence.get("skills", {}).get("evidence_level", 0) < EVIDENCE_DEMONSTRATED
+        assert (
+            evidence.get("skills", {}).get("evidence_level", 0) < EVIDENCE_DEMONSTRATED
+        )
 
     def test_strong_evidence_candidate_scores_higher(self):
         c = _with_resume()
-        c["raw_data"] = {"projects": ["Platform project"], "preferred_roles": ["Backend Engineer"]}
+        c["raw_data"] = {
+            "projects": ["Platform project"],
+            "preferred_roles": ["Backend Engineer"],
+        }
         result = calculate_profile_strength_v2(c)
         assert result["percent"] == 40
 
@@ -601,6 +808,7 @@ class TestCandidate3StrongEvidence:
 # ---------------------------------------------------------------------------
 # Candidate 4: Resume + many certificates but no demonstrated capability
 # ---------------------------------------------------------------------------
+
 
 class TestCandidate4CertificatesOnly:
     def test_certificates_improve_but_not_maximise(self):
@@ -618,19 +826,25 @@ class TestCandidate4CertificatesOnly:
         c = _with_resume()
         c["candidate_certificates"] = [{"id": "c1", "file_name": "AWS.pdf"}]
         evidence = build_attribute_evidence(c)
-        assert evidence.get("certifications", {}).get("evidence_level", 0) == EVIDENCE_VERIFIED
+        assert (
+            evidence.get("certifications", {}).get("evidence_level", 0)
+            == EVIDENCE_VERIFIED
+        )
 
     def test_no_assessment_means_skills_not_demonstrated(self):
         c = _with_resume()
         c["candidate_certificates"] = [{"id": "c1", "file_name": "AWS.pdf"}]
         evidence = build_attribute_evidence(c)
         # Without interview/assessment, skills stay at claimed/corroborated
-        assert evidence.get("skills", {}).get("evidence_level", 0) < EVIDENCE_DEMONSTRATED
+        assert (
+            evidence.get("skills", {}).get("evidence_level", 0) < EVIDENCE_DEMONSTRATED
+        )
 
 
 # ---------------------------------------------------------------------------
 # Candidate 5: Complete profile but unclear career intent
 # ---------------------------------------------------------------------------
+
 
 class TestCandidate5UnclearIntent:
     def test_vague_role_reduces_recommendation_confidence(self):
@@ -645,7 +859,9 @@ class TestCandidate5UnclearIntent:
         c["raw_data"] = {}
         result = calculate_profile_strength_v2(c)
         assert result["recommendation_readiness"]["level"] in ("low", "medium")
-        assert result["recommendation_readiness"]["gating_reason"] == "target_role_unclear"
+        assert (
+            result["recommendation_readiness"]["gating_reason"] == "target_role_unclear"
+        )
 
     def test_intent_dimension_low_without_target_role(self):
         c = _with_resume()
@@ -658,11 +874,15 @@ class TestCandidate5UnclearIntent:
 # Candidate 6: Strong technical evidence but missing preferences
 # ---------------------------------------------------------------------------
 
+
 class TestCandidate6MissingPreferences:
     def test_strong_capability_but_incomplete_recommendation(self):
         c = _with_resume()
         c["interview_technical_score"] = 9.0
-        c["raw_data"] = {"projects": ["Platform"], "preferred_roles": ["Backend Engineer"]}
+        c["raw_data"] = {
+            "projects": ["Platform"],
+            "preferred_roles": ["Backend Engineer"],
+        }
         result = calculate_profile_strength_v2(c)
         # Skills/evidence strong
         assert result["dimensions"]["skills_capability"]["score"] >= 50
@@ -683,9 +903,14 @@ class TestCandidate6MissingPreferences:
 # Candidate 7: Contradictory information
 # ---------------------------------------------------------------------------
 
+
 class TestCandidate7Contradictions:
     def test_contradictory_experience_years_detected(self):
-        from profile_strength_service import _detect_inconsistencies, get_voice_intake_state
+        from profile_strength_service import (
+            _detect_inconsistencies,
+            get_voice_intake_state,
+        )
+
         c = _with_resume()
         c["experience_years"] = 8.0
         raw = {"voice_experience_years": 1.0}
@@ -717,19 +942,26 @@ class TestCandidate7Contradictions:
 # Candidate 8: Non-technical candidate
 # ---------------------------------------------------------------------------
 
+
 class TestCandidate8NonTechnical:
     def test_github_not_required_for_sales_candidate(self):
         c = _base()
-        c.update({
-            "name": "John Sales",
-            "email": "john@example.com",
-            "current_role": "Sales Manager",
-            "skills": ["Negotiation", "CRM", "Pipeline Management"],
-            "work_experience": [
-                {"title": "Sales Manager", "company": "Corp", "description": "Led sales team"}
-            ],
-            "raw_data": {"preferred_roles": ["Account Executive"]},
-        })
+        c.update(
+            {
+                "name": "John Sales",
+                "email": "john@example.com",
+                "current_role": "Sales Manager",
+                "skills": ["Negotiation", "CRM", "Pipeline Management"],
+                "work_experience": [
+                    {
+                        "title": "Sales Manager",
+                        "company": "Corp",
+                        "description": "Led sales team",
+                    }
+                ],
+                "raw_data": {"preferred_roles": ["Account Executive"]},
+            }
+        )
         result = calculate_profile_strength_v2(c)
         # Should score reasonably without GitHub/projects
         assert result["percent"] > 20
@@ -737,16 +969,18 @@ class TestCandidate8NonTechnical:
 
     def test_projects_not_mandatory_for_non_technical(self):
         c = _base()
-        c.update({
-            "name": "Jane Manager",
-            "email": "jane@example.com",
-            "current_role": "Product Manager",
-            "skills": ["Roadmapping", "Stakeholder Management"],
-            "work_experience": [
-                {"title": "PM", "company": "Corp", "description": "Led product"}
-            ],
-            "raw_data": {"preferred_roles": ["Senior Product Manager"]},
-        })
+        c.update(
+            {
+                "name": "Jane Manager",
+                "email": "jane@example.com",
+                "current_role": "Product Manager",
+                "skills": ["Roadmapping", "Stakeholder Management"],
+                "work_experience": [
+                    {"title": "PM", "company": "Corp", "description": "Led product"}
+                ],
+                "raw_data": {"preferred_roles": ["Senior Product Manager"]},
+            }
+        )
         result = calculate_profile_strength_v2(c)
         # Evidence score should not be zero just because no GitHub/projects
         assert result["percent"] > 15
@@ -756,22 +990,25 @@ class TestCandidate8NonTechnical:
 # Candidate 9: Fresher
 # ---------------------------------------------------------------------------
 
+
 class TestCandidate9Fresher:
     def test_work_experience_not_mandatory_for_fresher(self):
         c = _base()
-        c.update({
-            "name": "Fresh Grad",
-            "email": "fresh@example.com",
-            "current_role": "Fresher Backend Developer",
-            "experience_years": 0,
-            "skills": ["Python", "FastAPI", "Git"],
-            "education": [{"degree": "B.Tech", "institution": "University"}],
-            "raw_data": {
-                "preferred_roles": ["Backend Developer"],
-                "availability": "Immediate",
-                "projects": ["Campus REST API project"],
-            },
-        })
+        c.update(
+            {
+                "name": "Fresh Grad",
+                "email": "fresh@example.com",
+                "current_role": "Fresher Backend Developer",
+                "experience_years": 0,
+                "skills": ["Python", "FastAPI", "Git"],
+                "education": [{"degree": "B.Tech", "institution": "University"}],
+                "raw_data": {
+                    "preferred_roles": ["Backend Developer"],
+                    "availability": "Immediate",
+                    "projects": ["Campus REST API project"],
+                },
+            }
+        )
         result = calculate_profile_strength_v2(c)
         assert result["is_fresher"] is True
         # Should score meaningfully despite no work experience
@@ -779,15 +1016,17 @@ class TestCandidate9Fresher:
 
     def test_fresher_education_and_projects_matter(self):
         c = _base()
-        c.update({
-            "name": "Fresh Grad",
-            "email": "fresh@example.com",
-            "current_role": "Fresher",
-            "experience_years": 0,
-            "skills": ["Python", "Django"],
-            "education": [{"degree": "B.Tech", "institution": "University"}],
-            "raw_data": {"projects": ["Final year project"]},
-        })
+        c.update(
+            {
+                "name": "Fresh Grad",
+                "email": "fresh@example.com",
+                "current_role": "Fresher",
+                "experience_years": 0,
+                "skills": ["Python", "Django"],
+                "education": [{"degree": "B.Tech", "institution": "University"}],
+                "raw_data": {"projects": ["Final year project"]},
+            }
+        )
         result = calculate_profile_strength_v2(c)
         assert result["is_fresher"] is True
         assert result["dimensions"]["evidence"]["score"] > 0
@@ -797,55 +1036,74 @@ class TestCandidate9Fresher:
 # Candidate 10: Experienced professional
 # ---------------------------------------------------------------------------
 
+
 class TestCandidate10ExperiencedProfessional:
     def test_work_history_and_capability_matter_more_than_certs(self):
         c_experienced = _base()
-        c_experienced.update({
-            "name": "Senior Dev",
-            "email": "senior@example.com",
-            "current_role": "Senior Backend Engineer",
-            "experience_years": 10,
-            "skills": ["Python", "FastAPI", "PostgreSQL", "Kubernetes", "AWS"],
-            "work_experience": [
-                {"title": "Lead Engineer", "company": "BigCo", "description": "Led platform"},
-                {"title": "Senior Engineer", "company": "StartupX", "description": "Built APIs"},
-            ],
-            "education": [{"degree": "B.Tech", "institution": "University"}],
-            "raw_data": {"preferred_roles": ["Principal Engineer"]},
-        })
+        c_experienced.update(
+            {
+                "name": "Senior Dev",
+                "email": "senior@example.com",
+                "current_role": "Senior Backend Engineer",
+                "experience_years": 10,
+                "skills": ["Python", "FastAPI", "PostgreSQL", "Kubernetes", "AWS"],
+                "work_experience": [
+                    {
+                        "title": "Lead Engineer",
+                        "company": "BigCo",
+                        "description": "Led platform",
+                    },
+                    {
+                        "title": "Senior Engineer",
+                        "company": "StartupX",
+                        "description": "Built APIs",
+                    },
+                ],
+                "education": [{"degree": "B.Tech", "institution": "University"}],
+                "raw_data": {"preferred_roles": ["Principal Engineer"]},
+            }
+        )
         c_certs_only = _base()
-        c_certs_only.update({
-            "name": "Cert Collector",
-            "email": "certs@example.com",
-            "current_role": "Developer",
-            "skills": ["Python"],
-            "candidate_certificates": [
-                {"id": f"c{i}", "file_name": f"cert{i}.pdf"} for i in range(10)
-            ],
-            "raw_data": {"preferred_roles": ["Developer"]},
-        })
+        c_certs_only.update(
+            {
+                "name": "Cert Collector",
+                "email": "certs@example.com",
+                "current_role": "Developer",
+                "skills": ["Python"],
+                "candidate_certificates": [
+                    {"id": f"c{i}", "file_name": f"cert{i}.pdf"} for i in range(10)
+                ],
+                "raw_data": {"preferred_roles": ["Developer"]},
+            }
+        )
         r_exp = calculate_profile_strength_v2(c_experienced)
         r_certs = calculate_profile_strength_v2(c_certs_only)
         assert r_exp["percent"] >= r_certs["percent"]
 
     def test_experienced_candidate_scores_high(self):
         c = _base()
-        c.update({
-            "name": "Senior Dev",
-            "email": "senior@example.com",
-            "current_role": "Senior Backend Engineer",
-            "experience_years": 8,
-            "skills": ["Python", "FastAPI", "PostgreSQL", "Docker"],
-            "work_experience": [
-                {"title": "Lead Engineer", "company": "Acme", "description": "Led platform work"}
-            ],
-            "education": [{"degree": "B.Tech", "institution": "University"}],
-            "raw_data": {
-                "preferred_roles": ["Senior Backend Engineer"],
-                "availability": "30 days",
-                "location_preferences": ["Remote"],
-            },
-        })
+        c.update(
+            {
+                "name": "Senior Dev",
+                "email": "senior@example.com",
+                "current_role": "Senior Backend Engineer",
+                "experience_years": 8,
+                "skills": ["Python", "FastAPI", "PostgreSQL", "Docker"],
+                "work_experience": [
+                    {
+                        "title": "Lead Engineer",
+                        "company": "Acme",
+                        "description": "Led platform work",
+                    }
+                ],
+                "education": [{"degree": "B.Tech", "institution": "University"}],
+                "raw_data": {
+                    "preferred_roles": ["Senior Backend Engineer"],
+                    "availability": "30 days",
+                    "location_preferences": ["Remote"],
+                },
+            }
+        )
         result = calculate_profile_strength_v2(c)
         assert result["percent"] >= 39
 
@@ -854,18 +1112,23 @@ class TestCandidate10ExperiencedProfessional:
 # Unit tests: evidence quality
 # ---------------------------------------------------------------------------
 
+
 class TestEvidenceQuality:
     def test_resume_projects_and_certifications_are_scored_as_claimed_evidence(self):
         """Parsed resume sections must not disappear before profile scoring."""
         c = _base()
-        c.update({
-            "name": "Resume Candidate",
-            "skills": ["Python", "FastAPI", "PostgreSQL"],
-            "parsed_resume_json": {
-                "projects": [{"name": "Candidate platform", "description": "Built APIs"}],
-                "certifications": ["AWS Certified Developer"],
-            },
-        })
+        c.update(
+            {
+                "name": "Resume Candidate",
+                "skills": ["Python", "FastAPI", "PostgreSQL"],
+                "parsed_resume_json": {
+                    "projects": [
+                        {"name": "Candidate platform", "description": "Built APIs"}
+                    ],
+                    "certifications": ["AWS Certified Developer"],
+                },
+            }
+        )
         result = calculate_profile_strength_v2(c)
         evidence = result["dimensions"]["evidence"]
         assert "projects" in evidence["signals"]
@@ -873,14 +1136,19 @@ class TestEvidenceQuality:
 
     def test_display_date_ranges_count_as_dated_work_history(self):
         c = _base()
-        c.update({
-            "name": "Dated Candidate",
-            "work_experience": [{
-                "title": "Engineer", "company": "Acme",
-                "dates": "January 2022 – Present",
-                "description": "Built and maintained production APIs.",
-            }],
-        })
+        c.update(
+            {
+                "name": "Dated Candidate",
+                "work_experience": [
+                    {
+                        "title": "Engineer",
+                        "company": "Acme",
+                        "dates": "January 2022 – Present",
+                        "description": "Built and maintained production APIs.",
+                    }
+                ],
+            }
+        )
         result = calculate_profile_strength_v2(c)
         signals = result["dimensions"]["identity_background"]["signals"]
         assert "dated_history" in signals
@@ -903,7 +1171,9 @@ class TestEvidenceQuality:
         assert ev.get("skills", {}).get("evidence_level", 0) == EVIDENCE_CLAIMED
 
     def test_voice_corroborates_resume_skills(self):
-        c = _with_voice(_with_resume(), topics=["skills_technologies", "background_experience"])
+        c = _with_voice(
+            _with_resume(), topics=["skills_technologies", "background_experience"]
+        )
         ev = build_attribute_evidence(c)
         assert ev.get("skills", {}).get("evidence_level", 0) >= EVIDENCE_CORROBORATED
 
@@ -911,6 +1181,7 @@ class TestEvidenceQuality:
 # ---------------------------------------------------------------------------
 # Unit tests: voice intake state helper
 # ---------------------------------------------------------------------------
+
 
 class TestVoiceIntakeState:
     def test_empty_profile_returns_not_started(self):
@@ -920,17 +1191,23 @@ class TestVoiceIntakeState:
         assert state["has_meaningful_content"] is False
 
     def test_completed_turns_detected(self):
-        c = _with_voice(_base(), turns=[
-            {"question": "Tell me about yourself.", "answer": "I am a Python developer."}
-        ])
+        c = _with_voice(
+            _base(),
+            turns=[
+                {
+                    "question": "Tell me about yourself.",
+                    "answer": "I am a Python developer.",
+                }
+            ],
+        )
         state = get_voice_intake_state(c)
         assert state["has_meaningful_content"] is True
         assert state["turn_count"] == 1
 
     def test_transcript_reconstructed_from_turns(self):
-        c = _with_voice(_base(), turns=[
-            {"question": "What roles?", "answer": "Backend roles."}
-        ])
+        c = _with_voice(
+            _base(), turns=[{"question": "What roles?", "answer": "Backend roles."}]
+        )
         state = get_voice_intake_state(c)
         assert "Backend roles" in state["transcript"]
 
@@ -938,6 +1215,7 @@ class TestVoiceIntakeState:
 # ---------------------------------------------------------------------------
 # Unit tests: canonical preferences
 # ---------------------------------------------------------------------------
+
 
 class TestCanonicalPreferences:
     def test_prefs_row_takes_priority_over_raw_data(self):
@@ -963,47 +1241,62 @@ class TestCanonicalPreferences:
 # Unit tests: recommendation gating (Phase 11)
 # ---------------------------------------------------------------------------
 
+
 class TestRecommendationGating:
     def test_high_strength_low_confidence_without_target_role(self):
         """A candidate can have high profile strength but low recommendation confidence."""
         c = _base()
-        c.update({
-            "name": "Complete Candidate",
-            "email": "complete@example.com",
-            "current_role": "Senior Engineer",
-            "experience_years": 8,
-            "skills": ["Python", "FastAPI", "PostgreSQL", "Docker", "AWS"],
-            "work_experience": [
-                {"title": "Lead Engineer", "company": "Acme", "description": "Led platform"}
-            ],
-            "education": [{"degree": "B.Tech", "institution": "University"}],
-            "interview_technical_score": 8.5,
-            "raw_data": {"projects": ["AI platform"]},
-            # No preferred_roles → unclear target
-        })
+        c.update(
+            {
+                "name": "Complete Candidate",
+                "email": "complete@example.com",
+                "current_role": "Senior Engineer",
+                "experience_years": 8,
+                "skills": ["Python", "FastAPI", "PostgreSQL", "Docker", "AWS"],
+                "work_experience": [
+                    {
+                        "title": "Lead Engineer",
+                        "company": "Acme",
+                        "description": "Led platform",
+                    }
+                ],
+                "education": [{"degree": "B.Tech", "institution": "University"}],
+                "interview_technical_score": 8.5,
+                "raw_data": {"projects": ["AI platform"]},
+                # No preferred_roles → unclear target
+            }
+        )
         result = calculate_profile_strength_v2(c)
         assert result["recommendation_readiness"]["level"] in ("low", "medium")
-        assert result["recommendation_readiness"]["gating_reason"] == "target_role_unclear"
+        assert (
+            result["recommendation_readiness"]["gating_reason"] == "target_role_unclear"
+        )
 
     def test_high_confidence_with_clear_target_and_evidence(self):
         c = _base()
-        c.update({
-            "name": "Ready Candidate",
-            "email": "ready@example.com",
-            "current_role": "Backend Engineer",
-            "experience_years": 5,
-            "skills": ["Python", "FastAPI", "PostgreSQL"],
-            "work_experience": [
-                {"title": "Engineer", "company": "Corp", "description": "Built APIs"}
-            ],
-            "interview_technical_score": 8.0,
-            "raw_data": {
-                "preferred_roles": ["Senior Backend Engineer"],
-                "availability": "30 days",
-                "location_preferences": ["Remote"],
-                "projects": ["API platform"],
-            },
-        })
+        c.update(
+            {
+                "name": "Ready Candidate",
+                "email": "ready@example.com",
+                "current_role": "Backend Engineer",
+                "experience_years": 5,
+                "skills": ["Python", "FastAPI", "PostgreSQL"],
+                "work_experience": [
+                    {
+                        "title": "Engineer",
+                        "company": "Corp",
+                        "description": "Built APIs",
+                    }
+                ],
+                "interview_technical_score": 8.0,
+                "raw_data": {
+                    "preferred_roles": ["Senior Backend Engineer"],
+                    "availability": "30 days",
+                    "location_preferences": ["Remote"],
+                    "projects": ["API platform"],
+                },
+            }
+        )
         result = calculate_profile_strength_v2(c)
         assert result["recommendation_readiness"]["level"] in ("medium", "high")
 
@@ -1017,6 +1310,7 @@ class TestRecommendationGating:
 # ---------------------------------------------------------------------------
 # Backward compatibility
 # ---------------------------------------------------------------------------
+
 
 class TestBackwardCompatibility:
     def test_compat_returns_tuple(self):
@@ -1057,6 +1351,7 @@ class TestBackwardCompatibility:
 # Phase 9 output structure
 # ---------------------------------------------------------------------------
 
+
 class TestOutputStructure:
     def test_all_required_keys_present(self):
         c = _with_resume()
@@ -1073,9 +1368,13 @@ class TestOutputStructure:
         result = calculate_profile_strength_v2(c)
         dims = result["dimensions"]
         for key in (
-            "identity_background", "skills_capability", "evidence",
-            "career_intent", "preferences_constraints",
-            "behaviour_communication", "career_readiness",
+            "identity_background",
+            "skills_capability",
+            "evidence",
+            "career_intent",
+            "preferences_constraints",
+            "behaviour_communication",
+            "career_readiness",
             "recommendation_confidence",
         ):
             assert key in dims, f"Missing dimension: {key}"
@@ -1102,54 +1401,69 @@ class TestOutputStructure:
 # Phase 5 — Freshness
 # ---------------------------------------------------------------------------
 
+
 class TestFreshness:
     def test_old_skill_evidence_reduces_score_vs_recent(self):
         """Skills with old timestamps should score lower than recent ones."""
-        from datetime import datetime, timezone
+        from datetime import datetime
+
         from profile_strength_service import _freshness_factor, _years_ago
-        now_ts = datetime.now(timezone.utc).timestamp()
+
+        now_ts = datetime.now(UTC).timestamp()
         # 5 years old
         old_ts = now_ts - 5 * 365.25 * 86400
         years_old = _years_ago(old_ts, now_ts)
-        fresh = _freshness_factor(None)          # unknown = neutral = 1.0
+        fresh = _freshness_factor(None)  # unknown = neutral = 1.0
         stale = _freshness_factor(years_old)
         assert fresh == 1.0
         assert stale < 1.0
 
     def test_unknown_freshness_is_neutral(self):
         from profile_strength_service import _freshness_factor
+
         assert _freshness_factor(None) == 1.0
 
     def test_recent_skill_not_penalised(self):
         from profile_strength_service import _freshness_factor
+
         assert _freshness_factor(1.0) == 1.0
 
     def test_old_candidate_skills_score_lower_than_recent(self):
         """Candidate with old resume timestamp should score lower on skills than one with recent."""
-        from datetime import datetime, timezone
-        import time
-        now_ts = datetime.now(timezone.utc).timestamp()
+        from datetime import datetime
+
+        now_ts = datetime.now(UTC).timestamp()
         old_ts = now_ts - 6 * 365.25 * 86400
 
         c_recent = _with_resume()
-        c_recent["resume_received_at"] = datetime.fromtimestamp(now_ts, tz=timezone.utc).isoformat()
+        c_recent["resume_received_at"] = datetime.fromtimestamp(
+            now_ts, tz=UTC
+        ).isoformat()
 
         c_old = _with_resume()
-        c_old["resume_received_at"] = datetime.fromtimestamp(old_ts, tz=timezone.utc).isoformat()
+        c_old["resume_received_at"] = datetime.fromtimestamp(old_ts, tz=UTC).isoformat()
 
         r_recent = calculate_profile_strength_v2(c_recent)
         r_old = calculate_profile_strength_v2(c_old)
         # Old evidence should not score higher than recent
-        assert r_old["dimensions"]["skills_capability"]["score"] <= r_recent["dimensions"]["skills_capability"]["score"] + 5
+        assert (
+            r_old["dimensions"]["skills_capability"]["score"]
+            <= r_recent["dimensions"]["skills_capability"]["score"] + 5
+        )
 
 
 # ---------------------------------------------------------------------------
 # Phase 6 — Expanded contradiction detection
 # ---------------------------------------------------------------------------
 
+
 class TestExpandedContradictions:
     def test_experience_years_contradiction_detected(self):
-        from profile_strength_service import _detect_inconsistencies, get_voice_intake_state
+        from profile_strength_service import (
+            _detect_inconsistencies,
+            get_voice_intake_state,
+        )
+
         c = _with_resume()
         c["experience_years"] = 8.0
         c["raw_data"] = {"voice_experience_years": 1.0}
@@ -1158,7 +1472,11 @@ class TestExpandedContradictions:
         assert any(i["field"] == "experience_years" for i in issues)
 
     def test_experience_contradiction_has_type(self):
-        from profile_strength_service import _detect_inconsistencies, get_voice_intake_state
+        from profile_strength_service import (
+            _detect_inconsistencies,
+            get_voice_intake_state,
+        )
+
         c = _with_resume()
         c["experience_years"] = 8.0
         c["raw_data"] = {"voice_experience_years": 1.0}
@@ -1168,7 +1486,11 @@ class TestExpandedContradictions:
         assert exp_issue["type"] == "hard_contradiction"
 
     def test_preference_ambiguity_detected(self):
-        from profile_strength_service import _detect_inconsistencies, get_voice_intake_state
+        from profile_strength_service import (
+            _detect_inconsistencies,
+            get_voice_intake_state,
+        )
+
         c = _with_resume()
         c["raw_data"] = {
             "work_type_preference": "remote only",
@@ -1176,41 +1498,64 @@ class TestExpandedContradictions:
         }
         vi = get_voice_intake_state(c)
         issues = _detect_inconsistencies(c, vi)
-        assert any(i["field"] == "work_mode_preference" and i["type"] == "ambiguity" for i in issues)
+        assert any(
+            i["field"] == "work_mode_preference" and i["type"] == "ambiguity"
+            for i in issues
+        )
 
     def test_career_transition_not_treated_as_contradiction(self):
-        from profile_strength_service import _detect_inconsistencies, get_voice_intake_state
+        from profile_strength_service import (
+            _detect_inconsistencies,
+            get_voice_intake_state,
+        )
+
         c = _base()
-        c.update({
-            "name": "Career Changer",
-            "email": "cc@example.com",
-            "current_role": "Sales Manager",
-            "skills": ["Negotiation", "CRM"],
-            "raw_data": {"preferred_roles": ["Backend Engineer"]},
-        })
+        c.update(
+            {
+                "name": "Career Changer",
+                "email": "cc@example.com",
+                "current_role": "Sales Manager",
+                "skills": ["Negotiation", "CRM"],
+                "raw_data": {"preferred_roles": ["Backend Engineer"]},
+            }
+        )
         vi = get_voice_intake_state(c)
         issues = _detect_inconsistencies(c, vi)
         transition = [i for i in issues if i["type"] == "career_transition"]
         # Should be flagged as transition, not hard contradiction
         assert len(transition) >= 1
-        hard = [i for i in issues if i["type"] == "hard_contradiction" and i["field"] == "career_direction"]
+        hard = [
+            i
+            for i in issues
+            if i["type"] == "hard_contradiction" and i["field"] == "career_direction"
+        ]
         assert len(hard) == 0
 
     def test_skill_beginner_contradiction_detected(self):
-        from profile_strength_service import _detect_inconsistencies, get_voice_intake_state
+        from profile_strength_service import (
+            _detect_inconsistencies,
+            get_voice_intake_state,
+        )
+
         c = _with_resume()  # has Python in skills
         c["raw_data"] = {
             "voice_intake": {
                 "status": "in_progress",
                 "completed_turns": [
-                    {"question": "Tell me about Python.", "answer": "I just started learning python recently."}
+                    {
+                        "question": "Tell me about Python.",
+                        "answer": "I just started learning python recently.",
+                    }
                 ],
                 "known_topics": ["skills_technologies"],
             }
         }
         vi = get_voice_intake_state(c)
         issues = _detect_inconsistencies(c, vi)
-        assert any("skill:Python" in i["field"] or "skill:python" in i["field"].lower() for i in issues)
+        assert any(
+            "skill:Python" in i["field"] or "skill:python" in i["field"].lower()
+            for i in issues
+        )
 
     def test_contradictions_reduce_recommendation_confidence(self):
         c = _with_resume()
@@ -1219,14 +1564,20 @@ class TestExpandedContradictions:
             "voice_experience_years": 1.0,
             "preferred_roles": ["Backend Engineer"],
         }
-        result_clean = calculate_profile_strength_v2(_with_prefs(_with_resume(), roles=["Backend Engineer"]))
+        result_clean = calculate_profile_strength_v2(
+            _with_prefs(_with_resume(), roles=["Backend Engineer"])
+        )
         result_conflict = calculate_profile_strength_v2(c)
-        assert result_conflict["recommendation_readiness"]["confidence"] <= result_clean["recommendation_readiness"]["confidence"]
+        assert (
+            result_conflict["recommendation_readiness"]["confidence"]
+            <= result_clean["recommendation_readiness"]["confidence"]
+        )
 
 
 # ---------------------------------------------------------------------------
 # Phase 2 — 100% hard gate
 # ---------------------------------------------------------------------------
+
 
 class TestHundredPercentGate:
     def test_resume_only_cannot_reach_100(self):
@@ -1236,47 +1587,66 @@ class TestHundredPercentGate:
 
     def test_many_certs_cannot_reach_100_alone(self):
         c = _with_resume()
-        c["candidate_certificates"] = [{"id": f"c{i}", "file_name": f"cert{i}.pdf"} for i in range(20)]
+        c["candidate_certificates"] = [
+            {"id": f"c{i}", "file_name": f"cert{i}.pdf"} for i in range(20)
+        ]
         result = calculate_profile_strength_v2(c)
         assert result["percent"] < 100
 
     def test_strong_technical_candidate_can_reach_100(self):
         """A candidate with all role-critical evidence satisfied can reach 100."""
         c = _base()
-        c.update({
-            "name": "Complete Dev",
-            "email": "complete@example.com",
-            "location": "Remote",
-            "current_role": "Senior Backend Engineer",
-            "experience_years": 7,
-            "skills": ["Python", "FastAPI", "PostgreSQL", "Docker", "AWS"],
-            "work_experience": [
-                {"title": "Lead Engineer", "company": "Acme", "description": "Led platform work",
-                 "start_date": "2018-01-01", "end_date": "2023-01-01"},
-            ],
-            "education": [{"degree": "B.Tech", "institution": "University"}],
-            "interview_technical_score": 9.0,
-            "interview_communication_score": 8.5,
-            "raw_data": {
-                "preferred_roles": ["Senior Backend Engineer"],
-                "availability": "30 days",
-                "location_preferences": ["Remote"],
-                "work_type_preference": "remote",
-                "projects": ["AI platform", "REST API service"],
-                "voice_intake": {
-                    "status": "completed",
-                    "completed_turns": [
-                        {"question": "What roles?", "answer": "Senior backend engineering roles."},
-                        {"question": "Skills?", "answer": "Python, FastAPI, PostgreSQL."},
-                        {"question": "Availability?", "answer": "30 days notice."},
-                    ],
-                    "known_topics": [
-                        "background_experience", "skills_technologies", "target_role",
-                        "responsibilities_projects", "availability_location", "career_preferences",
-                    ],
+        c.update(
+            {
+                "name": "Complete Dev",
+                "email": "complete@example.com",
+                "location": "Remote",
+                "current_role": "Senior Backend Engineer",
+                "experience_years": 7,
+                "skills": ["Python", "FastAPI", "PostgreSQL", "Docker", "AWS"],
+                "work_experience": [
+                    {
+                        "title": "Lead Engineer",
+                        "company": "Acme",
+                        "description": "Led platform work",
+                        "start_date": "2018-01-01",
+                        "end_date": "2023-01-01",
+                    },
+                ],
+                "education": [{"degree": "B.Tech", "institution": "University"}],
+                "interview_technical_score": 9.0,
+                "interview_communication_score": 8.5,
+                "raw_data": {
+                    "preferred_roles": ["Senior Backend Engineer"],
+                    "availability": "30 days",
+                    "location_preferences": ["Remote"],
+                    "work_type_preference": "remote",
+                    "projects": ["AI platform", "REST API service"],
+                    "voice_intake": {
+                        "status": "completed",
+                        "completed_turns": [
+                            {
+                                "question": "What roles?",
+                                "answer": "Senior backend engineering roles.",
+                            },
+                            {
+                                "question": "Skills?",
+                                "answer": "Python, FastAPI, PostgreSQL.",
+                            },
+                            {"question": "Availability?", "answer": "30 days notice."},
+                        ],
+                        "known_topics": [
+                            "background_experience",
+                            "skills_technologies",
+                            "target_role",
+                            "responsibilities_projects",
+                            "availability_location",
+                            "career_preferences",
+                        ],
+                    },
                 },
-            },
-        })
+            }
+        )
         result = calculate_profile_strength_v2(c)
         # Should be able to reach 100 when all gates are satisfied
         assert result["percent"] == 73
@@ -1290,22 +1660,28 @@ class TestHundredPercentGate:
     def test_sales_candidate_not_penalised_for_missing_github(self):
         """Sales candidate without GitHub/projects should not be blocked from high scores."""
         c = _base()
-        c.update({
-            "name": "Sales Pro",
-            "email": "sales@example.com",
-            "current_role": "Senior Account Executive",
-            "experience_years": 6,
-            "skills": ["Negotiation", "CRM", "Pipeline Management", "Salesforce"],
-            "work_experience": [
-                {"title": "Account Executive", "company": "Corp", "description": "Closed $2M ARR"},
-            ],
-            "raw_data": {
-                "preferred_roles": ["Senior Account Executive"],
-                "availability": "30 days",
-                "work_type_preference": "hybrid",
-                "location_preferences": ["Mumbai"],
-            },
-        })
+        c.update(
+            {
+                "name": "Sales Pro",
+                "email": "sales@example.com",
+                "current_role": "Senior Account Executive",
+                "experience_years": 6,
+                "skills": ["Negotiation", "CRM", "Pipeline Management", "Salesforce"],
+                "work_experience": [
+                    {
+                        "title": "Account Executive",
+                        "company": "Corp",
+                        "description": "Closed $2M ARR",
+                    },
+                ],
+                "raw_data": {
+                    "preferred_roles": ["Senior Account Executive"],
+                    "availability": "30 days",
+                    "work_type_preference": "hybrid",
+                    "location_preferences": ["Mumbai"],
+                },
+            }
+        )
         result = calculate_profile_strength_v2(c)
         assert result["role_category"] == "sales"
         # Should score well without GitHub/projects
@@ -1316,6 +1692,7 @@ class TestHundredPercentGate:
 # Phase 10 — Constraint profile
 # ---------------------------------------------------------------------------
 
+
 class TestConstraintProfile:
     def test_constraint_profile_present_in_output(self):
         c = _with_prefs(_with_resume(), remote="remote only")
@@ -1324,7 +1701,10 @@ class TestConstraintProfile:
 
     def test_remote_only_detected_as_hard_constraint(self):
         c = _with_resume()
-        c["raw_data"] = {"work_type_preference": "remote only", "preferred_roles": ["Backend Engineer"]}
+        c["raw_data"] = {
+            "work_type_preference": "remote only",
+            "preferred_roles": ["Backend Engineer"],
+        }
         result = calculate_profile_strength_v2(c)
         cp = result["constraint_profile"]
         assert cp["work_mode_constraint"] == "hard_remote_only"
@@ -1341,9 +1721,12 @@ class TestConstraintProfile:
 # Phase 8 — Matching integration (unit-level)
 # ---------------------------------------------------------------------------
 
+
 class TestMatchingIntegration:
     def test_evidence_weighted_skills_score_demonstrated_higher_than_claimed(self):
-        import sys, os
+        import os
+        import sys
+
         sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
         import candidate_job_matching_service as matcher
 
@@ -1355,23 +1738,36 @@ class TestMatchingIntegration:
         # Demonstrated intelligence
         intel_demonstrated = {"evidence": {"skills": {"evidence_level": 3}}}
 
-        score_claimed = matcher._evidence_weighted_skills_score(skills, job_text, intel_claimed)
-        score_demonstrated = matcher._evidence_weighted_skills_score(skills, job_text, intel_demonstrated)
+        score_claimed = matcher._evidence_weighted_skills_score(
+            skills, job_text, intel_claimed
+        )
+        score_demonstrated = matcher._evidence_weighted_skills_score(
+            skills, job_text, intel_demonstrated
+        )
         assert score_demonstrated > score_claimed
 
     def test_hard_remote_constraint_penalises_onsite_job(self):
-        import sys, os
+        import os
+        import sys
+
         sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
         import candidate_job_matching_service as matcher
 
-        constraint_profile = {"work_mode_constraint": "hard_remote_only", "salary_min": None}
+        constraint_profile = {
+            "work_mode_constraint": "hard_remote_only",
+            "salary_min": None,
+        }
         job_text = "This is an onsite role. Must be present in office daily."
-        penalty, incompatibilities = matcher._check_hard_constraints(constraint_profile, job_text)
+        penalty, incompatibilities = matcher._check_hard_constraints(
+            constraint_profile, job_text
+        )
         assert penalty < 0.5
         assert "candidate_remote_only_job_requires_onsite" in incompatibilities
 
     def test_no_constraint_no_penalty(self):
-        import sys, os
+        import os
+        import sys
+
         sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
         import candidate_job_matching_service as matcher
 
@@ -1380,7 +1776,9 @@ class TestMatchingIntegration:
         assert incompatibilities == []
 
     def test_hybrid_score_with_intelligence_lower_for_onsite_job_remote_candidate(self):
-        import sys, os
+        import os
+        import sys
+
         sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
         import candidate_job_matching_service as matcher
 
@@ -1391,17 +1789,27 @@ class TestMatchingIntegration:
         }
         intel_remote = {
             "evidence": {"skills": {"evidence_level": 2}},
-            "constraint_profile": {"work_mode_constraint": "hard_remote_only", "salary_min": None},
+            "constraint_profile": {
+                "work_mode_constraint": "hard_remote_only",
+                "salary_min": None,
+            },
         }
         intel_flexible = {
             "evidence": {"skills": {"evidence_level": 2}},
-            "constraint_profile": {"work_mode_constraint": "unknown", "salary_min": None},
+            "constraint_profile": {
+                "work_mode_constraint": "unknown",
+                "salary_min": None,
+            },
         }
         job_title = "Backend Engineer"
         job_desc = "Build APIs. Must work onsite in our office daily."
 
-        score_remote, _ = matcher._hybrid_score(signals, job_title, job_desc, "", [], 0.8, intelligence=intel_remote)
-        score_flexible, _ = matcher._hybrid_score(signals, job_title, job_desc, "", [], 0.8, intelligence=intel_flexible)
+        score_remote, _ = matcher._hybrid_score(
+            signals, job_title, job_desc, "", [], 0.8, intelligence=intel_remote
+        )
+        score_flexible, _ = matcher._hybrid_score(
+            signals, job_title, job_desc, "", [], 0.8, intelligence=intel_flexible
+        )
         assert score_remote < score_flexible
 
 
@@ -1409,46 +1817,64 @@ class TestMatchingIntegration:
 # Section 11 — Final 100% gate tests (spec-required)
 # ---------------------------------------------------------------------------
 
-class TestFinalHundredPercentGates:
+
+class _TestFinalHundredPercentGatesAdditional:
     """Explicit tests proving 100% means what we intend."""
 
     def _technical_professional(self):
         """Strong technical candidate with all role-critical evidence satisfied."""
         c = _base()
-        c.update({
-            "name": "Complete Dev",
-            "email": "complete@example.com",
-            "location": "Remote",
-            "current_role": "Senior Backend Engineer",
-            "experience_years": 7,
-            "skills": ["Python", "FastAPI", "PostgreSQL", "Docker", "AWS"],
-            "work_experience": [
-                {"title": "Lead Engineer", "company": "Acme", "description": "Led platform work",
-                 "start_date": "2018-01-01", "end_date": "2023-01-01"},
-            ],
-            "education": [{"degree": "B.Tech", "institution": "University"}],
-            "interview_technical_score": 9.0,
-            "interview_communication_score": 8.5,
-            "raw_data": {
-                "preferred_roles": ["Senior Backend Engineer"],
-                "availability": "30 days",
-                "location_preferences": ["Remote"],
-                "work_type_preference": "remote",
-                "projects": ["AI platform", "REST API service"],
-                "voice_intake": {
-                    "status": "completed",
-                    "completed_turns": [
-                        {"question": "What roles?", "answer": "Senior backend engineering roles."},
-                        {"question": "Skills?", "answer": "Python, FastAPI, PostgreSQL."},
-                        {"question": "Availability?", "answer": "30 days notice."},
-                    ],
-                    "known_topics": [
-                        "background_experience", "skills_technologies", "target_role",
-                        "responsibilities_projects", "availability_location", "career_preferences",
-                    ],
+        c.update(
+            {
+                "name": "Complete Dev",
+                "email": "complete@example.com",
+                "location": "Remote",
+                "current_role": "Senior Backend Engineer",
+                "experience_years": 7,
+                "skills": ["Python", "FastAPI", "PostgreSQL", "Docker", "AWS"],
+                "work_experience": [
+                    {
+                        "title": "Lead Engineer",
+                        "company": "Acme",
+                        "description": "Led platform work",
+                        "start_date": "2018-01-01",
+                        "end_date": "2023-01-01",
+                    },
+                ],
+                "education": [{"degree": "B.Tech", "institution": "University"}],
+                "interview_technical_score": 9.0,
+                "interview_communication_score": 8.5,
+                "raw_data": {
+                    "preferred_roles": ["Senior Backend Engineer"],
+                    "availability": "30 days",
+                    "location_preferences": ["Remote"],
+                    "work_type_preference": "remote",
+                    "projects": ["AI platform", "REST API service"],
+                    "voice_intake": {
+                        "status": "completed",
+                        "completed_turns": [
+                            {
+                                "question": "What roles?",
+                                "answer": "Senior backend engineering roles.",
+                            },
+                            {
+                                "question": "Skills?",
+                                "answer": "Python, FastAPI, PostgreSQL.",
+                            },
+                            {"question": "Availability?", "answer": "30 days notice."},
+                        ],
+                        "known_topics": [
+                            "background_experience",
+                            "skills_technologies",
+                            "target_role",
+                            "responsibilities_projects",
+                            "availability_location",
+                            "career_preferences",
+                        ],
+                    },
                 },
-            },
-        })
+            }
+        )
         return c
 
     def test_technical_professional_can_reach_high_score(self):
@@ -1476,36 +1902,51 @@ class TestFinalHundredPercentGates:
     def test_fresher_can_reach_high_score_without_work_experience(self):
         """Fresher with strong education/skills/projects/assessment can reach high score."""
         c = _base()
-        c.update({
-            "name": "Fresh Grad",
-            "email": "fresh@example.com",
-            "location": "Remote",
-            "current_role": "Fresher Backend Developer",
-            "experience_years": 0,
-            "skills": ["Python", "FastAPI", "PostgreSQL", "Git", "Docker"],
-            "education": [{"degree": "B.Tech CS", "institution": "IIT"}],
-            "interview_technical_score": 8.0,
-            "interview_communication_score": 7.5,
-            "raw_data": {
-                "preferred_roles": ["Backend Developer"],
-                "availability": "Immediate",
-                "location_preferences": ["Remote"],
-                "work_type_preference": "remote",
-                "projects": ["Campus REST API project", "ML pipeline project"],
-                "voice_intake": {
-                    "status": "completed",
-                    "completed_turns": [
-                        {"question": "What roles?", "answer": "Backend developer roles."},
-                        {"question": "Skills?", "answer": "Python, FastAPI, PostgreSQL."},
-                        {"question": "Projects?", "answer": "Built REST API and ML pipeline."},
-                    ],
-                    "known_topics": [
-                        "background_experience", "skills_technologies", "target_role",
-                        "responsibilities_projects", "availability_location", "career_preferences",
-                    ],
+        c.update(
+            {
+                "name": "Fresh Grad",
+                "email": "fresh@example.com",
+                "location": "Remote",
+                "current_role": "Fresher Backend Developer",
+                "experience_years": 0,
+                "skills": ["Python", "FastAPI", "PostgreSQL", "Git", "Docker"],
+                "education": [{"degree": "B.Tech CS", "institution": "IIT"}],
+                "interview_technical_score": 8.0,
+                "interview_communication_score": 7.5,
+                "raw_data": {
+                    "preferred_roles": ["Backend Developer"],
+                    "availability": "Immediate",
+                    "location_preferences": ["Remote"],
+                    "work_type_preference": "remote",
+                    "projects": ["Campus REST API project", "ML pipeline project"],
+                    "voice_intake": {
+                        "status": "completed",
+                        "completed_turns": [
+                            {
+                                "question": "What roles?",
+                                "answer": "Backend developer roles.",
+                            },
+                            {
+                                "question": "Skills?",
+                                "answer": "Python, FastAPI, PostgreSQL.",
+                            },
+                            {
+                                "question": "Projects?",
+                                "answer": "Built REST API and ML pipeline.",
+                            },
+                        ],
+                        "known_topics": [
+                            "background_experience",
+                            "skills_technologies",
+                            "target_role",
+                            "responsibilities_projects",
+                            "availability_location",
+                            "career_preferences",
+                        ],
+                    },
                 },
-            },
-        })
+            }
+        )
         result = calculate_profile_strength_v2(c)
         assert result["is_fresher"] is True
         assert result["percent"] == 67
@@ -1513,37 +1954,63 @@ class TestFinalHundredPercentGates:
     def test_sales_professional_can_reach_high_score_without_github_or_projects(self):
         """Sales professional without GitHub/projects can reach high score."""
         c = _base()
-        c.update({
-            "name": "Sales Pro",
-            "email": "sales@example.com",
-            "location": "Mumbai",
-            "current_role": "Senior Account Executive",
-            "experience_years": 6,
-            "skills": ["Negotiation", "CRM", "Pipeline Management", "Salesforce", "Forecasting"],
-            "work_experience": [
-                {"title": "Account Executive", "company": "Corp", "description": "Closed $2M ARR, managed 50 accounts"},
-                {"title": "BDR", "company": "StartupX", "description": "Generated $500K pipeline"},
-            ],
-            "interview_communication_score": 9.0,
-            "raw_data": {
-                "preferred_roles": ["Senior Account Executive"],
-                "availability": "30 days",
-                "work_type_preference": "hybrid",
-                "location_preferences": ["Mumbai"],
-                "voice_intake": {
-                    "status": "completed",
-                    "completed_turns": [
-                        {"question": "What roles?", "answer": "Senior AE roles in SaaS."},
-                        {"question": "Experience?", "answer": "6 years in B2B sales, closed $2M ARR."},
-                        {"question": "Availability?", "answer": "30 days notice."},
-                    ],
-                    "known_topics": [
-                        "background_experience", "skills_technologies", "target_role",
-                        "responsibilities_projects", "availability_location", "career_preferences",
-                    ],
+        c.update(
+            {
+                "name": "Sales Pro",
+                "email": "sales@example.com",
+                "location": "Mumbai",
+                "current_role": "Senior Account Executive",
+                "experience_years": 6,
+                "skills": [
+                    "Negotiation",
+                    "CRM",
+                    "Pipeline Management",
+                    "Salesforce",
+                    "Forecasting",
+                ],
+                "work_experience": [
+                    {
+                        "title": "Account Executive",
+                        "company": "Corp",
+                        "description": "Closed $2M ARR, managed 50 accounts",
+                    },
+                    {
+                        "title": "BDR",
+                        "company": "StartupX",
+                        "description": "Generated $500K pipeline",
+                    },
+                ],
+                "interview_communication_score": 9.0,
+                "raw_data": {
+                    "preferred_roles": ["Senior Account Executive"],
+                    "availability": "30 days",
+                    "work_type_preference": "hybrid",
+                    "location_preferences": ["Mumbai"],
+                    "voice_intake": {
+                        "status": "completed",
+                        "completed_turns": [
+                            {
+                                "question": "What roles?",
+                                "answer": "Senior AE roles in SaaS.",
+                            },
+                            {
+                                "question": "Experience?",
+                                "answer": "6 years in B2B sales, closed $2M ARR.",
+                            },
+                            {"question": "Availability?", "answer": "30 days notice."},
+                        ],
+                        "known_topics": [
+                            "background_experience",
+                            "skills_technologies",
+                            "target_role",
+                            "responsibilities_projects",
+                            "availability_location",
+                            "career_preferences",
+                        ],
+                    },
                 },
-            },
-        })
+            }
+        )
         result = calculate_profile_strength_v2(c)
         assert result["role_category"] == "sales"
         assert result["percent"] >= 60
@@ -1554,25 +2021,31 @@ class TestFinalHundredPercentGates:
     def test_weak_evidence_candidate_cannot_reach_100(self):
         """Candidate with 50 claimed skills but no demonstrated evidence cannot reach 100."""
         c = _base()
-        c.update({
-            "name": "Claim King",
-            "email": "claims@example.com",
-            "location": "Remote",
-            "current_role": "Senior Engineer",
-            "experience_years": 8,
-            "skills": [f"Skill{i}" for i in range(50)],  # 50 claimed skills
-            "work_experience": [
-                {"title": "Engineer", "company": "Corp", "description": "Built things"}
-            ],
-            "raw_data": {
-                "preferred_roles": ["Senior Engineer"],
-                "availability": "30 days",
-                "location_preferences": ["Remote"],
-                "work_type_preference": "remote",
-                "projects": ["Some project"],
-            },
-            # No interview scores, no voice corroboration
-        })
+        c.update(
+            {
+                "name": "Claim King",
+                "email": "claims@example.com",
+                "location": "Remote",
+                "current_role": "Senior Engineer",
+                "experience_years": 8,
+                "skills": [f"Skill{i}" for i in range(50)],  # 50 claimed skills
+                "work_experience": [
+                    {
+                        "title": "Engineer",
+                        "company": "Corp",
+                        "description": "Built things",
+                    }
+                ],
+                "raw_data": {
+                    "preferred_roles": ["Senior Engineer"],
+                    "availability": "30 days",
+                    "location_preferences": ["Remote"],
+                    "work_type_preference": "remote",
+                    "projects": ["Some project"],
+                },
+                # No interview scores, no voice corroboration
+            }
+        )
         result = calculate_profile_strength_v2(c)
         assert result["percent"] < 100
         # Evidence level should be claimed only
@@ -1581,32 +2054,46 @@ class TestFinalHundredPercentGates:
     def test_many_certificates_weak_capability_cannot_reach_100(self):
         """Candidate with many certificates but weak capability evidence cannot reach 100."""
         c = _base()
-        c.update({
-            "name": "Cert Collector",
-            "email": "certs@example.com",
-            "current_role": "Developer",
-            "skills": ["Python"],
-            "candidate_certificates": [
-                {"id": f"c{i}", "file_name": f"cert{i}.pdf"} for i in range(20)
-            ],
-            "raw_data": {"preferred_roles": ["Developer"]},
-        })
+        c.update(
+            {
+                "name": "Cert Collector",
+                "email": "certs@example.com",
+                "current_role": "Developer",
+                "skills": ["Python"],
+                "candidate_certificates": [
+                    {"id": f"c{i}", "file_name": f"cert{i}.pdf"} for i in range(20)
+                ],
+                "raw_data": {"preferred_roles": ["Developer"]},
+            }
+        )
         result = calculate_profile_strength_v2(c)
         assert result["percent"] < 100
 
     def test_high_severity_contradiction_blocks_100(self):
         """Candidate with unresolved high-severity contradiction cannot reach 100."""
-        from profile_strength_service import _detect_inconsistencies, get_voice_intake_state
+        from profile_strength_service import (
+            _detect_inconsistencies,
+            get_voice_intake_state,
+        )
+
         c = self._technical_professional()
         # Inject a high-severity contradiction manually into raw_data
         # (employment timeline overlap > 30 days at different companies)
         c["work_experience"] = [
-            {"title": "Engineer", "company": "Alpha Corp",
-             "start_date": "2020-01-01", "end_date": "2022-06-30",
-             "description": "Built APIs"},
-            {"title": "Engineer", "company": "Beta Ltd",
-             "start_date": "2022-01-01", "end_date": "2023-12-31",
-             "description": "Built systems"},
+            {
+                "title": "Engineer",
+                "company": "Alpha Corp",
+                "start_date": "2020-01-01",
+                "end_date": "2022-06-30",
+                "description": "Built APIs",
+            },
+            {
+                "title": "Engineer",
+                "company": "Beta Ltd",
+                "start_date": "2022-01-01",
+                "end_date": "2023-12-31",
+                "description": "Built systems",
+            },
         ]
         vi = get_voice_intake_state(c)
         issues = _detect_inconsistencies(c, vi)
@@ -1618,15 +2105,24 @@ class TestFinalHundredPercentGates:
                 issue["severity"] = "high"
             # Inject into result via direct call with patched inconsistencies
             from profile_strength_service import (
-                calculate_profile_strength_v2, _is_role_complete,
-                _role_aware_profile_weight, get_canonical_preferences,
-                build_attribute_evidence, get_voice_intake_state as gvis,
-                _role_category, _is_fresher, _score_identity_background,
-                _score_skills_capability, _score_evidence, _score_career_intent,
-                _score_preferences_constraints, _score_behaviour_communication,
-                _score_career_readiness, _score_recommendation_confidence,
+                _is_role_complete,
                 _parse_raw,
+                _role_category,
+                _score_behaviour_communication,
+                _score_career_intent,
+                _score_career_readiness,
+                _score_evidence,
+                _score_identity_background,
+                _score_preferences_constraints,
+                _score_recommendation_confidence,
+                _score_skills_capability,
+                build_attribute_evidence,
+                get_canonical_preferences,
             )
+            from profile_strength_service import (
+                get_voice_intake_state as gvis,
+            )
+
             raw = _parse_raw(c.get("raw_data"))
             prefs = get_canonical_preferences(c)
             evidence = build_attribute_evidence(c)
@@ -1640,14 +2136,22 @@ class TestFinalHundredPercentGates:
             d5 = _score_preferences_constraints(prefs, raw, vi_state)
             d6 = _score_behaviour_communication(c, vi_state)
             dim_scores = {
-                "identity_background": d1, "skills_capability": d2, "evidence": d3,
-                "career_intent": d4, "preferences_constraints": d5, "behaviour_communication": d6,
+                "identity_background": d1,
+                "skills_capability": d2,
+                "evidence": d3,
+                "career_intent": d4,
+                "preferences_constraints": d5,
+                "behaviour_communication": d6,
             }
             d7 = _score_career_readiness(dim_scores, role_cat, prefs, vi_state)
             dim_scores["career_readiness"] = d7
-            rec_conf = _score_recommendation_confidence(dim_scores, role_cat, prefs, timeline_issues, vi_state)
+            rec_conf = _score_recommendation_confidence(
+                dim_scores, role_cat, prefs, timeline_issues, vi_state
+            )
             assert not _is_role_complete(
-                dim_scores, role_cat, prefs,
+                dim_scores,
+                role_cat,
+                prefs,
                 inconsistencies=timeline_issues,
                 rec_conf=rec_conf,
                 evidence=evidence,
@@ -1661,20 +2165,26 @@ class TestFinalHundredPercentGates:
         c["raw_data"]["preferred_roles"] = []
         result = calculate_profile_strength_v2(c)
         assert result["percent"] < 100
-        assert result["recommendation_readiness"]["gating_reason"] == "target_role_unclear"
+        assert (
+            result["recommendation_readiness"]["gating_reason"] == "target_role_unclear"
+        )
 
 
 # ---------------------------------------------------------------------------
 # Section 12 — Final matching tests (spec-required)
 # ---------------------------------------------------------------------------
 
-class TestFinalMatchingBehavior:
+
+class _TestFinalMatchingBehaviorAdditional:
     """Verify the matching engine produces correct behavior per spec section 12."""
 
     def _import_matcher(self):
-        import sys, os
+        import os
+        import sys
+
         sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
         import candidate_job_matching_service as m
+
         return m
 
     def test_demonstrated_required_skill_beats_claimed(self):
@@ -1682,8 +2192,14 @@ class TestFinalMatchingBehavior:
         m = self._import_matcher()
         skills = ["Python", "FastAPI"]
         job_text = "We need Python and FastAPI developers"
-        intel_claimed = {"evidence": {"skills": {"evidence_level": 1}}, "constraint_profile": {}}
-        intel_demonstrated = {"evidence": {"skills": {"evidence_level": 3}}, "constraint_profile": {}}
+        intel_claimed = {
+            "evidence": {"skills": {"evidence_level": 1}},
+            "constraint_profile": {},
+        }
+        intel_demonstrated = {
+            "evidence": {"skills": {"evidence_level": 3}},
+            "constraint_profile": {},
+        }
         s_claimed = m._evidence_weighted_skills_score(skills, job_text, intel_claimed)
         s_demo = m._evidence_weighted_skills_score(skills, job_text, intel_demonstrated)
         assert s_demo > s_claimed
@@ -1694,9 +2210,14 @@ class TestFinalMatchingBehavior:
         relevant_skills = ["Python", "FastAPI"]
         irrelevant_skills = ["COBOL", "Fortran"]
         job_text = "We need Python and FastAPI developers"
-        intel = {"evidence": {"skills": {"evidence_level": 4}}, "constraint_profile": {}}
+        intel = {
+            "evidence": {"skills": {"evidence_level": 4}},
+            "constraint_profile": {},
+        }
         s_relevant = m._evidence_weighted_skills_score(relevant_skills, job_text, intel)
-        s_irrelevant = m._evidence_weighted_skills_score(irrelevant_skills, job_text, intel)
+        s_irrelevant = m._evidence_weighted_skills_score(
+            irrelevant_skills, job_text, intel
+        )
         assert s_relevant > s_irrelevant
 
     def test_missing_required_skill_not_hidden_by_high_semantic(self):
@@ -1707,39 +2228,64 @@ class TestFinalMatchingBehavior:
             "skills": ["JavaScript"],  # has JS but not Python/FastAPI/PostgreSQL
             "past_roles": ["Engineer"],
         }
-        intel = {"evidence": {"skills": {"evidence_level": 2}}, "constraint_profile": {}}
+        intel = {
+            "evidence": {"skills": {"evidence_level": 2}},
+            "constraint_profile": {},
+        }
         job_title = "Backend Engineer"
         job_desc = "Requires Python, FastAPI, PostgreSQL. Build REST APIs."
         # Even with high semantic score, skills_score should be low
-        _, components = m._hybrid_score(signals, job_title, job_desc, "", [], 0.95, intelligence=intel)
-        assert components["skills_score"] < 0.5, "Missing required skills must remain visible"
+        _, components = m._hybrid_score(
+            signals, job_title, job_desc, "", [], 0.95, intelligence=intel
+        )
+        assert components["skills_score"] < 0.5, (
+            "Missing required skills must remain visible"
+        )
 
     def test_recent_demonstrated_beats_old_claimed(self):
         """Recent demonstrated skill beats old claimed skill in evidence weighting."""
         m = self._import_matcher()
         skills = ["Python"]
         job_text = "Python developer needed"
-        intel_old_claimed = {"evidence": {"skills": {"evidence_level": 1}}, "constraint_profile": {}}
-        intel_recent_demo = {"evidence": {"skills": {"evidence_level": 3}}, "constraint_profile": {}}
+        intel_old_claimed = {
+            "evidence": {"skills": {"evidence_level": 1}},
+            "constraint_profile": {},
+        }
+        intel_recent_demo = {
+            "evidence": {"skills": {"evidence_level": 3}},
+            "constraint_profile": {},
+        }
         s_old = m._evidence_weighted_skills_score(skills, job_text, intel_old_claimed)
-        s_recent = m._evidence_weighted_skills_score(skills, job_text, intel_recent_demo)
+        s_recent = m._evidence_weighted_skills_score(
+            skills, job_text, intel_recent_demo
+        )
         assert s_recent > s_old
 
     def test_hard_remote_conflict_severely_reduces_recommendation(self):
         """Hard remote-only constraint severely reduces score for onsite job."""
         m = self._import_matcher()
-        constraint_profile = {"work_mode_constraint": "hard_remote_only", "salary_min": None}
+        constraint_profile = {
+            "work_mode_constraint": "hard_remote_only",
+            "salary_min": None,
+        }
         job_text = "This role requires daily onsite presence in our office."
-        penalty, incompatibilities = m._check_hard_constraints(constraint_profile, job_text)
+        penalty, incompatibilities = m._check_hard_constraints(
+            constraint_profile, job_text
+        )
         assert penalty <= 0.2
         assert "candidate_remote_only_job_requires_onsite" in incompatibilities
 
     def test_soft_remote_preference_not_hard_constraint(self):
         """Soft remote preference does not behave like a hard constraint."""
         m = self._import_matcher()
-        constraint_profile = {"work_mode_constraint": "prefers_remote", "salary_min": None}
+        constraint_profile = {
+            "work_mode_constraint": "prefers_remote",
+            "salary_min": None,
+        }
         job_text = "This role requires daily onsite presence in our office."
-        penalty, incompatibilities = m._check_hard_constraints(constraint_profile, job_text)
+        penalty, incompatibilities = m._check_hard_constraints(
+            constraint_profile, job_text
+        )
         # Soft preference: no hard penalty
         assert penalty == 1.0
         assert not incompatibilities
@@ -1750,7 +2296,9 @@ class TestFinalMatchingBehavior:
         # salary_min is None (could not be parsed)
         constraint_profile = {"work_mode_constraint": "unknown", "salary_min": None}
         job_text = "Competitive salary. Build APIs."
-        penalty, incompatibilities = m._check_hard_constraints(constraint_profile, job_text)
+        penalty, incompatibilities = m._check_hard_constraints(
+            constraint_profile, job_text
+        )
         assert penalty == 1.0
         assert not incompatibilities
 
@@ -1767,11 +2315,18 @@ class TestFinalMatchingBehavior:
             "skills": ["Python", "FastAPI"],
             "past_roles": ["Engineer"],
         }
-        intel = {"evidence": {"skills": {"evidence_level": 2}}, "constraint_profile": {}}
+        intel = {
+            "evidence": {"skills": {"evidence_level": 2}},
+            "constraint_profile": {},
+        }
         job_title = "Backend Engineer"
         job_desc = "Python FastAPI backend role"
-        score_intent, _ = m._hybrid_score(signals_with_intent, job_title, job_desc, "", [], 0.7, intelligence=intel)
-        score_no_intent, _ = m._hybrid_score(signals_no_intent, job_title, job_desc, "", [], 0.7, intelligence=intel)
+        score_intent, _ = m._hybrid_score(
+            signals_with_intent, job_title, job_desc, "", [], 0.7, intelligence=intel
+        )
+        score_no_intent, _ = m._hybrid_score(
+            signals_no_intent, job_title, job_desc, "", [], 0.7, intelligence=intel
+        )
         assert score_intent > score_no_intent
 
     def test_strong_profile_low_match_for_unsuitable_job(self):
@@ -1785,12 +2340,17 @@ class TestFinalMatchingBehavior:
         }
         intel = {
             "evidence": {"skills": {"evidence_level": 3}},
-            "constraint_profile": {"work_mode_constraint": "hard_remote_only", "salary_min": None},
+            "constraint_profile": {
+                "work_mode_constraint": "hard_remote_only",
+                "salary_min": None,
+            },
         }
         # Completely unsuitable job: onsite marketing role
         job_title = "Marketing Manager"
         job_desc = "Lead marketing campaigns. Must be onsite daily. No technical skills required."
-        score, components = m._hybrid_score(signals, job_title, job_desc, "", [], 0.1, intelligence=intel)
+        score, components = m._hybrid_score(
+            signals, job_title, job_desc, "", [], 0.1, intelligence=intel
+        )
         assert score < 0.3, f"Unsuitable job should score low, got {score}"
 
     def test_moderate_profile_high_confidence_when_job_critical_info_known(self):
@@ -1804,11 +2364,18 @@ class TestFinalMatchingBehavior:
         }
         intel = {
             "evidence": {"skills": {"evidence_level": 3}},  # demonstrated
-            "constraint_profile": {"work_mode_constraint": "unknown", "salary_min": None},
+            "constraint_profile": {
+                "work_mode_constraint": "unknown",
+                "salary_min": None,
+            },
         }
         job_title = "Python Developer"
-        job_desc = "Python FastAPI PostgreSQL backend developer needed. Remote friendly."
-        score, components = m._hybrid_score(signals, job_title, job_desc, "", [], 0.8, intelligence=intel)
+        job_desc = (
+            "Python FastAPI PostgreSQL backend developer needed. Remote friendly."
+        )
+        score, components = m._hybrid_score(
+            signals, job_title, job_desc, "", [], 0.8, intelligence=intel
+        )
         assert score >= 0.5, f"Good match should score well, got {score}"
 
 
@@ -1816,45 +2383,63 @@ class TestFinalMatchingBehavior:
 # Section 11 — Final 100% gate tests (spec-required)
 # ---------------------------------------------------------------------------
 
+
 class TestFinalHundredPercentGates:
     """Explicit tests proving 100% means what we intend."""
 
     def _technical_professional(self):
         c = _base()
-        c.update({
-            "name": "Complete Dev",
-            "email": "complete@example.com",
-            "location": "Remote",
-            "current_role": "Senior Backend Engineer",
-            "experience_years": 7,
-            "skills": ["Python", "FastAPI", "PostgreSQL", "Docker", "AWS"],
-            "work_experience": [
-                {"title": "Lead Engineer", "company": "Acme", "description": "Led platform work",
-                 "start_date": "2018-01-01", "end_date": "2023-01-01"},
-            ],
-            "education": [{"degree": "B.Tech", "institution": "University"}],
-            "interview_technical_score": 9.0,
-            "interview_communication_score": 8.5,
-            "raw_data": {
-                "preferred_roles": ["Senior Backend Engineer"],
-                "availability": "30 days",
-                "location_preferences": ["Remote"],
-                "work_type_preference": "remote",
-                "projects": ["AI platform", "REST API service"],
-                "voice_intake": {
-                    "status": "completed",
-                    "completed_turns": [
-                        {"question": "What roles?", "answer": "Senior backend engineering roles."},
-                        {"question": "Skills?", "answer": "Python, FastAPI, PostgreSQL."},
-                        {"question": "Availability?", "answer": "30 days notice."},
-                    ],
-                    "known_topics": [
-                        "background_experience", "skills_technologies", "target_role",
-                        "responsibilities_projects", "availability_location", "career_preferences",
-                    ],
+        c.update(
+            {
+                "name": "Complete Dev",
+                "email": "complete@example.com",
+                "location": "Remote",
+                "current_role": "Senior Backend Engineer",
+                "experience_years": 7,
+                "skills": ["Python", "FastAPI", "PostgreSQL", "Docker", "AWS"],
+                "work_experience": [
+                    {
+                        "title": "Lead Engineer",
+                        "company": "Acme",
+                        "description": "Led platform work",
+                        "start_date": "2018-01-01",
+                        "end_date": "2023-01-01",
+                    },
+                ],
+                "education": [{"degree": "B.Tech", "institution": "University"}],
+                "interview_technical_score": 9.0,
+                "interview_communication_score": 8.5,
+                "raw_data": {
+                    "preferred_roles": ["Senior Backend Engineer"],
+                    "availability": "30 days",
+                    "location_preferences": ["Remote"],
+                    "work_type_preference": "remote",
+                    "projects": ["AI platform", "REST API service"],
+                    "voice_intake": {
+                        "status": "completed",
+                        "completed_turns": [
+                            {
+                                "question": "What roles?",
+                                "answer": "Senior backend engineering roles.",
+                            },
+                            {
+                                "question": "Skills?",
+                                "answer": "Python, FastAPI, PostgreSQL.",
+                            },
+                            {"question": "Availability?", "answer": "30 days notice."},
+                        ],
+                        "known_topics": [
+                            "background_experience",
+                            "skills_technologies",
+                            "target_role",
+                            "responsibilities_projects",
+                            "availability_location",
+                            "career_preferences",
+                        ],
+                    },
                 },
-            },
-        })
+            }
+        )
         return c
 
     def test_technical_professional_can_reach_strong(self):
@@ -1880,36 +2465,51 @@ class TestFinalHundredPercentGates:
     def test_fresher_can_reach_high_score_without_work_experience(self):
         """Fresher with strong education/skills/projects/assessment can reach high score."""
         c = _base()
-        c.update({
-            "name": "Fresh Grad",
-            "email": "fresh@example.com",
-            "location": "Remote",
-            "current_role": "Fresher Backend Developer",
-            "experience_years": 0,
-            "skills": ["Python", "FastAPI", "PostgreSQL", "Git", "Docker"],
-            "education": [{"degree": "B.Tech CS", "institution": "IIT"}],
-            "interview_technical_score": 8.0,
-            "interview_communication_score": 7.5,
-            "raw_data": {
-                "preferred_roles": ["Backend Developer"],
-                "availability": "Immediate",
-                "location_preferences": ["Remote"],
-                "work_type_preference": "remote",
-                "projects": ["Campus REST API project", "ML pipeline project"],
-                "voice_intake": {
-                    "status": "completed",
-                    "completed_turns": [
-                        {"question": "What roles?", "answer": "Backend developer roles."},
-                        {"question": "Skills?", "answer": "Python, FastAPI, PostgreSQL."},
-                        {"question": "Projects?", "answer": "Built REST API and ML pipeline."},
-                    ],
-                    "known_topics": [
-                        "background_experience", "skills_technologies", "target_role",
-                        "responsibilities_projects", "availability_location", "career_preferences",
-                    ],
+        c.update(
+            {
+                "name": "Fresh Grad",
+                "email": "fresh@example.com",
+                "location": "Remote",
+                "current_role": "Fresher Backend Developer",
+                "experience_years": 0,
+                "skills": ["Python", "FastAPI", "PostgreSQL", "Git", "Docker"],
+                "education": [{"degree": "B.Tech CS", "institution": "IIT"}],
+                "interview_technical_score": 8.0,
+                "interview_communication_score": 7.5,
+                "raw_data": {
+                    "preferred_roles": ["Backend Developer"],
+                    "availability": "Immediate",
+                    "location_preferences": ["Remote"],
+                    "work_type_preference": "remote",
+                    "projects": ["Campus REST API project", "ML pipeline project"],
+                    "voice_intake": {
+                        "status": "completed",
+                        "completed_turns": [
+                            {
+                                "question": "What roles?",
+                                "answer": "Backend developer roles.",
+                            },
+                            {
+                                "question": "Skills?",
+                                "answer": "Python, FastAPI, PostgreSQL.",
+                            },
+                            {
+                                "question": "Projects?",
+                                "answer": "Built REST API and ML pipeline.",
+                            },
+                        ],
+                        "known_topics": [
+                            "background_experience",
+                            "skills_technologies",
+                            "target_role",
+                            "responsibilities_projects",
+                            "availability_location",
+                            "career_preferences",
+                        ],
+                    },
                 },
-            },
-        })
+            }
+        )
         result = calculate_profile_strength_v2(c)
         assert result["is_fresher"] is True
         assert result["percent"] == 65
@@ -1917,39 +2517,63 @@ class TestFinalHundredPercentGates:
     def test_sales_professional_can_reach_high_score_without_github_or_projects(self):
         """Sales professional without GitHub/projects can reach high score."""
         c = _base()
-        c.update({
-            "name": "Sales Pro",
-            "email": "sales@example.com",
-            "location": "Mumbai",
-            "current_role": "Senior Account Executive",
-            "experience_years": 6,
-            "skills": ["Negotiation", "CRM", "Pipeline Management", "Salesforce", "Forecasting"],
-            "work_experience": [
-                {"title": "Account Executive", "company": "Corp",
-                 "description": "Closed $2M ARR, managed 50 accounts"},
-                {"title": "BDR", "company": "StartupX",
-                 "description": "Generated $500K pipeline"},
-            ],
-            "interview_communication_score": 9.0,
-            "raw_data": {
-                "preferred_roles": ["Senior Account Executive"],
-                "availability": "30 days",
-                "work_type_preference": "hybrid",
-                "location_preferences": ["Mumbai"],
-                "voice_intake": {
-                    "status": "completed",
-                    "completed_turns": [
-                        {"question": "What roles?", "answer": "Senior AE roles in SaaS."},
-                        {"question": "Experience?", "answer": "6 years in B2B sales, closed $2M ARR."},
-                        {"question": "Availability?", "answer": "30 days notice."},
-                    ],
-                    "known_topics": [
-                        "background_experience", "skills_technologies", "target_role",
-                        "responsibilities_projects", "availability_location", "career_preferences",
-                    ],
+        c.update(
+            {
+                "name": "Sales Pro",
+                "email": "sales@example.com",
+                "location": "Mumbai",
+                "current_role": "Senior Account Executive",
+                "experience_years": 6,
+                "skills": [
+                    "Negotiation",
+                    "CRM",
+                    "Pipeline Management",
+                    "Salesforce",
+                    "Forecasting",
+                ],
+                "work_experience": [
+                    {
+                        "title": "Account Executive",
+                        "company": "Corp",
+                        "description": "Closed $2M ARR, managed 50 accounts",
+                    },
+                    {
+                        "title": "BDR",
+                        "company": "StartupX",
+                        "description": "Generated $500K pipeline",
+                    },
+                ],
+                "interview_communication_score": 9.0,
+                "raw_data": {
+                    "preferred_roles": ["Senior Account Executive"],
+                    "availability": "30 days",
+                    "work_type_preference": "hybrid",
+                    "location_preferences": ["Mumbai"],
+                    "voice_intake": {
+                        "status": "completed",
+                        "completed_turns": [
+                            {
+                                "question": "What roles?",
+                                "answer": "Senior AE roles in SaaS.",
+                            },
+                            {
+                                "question": "Experience?",
+                                "answer": "6 years in B2B sales, closed $2M ARR.",
+                            },
+                            {"question": "Availability?", "answer": "30 days notice."},
+                        ],
+                        "known_topics": [
+                            "background_experience",
+                            "skills_technologies",
+                            "target_role",
+                            "responsibilities_projects",
+                            "availability_location",
+                            "career_preferences",
+                        ],
+                    },
                 },
-            },
-        })
+            }
+        )
         result = calculate_profile_strength_v2(c)
         assert result["role_category"] == "sales"
         assert result["percent"] >= 60
@@ -1958,47 +2582,59 @@ class TestFinalHundredPercentGates:
     def test_weak_evidence_50_skills_cannot_reach_100(self):
         """Candidate with 50 claimed skills but no demonstrated evidence cannot reach 100."""
         c = _base()
-        c.update({
-            "name": "Claim King",
-            "email": "claims@example.com",
-            "location": "Remote",
-            "current_role": "Senior Engineer",
-            "experience_years": 8,
-            "skills": [f"Skill{i}" for i in range(50)],
-            "work_experience": [
-                {"title": "Engineer", "company": "Corp", "description": "Built things"}
-            ],
-            "raw_data": {
-                "preferred_roles": ["Senior Engineer"],
-                "availability": "30 days",
-                "location_preferences": ["Remote"],
-                "work_type_preference": "remote",
-                "projects": ["Some project"],
-            },
-        })
+        c.update(
+            {
+                "name": "Claim King",
+                "email": "claims@example.com",
+                "location": "Remote",
+                "current_role": "Senior Engineer",
+                "experience_years": 8,
+                "skills": [f"Skill{i}" for i in range(50)],
+                "work_experience": [
+                    {
+                        "title": "Engineer",
+                        "company": "Corp",
+                        "description": "Built things",
+                    }
+                ],
+                "raw_data": {
+                    "preferred_roles": ["Senior Engineer"],
+                    "availability": "30 days",
+                    "location_preferences": ["Remote"],
+                    "work_type_preference": "remote",
+                    "projects": ["Some project"],
+                },
+            }
+        )
         result = calculate_profile_strength_v2(c)
         assert result["percent"] < 100
-        assert result["evidence"].get("skills", {}).get("evidence_level", 0) <= EVIDENCE_CLAIMED
+        assert (
+            result["evidence"].get("skills", {}).get("evidence_level", 0)
+            <= EVIDENCE_CLAIMED
+        )
 
     def test_many_certificates_weak_capability_cannot_reach_100(self):
         """Candidate with many certificates but weak capability evidence cannot reach 100."""
         c = _base()
-        c.update({
-            "name": "Cert Collector",
-            "email": "certs@example.com",
-            "current_role": "Developer",
-            "skills": ["Python"],
-            "candidate_certificates": [
-                {"id": f"c{i}", "file_name": f"cert{i}.pdf"} for i in range(20)
-            ],
-            "raw_data": {"preferred_roles": ["Developer"]},
-        })
+        c.update(
+            {
+                "name": "Cert Collector",
+                "email": "certs@example.com",
+                "current_role": "Developer",
+                "skills": ["Python"],
+                "candidate_certificates": [
+                    {"id": f"c{i}", "file_name": f"cert{i}.pdf"} for i in range(20)
+                ],
+                "raw_data": {"preferred_roles": ["Developer"]},
+            }
+        )
         result = calculate_profile_strength_v2(c)
         assert result["percent"] < 100
 
     def test_high_severity_contradiction_blocks_100_gate(self):
         """_is_role_complete returns False when high-severity contradiction exists."""
         from profile_strength_service import _is_role_complete
+
         dim_scores = {
             "identity_background": {"score": 90},
             "skills_capability": {"score": 90},
@@ -2009,9 +2645,17 @@ class TestFinalHundredPercentGates:
         prefs = {"preferred_roles": ["Backend Engineer"]}
         evidence = {"skills": {"evidence_level": EVIDENCE_DEMONSTRATED}}
         rec_conf = {"level": "high"}
-        high_severity_issues = [{"field": "experience_years", "severity": "high", "type": "hard_contradiction"}]
+        high_severity_issues = [
+            {
+                "field": "experience_years",
+                "severity": "high",
+                "type": "hard_contradiction",
+            }
+        ]
         assert not _is_role_complete(
-            dim_scores, "technical", prefs,
+            dim_scores,
+            "technical",
+            prefs,
             inconsistencies=high_severity_issues,
             rec_conf=rec_conf,
             evidence=evidence,
@@ -2020,6 +2664,7 @@ class TestFinalHundredPercentGates:
     def test_medium_severity_contradiction_does_not_block_100_gate(self):
         """_is_role_complete is not blocked by medium-severity contradictions."""
         from profile_strength_service import _is_role_complete
+
         dim_scores = {
             "identity_background": {"score": 90},
             "skills_capability": {"score": 90},
@@ -2030,10 +2675,18 @@ class TestFinalHundredPercentGates:
         prefs = {"preferred_roles": ["Backend Engineer"]}
         evidence = {"skills": {"evidence_level": EVIDENCE_DEMONSTRATED}}
         rec_conf = {"level": "high"}
-        medium_issues = [{"field": "experience_years", "severity": "medium", "type": "hard_contradiction"}]
+        medium_issues = [
+            {
+                "field": "experience_years",
+                "severity": "medium",
+                "type": "hard_contradiction",
+            }
+        ]
         # Medium severity should not block the gate
         assert _is_role_complete(
-            dim_scores, "technical", prefs,
+            dim_scores,
+            "technical",
+            prefs,
             inconsistencies=medium_issues,
             rec_conf=rec_conf,
             evidence=evidence,
@@ -2046,11 +2699,14 @@ class TestFinalHundredPercentGates:
         c["raw_data"]["preferred_roles"] = []
         result = calculate_profile_strength_v2(c)
         assert result["percent"] < 100
-        assert result["recommendation_readiness"]["gating_reason"] == "target_role_unclear"
+        assert (
+            result["recommendation_readiness"]["gating_reason"] == "target_role_unclear"
+        )
 
     def test_claimed_only_evidence_blocks_100_gate(self):
         """_is_role_complete returns False when skills evidence is only claimed (level 1)."""
         from profile_strength_service import _is_role_complete
+
         dim_scores = {
             "identity_background": {"score": 90},
             "skills_capability": {"score": 90},
@@ -2062,7 +2718,9 @@ class TestFinalHundredPercentGates:
         evidence = {"skills": {"evidence_level": EVIDENCE_CLAIMED}}  # only claimed
         rec_conf = {"level": "high"}
         assert not _is_role_complete(
-            dim_scores, "technical", prefs,
+            dim_scores,
+            "technical",
+            prefs,
             inconsistencies=[],
             rec_conf=rec_conf,
             evidence=evidence,
@@ -2071,6 +2729,7 @@ class TestFinalHundredPercentGates:
     def test_low_recommendation_confidence_blocks_100_gate(self):
         """_is_role_complete returns False when recommendation confidence is low."""
         from profile_strength_service import _is_role_complete
+
         dim_scores = {
             "identity_background": {"score": 90},
             "skills_capability": {"score": 90},
@@ -2082,7 +2741,9 @@ class TestFinalHundredPercentGates:
         evidence = {"skills": {"evidence_level": EVIDENCE_DEMONSTRATED}}
         rec_conf = {"level": "low"}
         assert not _is_role_complete(
-            dim_scores, "technical", prefs,
+            dim_scores,
+            "technical",
+            prefs,
             inconsistencies=[],
             rec_conf=rec_conf,
             evidence=evidence,
@@ -2093,13 +2754,17 @@ class TestFinalHundredPercentGates:
 # Section 12 — Final matching tests (spec-required)
 # ---------------------------------------------------------------------------
 
+
 class TestFinalMatchingBehavior:
     """Verify the matching engine produces correct behavior per spec section 12."""
 
     def _m(self):
-        import sys, os
+        import os
+        import sys
+
         sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
         import candidate_job_matching_service as m
+
         return m
 
     def test_demonstrated_required_skill_beats_claimed(self):
@@ -2107,18 +2772,32 @@ class TestFinalMatchingBehavior:
         m = self._m()
         skills = ["Python", "FastAPI"]
         job_text = "We need Python and FastAPI developers"
-        intel_claimed = {"evidence": {"skills": {"evidence_level": 1}}, "constraint_profile": {}}
-        intel_demo = {"evidence": {"skills": {"evidence_level": 3}}, "constraint_profile": {}}
-        assert m._evidence_weighted_skills_score(skills, job_text, intel_demo) > \
-               m._evidence_weighted_skills_score(skills, job_text, intel_claimed)
+        intel_claimed = {
+            "evidence": {"skills": {"evidence_level": 1}},
+            "constraint_profile": {},
+        }
+        intel_demo = {
+            "evidence": {"skills": {"evidence_level": 3}},
+            "constraint_profile": {},
+        }
+        assert m._evidence_weighted_skills_score(
+            skills, job_text, intel_demo
+        ) > m._evidence_weighted_skills_score(skills, job_text, intel_claimed)
 
     def test_verified_relevant_skill_beats_unrelated_verified(self):
         """A verified skill matching the job beats a verified skill that doesn't."""
         m = self._m()
         job_text = "We need Python and FastAPI developers"
-        intel = {"evidence": {"skills": {"evidence_level": 4}}, "constraint_profile": {}}
-        s_relevant = m._evidence_weighted_skills_score(["Python", "FastAPI"], job_text, intel)
-        s_irrelevant = m._evidence_weighted_skills_score(["COBOL", "Fortran"], job_text, intel)
+        intel = {
+            "evidence": {"skills": {"evidence_level": 4}},
+            "constraint_profile": {},
+        }
+        s_relevant = m._evidence_weighted_skills_score(
+            ["Python", "FastAPI"], job_text, intel
+        )
+        s_irrelevant = m._evidence_weighted_skills_score(
+            ["COBOL", "Fortran"], job_text, intel
+        )
         assert s_relevant > s_irrelevant
 
     def test_missing_required_skill_not_hidden_by_high_semantic(self):
@@ -2129,11 +2808,18 @@ class TestFinalMatchingBehavior:
             "skills": ["JavaScript"],  # has JS but not Python/FastAPI/PostgreSQL
             "past_roles": ["Engineer"],
         }
-        intel = {"evidence": {"skills": {"evidence_level": 2}}, "constraint_profile": {}}
+        intel = {
+            "evidence": {"skills": {"evidence_level": 2}},
+            "constraint_profile": {},
+        }
         _, components = m._hybrid_score(
-            signals, "Backend Engineer",
+            signals,
+            "Backend Engineer",
             "Requires Python, FastAPI, PostgreSQL. Build REST APIs.",
-            "", [], 0.95, intelligence=intel,
+            "",
+            [],
+            0.95,
+            intelligence=intel,
         )
         assert components["skills_score"] < 0.5
 
@@ -2143,9 +2829,15 @@ class TestFinalMatchingBehavior:
         skills = ["Python"]
         job_text = "Python developer needed"
         s_claimed = m._evidence_weighted_skills_score(
-            skills, job_text, {"evidence": {"skills": {"evidence_level": 1}}, "constraint_profile": {}})
+            skills,
+            job_text,
+            {"evidence": {"skills": {"evidence_level": 1}}, "constraint_profile": {}},
+        )
         s_demo = m._evidence_weighted_skills_score(
-            skills, job_text, {"evidence": {"skills": {"evidence_level": 3}}, "constraint_profile": {}})
+            skills,
+            job_text,
+            {"evidence": {"skills": {"evidence_level": 3}}, "constraint_profile": {}},
+        )
         assert s_demo > s_claimed
 
     def test_hard_remote_conflict_severely_reduces_recommendation(self):
@@ -2181,16 +2873,37 @@ class TestFinalMatchingBehavior:
     def test_candidate_intent_affects_recommendation(self):
         """Candidate with clear target role scores higher than one without."""
         m = self._m()
-        intel = {"evidence": {"skills": {"evidence_level": 2}}, "constraint_profile": {}}
+        intel = {
+            "evidence": {"skills": {"evidence_level": 2}},
+            "constraint_profile": {},
+        }
         job_title = "Backend Engineer"
         job_desc = "Python FastAPI backend role"
         score_with, _ = m._hybrid_score(
-            {"target_roles": ["Backend Engineer"], "skills": ["Python", "FastAPI"], "past_roles": ["Engineer"]},
-            job_title, job_desc, "", [], 0.7, intelligence=intel,
+            {
+                "target_roles": ["Backend Engineer"],
+                "skills": ["Python", "FastAPI"],
+                "past_roles": ["Engineer"],
+            },
+            job_title,
+            job_desc,
+            "",
+            [],
+            0.7,
+            intelligence=intel,
         )
         score_without, _ = m._hybrid_score(
-            {"target_roles": [], "skills": ["Python", "FastAPI"], "past_roles": ["Engineer"]},
-            job_title, job_desc, "", [], 0.7, intelligence=intel,
+            {
+                "target_roles": [],
+                "skills": ["Python", "FastAPI"],
+                "past_roles": ["Engineer"],
+            },
+            job_title,
+            job_desc,
+            "",
+            [],
+            0.7,
+            intelligence=intel,
         )
         assert score_with > score_without
 
@@ -2204,13 +2917,19 @@ class TestFinalMatchingBehavior:
         }
         intel = {
             "evidence": {"skills": {"evidence_level": 3}},
-            "constraint_profile": {"work_mode_constraint": "hard_remote_only", "salary_min": None},
+            "constraint_profile": {
+                "work_mode_constraint": "hard_remote_only",
+                "salary_min": None,
+            },
         }
         score, _ = m._hybrid_score(
             signals,
             "Marketing Manager",
             "Lead marketing campaigns. Must be onsite daily. No technical skills required.",
-            "", [], 0.1, intelligence=intel,
+            "",
+            [],
+            0.1,
+            intelligence=intel,
         )
         assert score < 0.3
 
@@ -2224,12 +2943,18 @@ class TestFinalMatchingBehavior:
         }
         intel = {
             "evidence": {"skills": {"evidence_level": 3}},
-            "constraint_profile": {"work_mode_constraint": "unknown", "salary_min": None},
+            "constraint_profile": {
+                "work_mode_constraint": "unknown",
+                "salary_min": None,
+            },
         }
         score, _ = m._hybrid_score(
             signals,
             "Python Developer",
             "Python FastAPI PostgreSQL backend developer needed. Remote friendly.",
-            "", [], 0.8, intelligence=intel,
+            "",
+            [],
+            0.8,
+            intelligence=intel,
         )
         assert score >= 0.5

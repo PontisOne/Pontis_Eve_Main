@@ -1,7 +1,6 @@
-﻿"""Small, dependency-free helpers for Vapi configuration diagnostics."""
+"""Small, dependency-free helpers for Vapi configuration diagnostics."""
 
 import os
-
 
 VAPI_CONFIGURATION_NAMES = (
     "VAPI_PUBLIC_KEY",

@@ -1,12 +1,11 @@
 import asyncio
 
 from sqlalchemy import text
-from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker
+from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
-from server import DATABASE_URL
 from app.job_ingestion.collect_jobs import JobCollector
 from app.job_ingestion.job_ingestion_service import upsert_ats_job
-
+from server import DATABASE_URL
 
 engine = create_async_engine(DATABASE_URL, pool_pre_ping=True)
 SessionLocal = async_sessionmaker(bind=engine, expire_on_commit=False)
@@ -35,7 +34,12 @@ async def main():
         existing_pairs = {(r[0], r[1]) for r in result.fetchall()}
 
         new_job = next(
-            (j for j in jobs if (j["ats_type"].strip().lower(), str(j["ats_job_id"]).strip()) not in existing_pairs),
+            (
+                j
+                for j in jobs
+                if (j["ats_type"].strip().lower(), str(j["ats_job_id"]).strip())
+                not in existing_pairs
+            ),
             None,
         )
 

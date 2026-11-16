@@ -2,44 +2,73 @@ import asyncio
 import json
 import sys
 import types
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import httpx
 import pytest
 
-from app.job_ingestion.connectors.fantastic import FantasticAPIError, FantasticClient, FantasticConfig
+from app.job_ingestion.connectors.fantastic import (
+    FantasticAPIError,
+    FantasticClient,
+    FantasticConfig,
+)
+from app.job_ingestion.job_ingestion_service import _metadata_params, upsert_ats_job
 from app.job_ingestion.job_skill_extraction import extract_missing_job_skills
 from app.job_ingestion.normalize import normalize_fantastic
-from app.job_ingestion.job_ingestion_service import _metadata_params, upsert_ats_job
 from app.job_ingestion.scheduler import _log_fantastic_upsert_error
 
 
 def _record(**overrides):
-    record = {"id": "fj-1", "organization": "Acme", "title": "Backend Engineer",
-              "description_text": "Build APIs", "url": "https://jobs.example/fj-1",
-              "locations_derived": ["Bengaluru", "India"], "date_posted": "2020-07-16T22:10:27+05:30", "date_created": "2026-07-16T22:10:27+05:30",
-              "ai_employment_type": "Full-time", "ai_experience_level": "Senior",
-              "ai_requirements_summary": "5 years", "ai_work_arrangement": "Hybrid",
-              "ai_key_skills": ["Python", "FastAPI"], "salary_range": "₹20L-₹30L",
-              "source": "greenhouse", "source_type": "ats"}
-    record.update(overrides); return record
+    record = {
+        "id": "fj-1",
+        "organization": "Acme",
+        "title": "Backend Engineer",
+        "description_text": "Build APIs",
+        "url": "https://jobs.example/fj-1",
+        "locations_derived": ["Bengaluru", "India"],
+        "date_posted": "2020-07-16T22:10:27+05:30",
+        "date_created": "2026-07-16T22:10:27+05:30",
+        "ai_employment_type": "Full-time",
+        "ai_experience_level": "Senior",
+        "ai_requirements_summary": "5 years",
+        "ai_work_arrangement": "Hybrid",
+        "ai_key_skills": ["Python", "FastAPI"],
+        "salary_range": "₹20L-₹30L",
+        "source": "greenhouse",
+        "source_type": "ats",
+    }
+    record.update(overrides)
+    return record
 
 
 def test_normalization_preserves_fields_and_binds_datetime():
     job = normalize_fantastic(_record())
     assert job["ats_type"] == "fantastic" and job["location"] == "Bengaluru, India"
-    assert job["skills_required"] == ["Python", "FastAPI"] and job["employment_type"] == "Full-time"
+    assert (
+        job["skills_required"] == ["Python", "FastAPI"]
+        and job["employment_type"] == "Full-time"
+    )
     assert isinstance(job["created_at"], datetime)
-    assert isinstance(_metadata_params(job)["created_at"], datetime)  # asyncpg regression guard
+    assert isinstance(
+        _metadata_params(job)["created_at"], datetime
+    )  # asyncpg regression guard
     assert job["created_at"].year == 2020
     assert job["structured_data"]["source"] == "greenhouse"
 
 
 def test_fantastic_valid_native_skills_skip_llm_and_preserve_both_arrays(monkeypatch):
-    monkeypatch.setitem(sys.modules, "groq_client", types.SimpleNamespace(
-        GroqClientPool=lambda: (_ for _ in ()).throw(AssertionError("LLM should not be called"))
-    ))
-    job = normalize_fantastic(_record(ai_key_skills=["Python", "FastAPI"], ai_keywords=["SQL"]))
+    monkeypatch.setitem(
+        sys.modules,
+        "groq_client",
+        types.SimpleNamespace(
+            GroqClientPool=lambda: (_ for _ in ()).throw(
+                AssertionError("LLM should not be called")
+            )
+        ),
+    )
+    job = normalize_fantastic(
+        _record(ai_key_skills=["Python", "FastAPI"], ai_keywords=["SQL"])
+    )
 
     result = asyncio.run(extract_missing_job_skills(job))
 
@@ -48,50 +77,85 @@ def test_fantastic_valid_native_skills_skip_llm_and_preserve_both_arrays(monkeyp
 
 
 @pytest.mark.parametrize("required_skills", [None, []])
-def test_fantastic_missing_or_empty_required_skills_uses_extraction(monkeypatch, required_skills):
+def test_fantastic_missing_or_empty_required_skills_uses_extraction(
+    monkeypatch, required_skills
+):
     calls = []
 
     class Completions:
         async def create(self, **kwargs):
             calls.append(kwargs)
-            message = types.SimpleNamespace(content=json.dumps({"skills": ["Postgres"]}))
-            return types.SimpleNamespace(choices=[types.SimpleNamespace(message=message)])
+            message = types.SimpleNamespace(
+                content=json.dumps({"skills": ["Postgres"]})
+            )
+            return types.SimpleNamespace(
+                choices=[types.SimpleNamespace(message=message)]
+            )
 
     class Client:
         def __init__(self):
             self.chat = types.SimpleNamespace(completions=Completions())
 
-    monkeypatch.setitem(sys.modules, "groq_client", types.SimpleNamespace(GroqClientPool=Client))
+    monkeypatch.setitem(
+        sys.modules, "groq_client", types.SimpleNamespace(GroqClientPool=Client)
+    )
     job = normalize_fantastic(_record())
     job["skills_required"] = required_skills
 
     result = asyncio.run(extract_missing_job_skills(job))
 
     assert len(calls) == 1
-    assert result["skills"] == result["skills_required"] == ["Python", "FastAPI", "PostgreSQL"]
+    assert (
+        result["skills"]
+        == result["skills_required"]
+        == ["Python", "FastAPI", "PostgreSQL"]
+    )
 
 
 def test_normalization_falls_back_locations_and_rejects_bad_url():
-    job = normalize_fantastic(_record(locations_derived=None, locations_alt="Remote", url="javascript:bad",
-                                     ai_key_skills="Python, SQL", date_posted=None))
+    job = normalize_fantastic(
+        _record(
+            locations_derived=None,
+            locations_alt="Remote",
+            url="javascript:bad",
+            ai_key_skills="Python, SQL",
+            date_posted=None,
+        )
+    )
     assert job["location"] == "Remote" and job["job_url"] is None
     assert job["skills_required"] == ["Python", "SQL"] and job["created_at"] is None
 
 
 def test_normalization_uses_source_date_posted_not_fantastic_record_created_at():
-    job = normalize_fantastic(_record(date_posted="2020-01-02T03:04:05Z", date_created="2026-01-02T03:04:05Z"))
-    assert job["created_at"] == datetime(2020, 1, 2, 3, 4, 5, tzinfo=timezone.utc)
+    job = normalize_fantastic(
+        _record(date_posted="2020-01-02T03:04:05Z", date_created="2026-01-02T03:04:05Z")
+    )
+    assert job["created_at"] == datetime(2020, 1, 2, 3, 4, 5, tzinfo=UTC)
 
 
 def test_client_paginates_with_caps():
     calls = []
+
     def handler(request):
         calls.append(request)
         offset = int(request.url.params["offset"])
-        return httpx.Response(200, json={"jobs": [_record(id=str(offset)), _record(id=str(offset + 1))]})
+        return httpx.Response(
+            200, json={"jobs": [_record(id=str(offset)), _record(id=str(offset + 1))]}
+        )
+
     async def run():
         async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
-            return await FantasticClient(FantasticConfig("key", limit=2, max_pages=3, max_jobs_per_run=3, max_requests_per_run=2), client).fetch_active_ats()
+            return await FantasticClient(
+                FantasticConfig(
+                    "key",
+                    limit=2,
+                    max_pages=3,
+                    max_jobs_per_run=3,
+                    max_requests_per_run=2,
+                ),
+                client,
+            ).fetch_active_ats()
+
     assert len(asyncio.run(run())) == 3 and len(calls) == 2
     assert [int(call.url.params["offset"]) for call in calls] == [0, 2]
     assert all(call.url.params["location"] == "India" for call in calls)
@@ -99,14 +163,24 @@ def test_client_paginates_with_caps():
 
 def test_active_job_boards_uses_india_filter_and_shared_pagination():
     calls = []
+
     def handler(request):
         calls.append(request)
         return httpx.Response(200, json={"jobs": [_record(id=f"jb-{len(calls)}")]})
+
     async def run():
         async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
             return await FantasticClient(
-                FantasticConfig("key", limit=1, max_pages=2, max_jobs_per_run=2, max_requests_per_run=2), client
+                FantasticConfig(
+                    "key",
+                    limit=1,
+                    max_pages=2,
+                    max_jobs_per_run=2,
+                    max_requests_per_run=2,
+                ),
+                client,
             ).fetch_active_job_boards()
+
     assert len(asyncio.run(run())) == 2
     assert all(call.url.path.endswith("/v1/active-jb") for call in calls)
     assert all(call.url.params["location"] == "India" for call in calls)
@@ -114,9 +188,21 @@ def test_active_job_boards_uses_india_filter_and_shared_pagination():
 
 
 def test_fantastic_country_is_normalized_from_structured_country():
-    indian = normalize_fantastic(_record(countries_derived=["IND"], locations_derived=["Bengaluru", "Karnataka", "India"]))
-    foreign = normalize_fantastic(_record(countries_derived=["United States"], locations_derived=["New York", "United States"]))
-    unknown = normalize_fantastic(_record(countries_derived=None, locations_derived=["Remote"]))
+    indian = normalize_fantastic(
+        _record(
+            countries_derived=["IND"],
+            locations_derived=["Bengaluru", "Karnataka", "India"],
+        )
+    )
+    foreign = normalize_fantastic(
+        _record(
+            countries_derived=["United States"],
+            locations_derived=["New York", "United States"],
+        )
+    )
+    unknown = normalize_fantastic(
+        _record(countries_derived=None, locations_derived=["Remote"])
+    )
     assert indian["country_code"] == "IN" and indian["country"] == "India"
     assert foreign["country_code"] == "US" and foreign["country"] == "United States"
     assert unknown["country_code"] == ""
@@ -125,27 +211,49 @@ def test_fantastic_country_is_normalized_from_structured_country():
 @pytest.mark.parametrize("status", [401, 429, 500])
 def test_client_stops_on_provider_errors(status):
     async def run():
-        async with httpx.AsyncClient(transport=httpx.MockTransport(lambda _: httpx.Response(status))) as client:
+        async with httpx.AsyncClient(
+            transport=httpx.MockTransport(lambda _: httpx.Response(status))
+        ) as client:
             await FantasticClient(FantasticConfig("key"), client).fetch_active_ats()
-    with pytest.raises(FantasticAPIError): asyncio.run(run())
+
+    with pytest.raises(FantasticAPIError):
+        asyncio.run(run())
 
 
 def test_global_insert_bypasses_company_scoped_ats_validation(monkeypatch):
     class Result:
-        def first(self): return None
-        def scalar_one(self): return "new-id"
+        def first(self):
+            return None
+
+        def scalar_one(self):
+            return "new-id"
+
     class Session:
-        def __init__(self): self.insert = None
+        def __init__(self):
+            self.insert = None
+
         async def execute(self, statement, params=None):
             sql = str(statement)
             assert "FROM company_registry" not in sql
-            if "INSERT" in sql: self.insert = params
+            if "INSERT" in sql:
+                self.insert = params
             return Result()
-        async def commit(self): pass
+
+        async def commit(self):
+            pass
+
     async def company_scoped_agency(*_):
-        raise AssertionError("Fantastic must not use company-scoped ATS agency validation")
-    monkeypatch.setattr("app.job_ingestion.job_ingestion_service.get_or_create_ats_agency", company_scoped_agency)
-    session = Session(); job = normalize_fantastic(_record()); job["job_url"] = None
+        raise AssertionError(
+            "Fantastic must not use company-scoped ATS agency validation"
+        )
+
+    monkeypatch.setattr(
+        "app.job_ingestion.job_ingestion_service.get_or_create_ats_agency",
+        company_scoped_agency,
+    )
+    session = Session()
+    job = normalize_fantastic(_record())
+    job["job_url"] = None
     assert asyncio.run(upsert_ats_job(session, job)) == "new-id"
     assert session.insert["company_registry_id"] is None
     assert session.insert["agency_id"] is None
@@ -155,6 +263,7 @@ def test_global_insert_bypasses_company_scoped_ats_validation(monkeypatch):
 
 def test_fantastic_upsert_error_log_preserves_postgres_diagnostics(caplog):
     """Regression guard for Railway logs: do not collapse asyncpg diagnostics."""
+
     class UniqueViolationError(Exception):
         sqlstate = "23505"
         constraint_name = "uq_job_descriptions_ats_type_ats_job_id"
@@ -166,7 +275,11 @@ def test_fantastic_upsert_error_log_preserves_postgres_diagnostics(caplog):
     with caplog.at_level("WARNING"):
         _log_fantastic_upsert_error(
             UniqueViolationError(),
-            {"ats_job_id": "fj-1", "title": "Backend Engineer", "structured_data": {"secret": "never logged"}},
+            {
+                "ats_job_id": "fj-1",
+                "title": "Backend Engineer",
+                "structured_data": {"secret": "never logged"},
+            },
         )
 
     message = caplog.messages[-1]

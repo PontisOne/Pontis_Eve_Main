@@ -20,10 +20,7 @@ def collect_jobs(job_board_name: str) -> list[dict[str, Any]]:
         List of Ashby jobs.
     """
 
-    url = (
-        f"{ASHBY_BASE_URL}/{job_board_name}"
-        "?includeCompensation=true"
-    )
+    url = f"{ASHBY_BASE_URL}/{job_board_name}?includeCompensation=true"
 
     logger.info("Fetching Ashby jobs for board: %s", job_board_name)
 

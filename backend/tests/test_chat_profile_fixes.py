@@ -17,6 +17,7 @@ Regression tests for the four Chat-with-Eve profile issues fixed in this PR:
    raw_data/parsed_resume_json and the item is absent after a simulated
    profile refresh.
 """
+
 import asyncio
 import json
 import os
@@ -26,12 +27,15 @@ import unittest.mock as mock
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 import server
-from profile_strength_service import calculate_profile_strength_v2, get_canonical_preferences
-
+from profile_strength_service import (
+    calculate_profile_strength_v2,
+    get_canonical_preferences,
+)
 
 # ---------------------------------------------------------------------------
 # Helpers shared across tests
 # ---------------------------------------------------------------------------
+
 
 def _make_candidate(**overrides):
     base = {
@@ -119,7 +123,9 @@ def _run_apply(candidate_state, updates):
                 if "skills" in params:
                     candidate_state["skills"] = json.loads(params["skills"])
                 if "work_experience" in params:
-                    candidate_state["work_experience"] = json.loads(params["work_experience"])
+                    candidate_state["work_experience"] = json.loads(
+                        params["work_experience"]
+                    )
                 if "education" in params:
                     candidate_state["education"] = json.loads(params["education"])
                 if "raw_data" in params:
@@ -147,10 +153,20 @@ def _run_apply(candidate_state, updates):
                 return FakeResult()
             if "UPDATE candidate_preferences" in sql:
                 preference_row = candidate_state["_preferences"]
-                for field in ("preferred_roles", "preferred_locations", "preferred_industries", "employment_types"):
+                for field in (
+                    "preferred_roles",
+                    "preferred_locations",
+                    "preferred_industries",
+                    "employment_types",
+                ):
                     if field in params:
                         preference_row[field] = json.loads(params[field])
-                for field in ("remote_preference", "expected_salary", "willing_to_relocate", "notice_period"):
+                for field in (
+                    "remote_preference",
+                    "expected_salary",
+                    "willing_to_relocate",
+                    "notice_period",
+                ):
                     if field in params:
                         preference_row[field] = params[field]
                 return FakeResult()
@@ -182,7 +198,9 @@ def test_chat_job_profile_update_uses_candidates_constraint_value():
 def test_natural_language_preference_update_persists_canonical_keys_and_improves_score():
     """Chat extraction must feed the exact preference keys used by strength scoring."""
     state = _make_candidate(raw_data={})
-    before = calculate_profile_strength_v2(state, {})["dimensions"]["preferences_constraints"]["score"]
+    before = calculate_profile_strength_v2(state, {})["dimensions"][
+        "preferences_constraints"
+    ]["score"]
     message = (
         "I'm targeting Platform Engineer roles. Preferred locations: Bengaluru and Pune. "
         "Preferred industries: fintech and healthcare. I prefer remote full-time work, "
@@ -203,16 +221,26 @@ def test_natural_language_preference_update_persists_canonical_keys_and_improves
         "notice_period": "30 day",
         "expected_salary": "24 LPA",
         "willing_to_relocate": True,
-            "open_to_opportunities": True,
-            "opportunity_type": "job",
-        }
+        "open_to_opportunities": True,
+        # The canonical internal/database representation remains ``jobs``;
+        # the HTTP profile serializer exposes the public ``job`` value.
+        "opportunity_type": "jobs",
+    }
     assert raw["expected_salary"] == "24 LPA"
     assert raw["notice_period"] == "30 day"
-    assert all(canonical[field] not in (None, "", []) for field in (
-        "preferred_roles", "preferred_locations", "preferred_industries",
-        "employment_types", "remote_preference", "notice_period",
-        "expected_salary", "willing_to_relocate",
-    ))
+    assert all(
+        canonical[field] not in (None, "", [])
+        for field in (
+            "preferred_roles",
+            "preferred_locations",
+            "preferred_industries",
+            "employment_types",
+            "remote_preference",
+            "notice_period",
+            "expected_salary",
+            "willing_to_relocate",
+        )
+    )
     preference_dimension = calculate_profile_strength_v2(
         state, raw, prefs_row=state["_preferences"]
     )["dimensions"]["preferences_constraints"]
@@ -220,9 +248,13 @@ def test_natural_language_preference_update_persists_canonical_keys_and_improves
     assert after > before
     assert after == 100.0
     assert set(preference_dimension["known"]) == {
-        "preferred_roles", "location_preferences", "remote_preference",
-        "availability", "salary_expectation", "employment_types",
-        "target_industries", "relocation",
+        "location_preferences",
+        "remote_preference",
+        "availability",
+        "salary_expectation",
+        "employment_types",
+            "target_industries",
+        "relocation",
     }
 
 
@@ -265,16 +297,17 @@ def test_chat_project_addition_preserves_existing_project_in_raw_data():
 
     projects = state["raw_data"]["projects"]
     assert {project["title"] for project in projects} == {
-        "Existing Platform", "Inventory Platform"
+        "Existing Platform",
+        "Inventory Platform",
     }
 
 
 def test_structured_chat_project_update_also_preserves_existing_projects():
     state = _make_candidate(raw_data={"projects": [{"title": "Existing Platform"}]})
     _, updates = server._extract_profile_updates(
-        '<<<PROFILE_UPDATES>>>\n'
+        "<<<PROFILE_UPDATES>>>\n"
         '{"profile_updates": {"projects": [{"title": "Inventory Platform", "description": "Built APIs", "technologies": ["Python"]}]}}\n'
-        '<<<END_UPDATES>>>',
+        "<<<END_UPDATES>>>",
         "I added a project called Inventory Platform",
     )
     _run_apply(state, updates)
@@ -282,38 +315,62 @@ def test_structured_chat_project_update_also_preserves_existing_projects():
     projects = state["raw_data"]["projects"]
     assert projects == [
         {"title": "Existing Platform"},
-        {"title": "Inventory Platform", "description": "Built APIs", "technologies": ["Python"]},
+        {
+            "title": "Inventory Platform",
+            "description": "Built APIs",
+            "technologies": ["Python"],
+        },
     ]
 
 
 def test_conversational_profile_categories_creation_and_correction():
     """Direct statements are classified by meaning and retained in schema fields."""
-    _, education = server._extract_profile_updates("", "I completed my Master's at CMR University")
-    assert education == {"education": [{"degree": "Master's", "institution": "CMR University"}]}
+    _, education = server._extract_profile_updates(
+        "", "I completed my Master's at CMR University"
+    )
+    assert education == {
+        "education": [{"degree": "Master's", "institution": "CMR University"}]
+    }
 
     _, cert = server._extract_profile_updates("", "I have an AWS certification")
     assert cert == {"certifications": ["AWS"]}
 
-    _, skills = server._extract_profile_updates("", "I know Python, Java and Spring Boot")
+    _, skills = server._extract_profile_updates(
+        "", "I know Python, Java and Spring Boot"
+    )
     assert skills == {"skills": ["Python", "Java", "Spring Boot"]}
 
-    _, experience = server._extract_profile_updates("", "I worked at TCS as a Python Developer for 2 years")
-    assert experience["work_experience"] == [{"title": "Python Developer", "company": "TCS"}]
+    _, experience = server._extract_profile_updates(
+        "", "I worked at TCS as a Python Developer for 2 years"
+    )
+    assert experience["work_experience"] == [
+        {"title": "Python Developer", "company": "TCS"}
+    ]
     assert experience["experience_years"] == 2.0
 
 
 def test_degree_is_never_persisted_as_a_certification_even_if_llm_misclassifies_it():
     reply = '<<<PROFILE_UPDATES>>>\n{"profile_updates":{"certifications":["CMR University"]}}\n<<<END_UPDATES>>>'
-    _, updates = server._extract_profile_updates(reply, "I completed my Master's at CMR University")
+    _, updates = server._extract_profile_updates(
+        reply, "I completed my Master's at CMR University"
+    )
     assert updates["education"][0]["institution"] == "CMR University"
     assert "certifications" not in updates
 
 
 def test_common_education_phrasings_override_wrong_llm_certification_category():
     cases = [
-        ("done my BTech in CMR Engineering College in 2022", "BTech", "CMR Engineering College"),
+        (
+            "done my BTech in CMR Engineering College in 2022",
+            "BTech",
+            "CMR Engineering College",
+        ),
         ("completed my BTech at CMR", "BTech", "CMR"),
-        ("I completed my BTech from CMR Engineering College", "BTech", "CMR Engineering College"),
+        (
+            "I completed my BTech from CMR Engineering College",
+            "BTech",
+            "CMR Engineering College",
+        ),
         ("I graduated from XYZ University", "", "XYZ University"),
         ("I have an MBA from XYZ", "MBA", "XYZ"),
     ]
@@ -333,8 +390,13 @@ def test_legitimate_certification_remains_certification():
 def test_acknowledgement_only_messages_cannot_produce_updates():
     reply = '<<<PROFILE_UPDATES>>>\n{"profile_updates":{"certifications":["AWS"]}}\n<<<END_UPDATES>>>'
     for message in (
-        "already added", "done", "I already told you", "added them already",
-        "I already provided that", "I mentioned that before", "that's already in my profile",
+        "already added",
+        "done",
+        "I already told you",
+        "added them already",
+        "I already provided that",
+        "I mentioned that before",
+        "that's already in my profile",
     ):
         assert server._is_acknowledgement_only(message)
         _, updates = server._extract_profile_updates(reply, message)
@@ -354,26 +416,66 @@ def test_real_profile_information_is_not_suppressed_as_acknowledgement():
 def test_profile_strength_result_is_reused_by_completion_guidance():
     candidate = _make_candidate()
     profile = server._normalize_for_frontend(candidate)
-    with mock.patch("profile_strength_service.calculate_profile_strength_v2", side_effect=AssertionError("duplicate scoring")):
+    with mock.patch(
+        "profile_strength_service.calculate_profile_strength_v2",
+        side_effect=AssertionError("duplicate scoring"),
+    ):
         guidance = server._build_profile_completion_guidance(profile)
     assert "Profile is at" in guidance
 
 
 def test_partial_conversational_records_are_created_and_merged_when_completed_later():
     state = _make_candidate(education=[], work_experience=[])
-    _run_apply(state, {"education": [{"degree": "Master's", "institution": "CMR University"}]})
-    _run_apply(state, {"education": [{"degree": "Master's", "institution": "CMR University", "start_date": "2021", "end_date": "2023"}]})
-    assert state["education"] == [{"degree": "Master's", "institution": "CMR University", "start_date": "2021", "end_date": "2023"}]
+    _run_apply(
+        state, {"education": [{"degree": "Master's", "institution": "CMR University"}]}
+    )
+    _run_apply(
+        state,
+        {
+            "education": [
+                {
+                    "degree": "Master's",
+                    "institution": "CMR University",
+                    "start_date": "2021",
+                    "end_date": "2023",
+                }
+            ]
+        },
+    )
+    assert state["education"] == [
+        {
+            "degree": "Master's",
+            "institution": "CMR University",
+            "start_date": "2021",
+            "end_date": "2023",
+        }
+    ]
 
-    _run_apply(state, {"work_experience": [{"title": "Python Developer", "company": "TCS"}]})
-    _run_apply(state, {"work_experience": [{"title": "Python Developer", "company": "TCS", "start_date": "2022", "end_date": "Present"}]})
+    _run_apply(
+        state, {"work_experience": [{"title": "Python Developer", "company": "TCS"}]}
+    )
+    _run_apply(
+        state,
+        {
+            "work_experience": [
+                {
+                    "title": "Python Developer",
+                    "company": "TCS",
+                    "start_date": "2022",
+                    "end_date": "Present",
+                }
+            ]
+        },
+    )
     assert len(state["work_experience"]) == 1
     assert state["work_experience"][0]["company"] == "TCS"
 
 
 def test_new_location_preference_replaces_an_explicitly_corrected_one():
     state = _make_candidate(raw_data={"preferred_locations": ["Hyderabad"]})
-    updates = server._infer_profile_updates_from_message("Actually, I prefer Bangalore now")
+    updates = server._infer_profile_updates_from_message(
+        "Actually, I prefer Bangalore now"
+    )
     _run_apply(state, updates)
     assert state["raw_data"]["preferred_locations"] == ["Bangalore"]
 
@@ -385,19 +487,37 @@ def test_add_masters_with_university_and_dates_is_education_not_a_clarification(
     )
     assert preflight is not None
     assert "where would you like" not in preflight["reply"].lower()
-    assert preflight["updates"] == {"education": [{
-        "degree": "Master's Degree", "institution": "CMR UNIVERSITY",
-        "start_date": "2023", "end_date": "2025",
-    }]}
+    assert preflight["updates"] == {
+        "education": [
+            {
+                "degree": "Master's Degree",
+                "institution": "CMR UNIVERSITY",
+                "start_date": "2023",
+                "end_date": "2025",
+            }
+        ]
+    }
     _run_apply(state, preflight["updates"])
     assert state["education"] == preflight["updates"]["education"]
 
 
 def test_replace_institution_with_multiple_matches_asks_before_writing():
-    state = _make_candidate(education=[
-        {"degree": "Bachelor's", "institution": "CMR Engineering College", "start_date": "2019", "end_date": "2023"},
-        {"degree": "Master's", "institution": "CMR University", "start_date": "2023", "end_date": "2025"},
-    ])
+    state = _make_candidate(
+        education=[
+            {
+                "degree": "Bachelor's",
+                "institution": "CMR Engineering College",
+                "start_date": "2019",
+                "end_date": "2023",
+            },
+            {
+                "degree": "Master's",
+                "institution": "CMR University",
+                "start_date": "2023",
+                "end_date": "2025",
+            },
+        ]
+    )
     preflight = server._chat_profile_preflight("Replace CMR with CBIT", state, [])
     assert preflight["updates"] is None
     assert "1. Bachelor's — CMR Engineering College" in preflight["reply"]
@@ -408,56 +528,86 @@ def test_replace_institution_with_multiple_matches_asks_before_writing():
 
 
 def test_replacement_selection_updates_only_chosen_record():
-    state = _make_candidate(education=[
-        {"degree": "Bachelor's", "institution": "CMR Engineering College"},
-        {"degree": "Master's", "institution": "CMR University"},
-    ])
-    history = [{"role": "user", "content": "Replace CMR with CBIT"}, {"role": "assistant", "content": "Which one?"}, {"role": "user", "content": "1"}]
+    state = _make_candidate(
+        education=[
+            {"degree": "Bachelor's", "institution": "CMR Engineering College"},
+            {"degree": "Master's", "institution": "CMR University"},
+        ]
+    )
+    history = [
+        {"role": "user", "content": "Replace CMR with CBIT"},
+        {"role": "assistant", "content": "Which one?"},
+        {"role": "user", "content": "1"},
+    ]
     preflight = server._chat_profile_preflight("1", state, history)
     _run_apply(state, preflight["updates"])
-    assert [row["institution"] for row in state["education"]] == ["CBIT Engineering College", "CMR University"]
+    assert [row["institution"] for row in state["education"]] == [
+        "CBIT Engineering College",
+        "CMR University",
+    ]
 
 
 def test_explicit_both_updates_all_matching_records():
-    state = _make_candidate(education=[
-        {"degree": "Bachelor's", "institution": "CMR Engineering College"},
-        {"degree": "Master's", "institution": "CMR University"},
-    ])
-    preflight = server._chat_profile_preflight("Replace CMR with CBIT in both my Bachelor's and Master's", state, [])
+    state = _make_candidate(
+        education=[
+            {"degree": "Bachelor's", "institution": "CMR Engineering College"},
+            {"degree": "Master's", "institution": "CMR University"},
+        ]
+    )
+    preflight = server._chat_profile_preflight(
+        "Replace CMR with CBIT in both my Bachelor's and Master's", state, []
+    )
     _run_apply(state, preflight["updates"])
-    assert [row["institution"] for row in state["education"]] == ["CBIT Engineering College", "CBIT University"]
+    assert [row["institution"] for row in state["education"]] == [
+        "CBIT Engineering College",
+        "CBIT University",
+    ]
 
 
 def test_explicit_degree_target_updates_only_that_education_record():
-    state = _make_candidate(education=[
-        {"degree": "Bachelor's", "institution": "CMR Engineering College"},
-        {"degree": "Master's in AI/ML", "institution": "CMR University"},
-    ])
-    preflight = server._chat_profile_preflight("Change my Master's university from CMR to CBIT", state, [])
+    state = _make_candidate(
+        education=[
+            {"degree": "Bachelor's", "institution": "CMR Engineering College"},
+            {"degree": "Master's in AI/ML", "institution": "CMR University"},
+        ]
+    )
+    preflight = server._chat_profile_preflight(
+        "Change my Master's university from CMR to CBIT", state, []
+    )
     _run_apply(state, preflight["updates"])
-    assert [row["institution"] for row in state["education"]] == ["CMR Engineering College", "CBIT University"]
+    assert [row["institution"] for row in state["education"]] == [
+        "CMR Engineering College",
+        "CBIT University",
+    ]
 
 
 # ===========================================================================
 # Canonical preference completion in Chat with Eve
 # ===========================================================================
 
+
 def test_chat_preference_completion_uses_canonical_missing_fields_and_saves_multi_answer():
     """One natural answer fills every missing preference and refreshes scoring input."""
-    state = _make_candidate(raw_data={
-        "preferred_roles": ["Backend Engineer"],
-        "preferred_locations": ["Bengaluru"],
-        "notice_period": "30 days",
-        "expected_salary": "20 LPA",
-        "preferred_industries": ["Fintech"],
-    })
-    before = calculate_profile_strength_v2(state, state["raw_data"])["dimensions"]["preferences_constraints"]["score"]
+    state = _make_candidate(
+        raw_data={
+            "preferred_roles": ["Backend Engineer"],
+            "preferred_locations": ["Bengaluru"],
+            "notice_period": "30 days",
+            "expected_salary": "20 LPA",
+            "preferred_industries": ["Fintech"],
+        }
+    )
+    before = calculate_profile_strength_v2(state, state["raw_data"])["dimensions"][
+        "preferences_constraints"
+    ]["score"]
 
     missing = server._missing_canonical_preference_fields(state)
     assert missing == ["remote_preference", "employment_types", "willing_to_relocate"]
     # Use a deliberately incomplete profile to exercise the below-75% chat
     # completion branch; preference values themselves remain canonical.
-    guidance = server._build_profile_completion_guidance({"raw_data": state["raw_data"]})
+    guidance = server._build_profile_completion_guidance(
+        {"raw_data": state["raw_data"]}
+    )
     assert "remote, hybrid, on-site" in guidance.lower()
     assert "remote_preference" not in guidance
     assert "profile score" not in guidance.lower()
@@ -479,7 +629,9 @@ def test_chat_preference_completion_uses_canonical_missing_fields_and_saves_mult
         state, state["raw_data"], prefs_row=state["_preferences"]
     )["dimensions"]["preferences_constraints"]["score"]
     assert after > before
-    assert server._missing_canonical_preference_fields(state, state["_preferences"]) == []
+    assert (
+        server._missing_canonical_preference_fields(state, state["_preferences"]) == []
+    )
 
 
 def test_populated_canonical_preference_is_not_asked_again():
@@ -494,15 +646,18 @@ def test_populated_canonical_preference_is_not_asked_again():
         "preferred_industries": ["Fintech"],
         "willing_to_relocate": False,
     }
-    assert server._missing_canonical_preference_fields(state, state["_preferences"]) == []
-    assert "work-preference question" not in server._build_profile_completion_guidance({
-        **state, "_prefs_row": state["_preferences"]
-    })
+    assert (
+        server._missing_canonical_preference_fields(state, state["_preferences"]) == []
+    )
+    assert "work-preference question" not in server._build_profile_completion_guidance(
+        {**state, "_prefs_row": state["_preferences"]}
+    )
 
 
 # ===========================================================================
 # Issue 1 – profile_deletions must NOT produce UndefinedColumnError
 # ===========================================================================
+
 
 class TestProfileDeletionsNoSQLError:
     """profile_deletions must be skipped in the field→SQL loop."""
@@ -510,7 +665,11 @@ class TestProfileDeletionsNoSQLError:
     def test_cert_deletion_does_not_add_profile_deletions_to_sql(self):
         """The fake DB asserts that profile_deletions never appears in SET clause."""
         state = _make_candidate()
-        updates = {"profile_deletions": {"certifications": ["AWS Certified Solutions Architect"]}}
+        updates = {
+            "profile_deletions": {
+                "certifications": ["AWS Certified Solutions Architect"]
+            }
+        }
         # Must not raise AssertionError from FakeSession or any other exception
         _run_apply(state, updates)
 
@@ -521,7 +680,11 @@ class TestProfileDeletionsNoSQLError:
 
     def test_cert_deletion_removes_from_raw_data(self):
         state = _make_candidate()
-        updates = {"profile_deletions": {"certifications": ["AWS Certified Solutions Architect"]}}
+        updates = {
+            "profile_deletions": {
+                "certifications": ["AWS Certified Solutions Architect"]
+            }
+        }
         _run_apply(state, updates)
         certs = state["raw_data"].get("certifications", [])
         assert not any("aws" in c.lower() for c in certs), (
@@ -531,7 +694,11 @@ class TestProfileDeletionsNoSQLError:
     def test_cert_deletion_removes_from_parsed_resume_json(self):
         """Cert must also be removed from parsed_resume_json so refresh doesn't re-add it."""
         state = _make_candidate()
-        updates = {"profile_deletions": {"certifications": ["AWS Certified Solutions Architect"]}}
+        updates = {
+            "profile_deletions": {
+                "certifications": ["AWS Certified Solutions Architect"]
+            }
+        }
         _run_apply(state, updates)
         parsed = state.get("parsed_resume_json") or {}
         if isinstance(parsed, str):
@@ -543,7 +710,11 @@ class TestProfileDeletionsNoSQLError:
 
     def test_cert_deletion_preserves_other_certs(self):
         state = _make_candidate()
-        updates = {"profile_deletions": {"certifications": ["AWS Certified Solutions Architect"]}}
+        updates = {
+            "profile_deletions": {
+                "certifications": ["AWS Certified Solutions Architect"]
+            }
+        }
         _run_apply(state, updates)
         certs = state["raw_data"].get("certifications", [])
         assert "PMP" in certs
@@ -551,7 +722,11 @@ class TestProfileDeletionsNoSQLError:
     def test_cert_absent_from_profile_after_refresh(self):
         """After deletion, _normalize_for_frontend must not include the deleted cert."""
         state = _make_candidate()
-        updates = {"profile_deletions": {"certifications": ["AWS Certified Solutions Architect"]}}
+        updates = {
+            "profile_deletions": {
+                "certifications": ["AWS Certified Solutions Architect"]
+            }
+        }
         _run_apply(state, updates)
         # Simulate what GET /profile does
         profile = server._normalize_for_frontend(state)
@@ -563,7 +738,9 @@ class TestProfileDeletionsNoSQLError:
     def test_nonexistent_cert_deletion_is_noop(self):
         state = _make_candidate()
         original_certs = list(state["raw_data"]["certifications"])
-        updates = {"profile_deletions": {"certifications": ["Google Cloud Professional"]}}
+        updates = {
+            "profile_deletions": {"certifications": ["Google Cloud Professional"]}
+        }
         _run_apply(state, updates)
         assert state["raw_data"]["certifications"] == original_certs
 
@@ -571,6 +748,7 @@ class TestProfileDeletionsNoSQLError:
 # ===========================================================================
 # Issue 2 – DB update failure must not return a success message
 # ===========================================================================
+
 
 class TestChatUpdateFailureResponse:
     """_apply_profile_updates raising must suppress the LLM success reply."""
@@ -636,6 +814,7 @@ class TestChatUpdateFailureResponse:
 # Issue 3 – YYYY-MM date formatting
 # ===========================================================================
 
+
 class TestYYYYMMDateFormatting:
     """Dates must be displayed as YYYY-MM, never YYYY-MM-DD."""
 
@@ -662,6 +841,7 @@ class TestYYYYMMDateFormatting:
             ed = exp.get("end_date", "")
             dates = exp.get("dates", "")
             import re
+
             assert not re.search(r"\d{4}-\d{2}-\d{2}", sd), (
                 f"start_date must not contain day: {sd!r}"
             )
@@ -676,6 +856,7 @@ class TestYYYYMMDateFormatting:
         candidate = _make_candidate()
         profile = server._normalize_for_frontend(candidate)
         import re
+
         for edu in profile.get("education", []):
             dates = edu.get("dates", "")
             assert not re.search(r"\d{4}-\d{2}-\d{2}", dates), (

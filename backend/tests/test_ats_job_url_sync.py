@@ -1,5 +1,5 @@
-import os
 import json
+import os
 import sys
 from types import ModuleType
 
@@ -14,7 +14,9 @@ from app.job_ingestion import scheduler
 def enable_ats_providers_for_scheduler_tests(monkeypatch):
     for provider in ("greenhouse", "lever", "ashby", "workable"):
         monkeypatch.setenv(f"{provider.upper()}_ENABLED", "true")
-from app.job_ingestion.job_ingestion_service import upsert_ats_job
+
+
+from app.job_ingestion.job_ingestion_service import upsert_ats_job  # noqa: E402
 
 
 @pytest.fixture(autouse=True)
@@ -71,28 +73,65 @@ class FakeSession:
         sql_lower = " ".join(sql.lower().split())
         self.execute_calls.append((sql, params))
 
-        if "from job_descriptions" in sql_lower and "select id, job_url, description" in sql_lower:
+        if (
+            "from job_descriptions" in sql_lower
+            and "select id, job_url, description" in sql_lower
+        ):
             row = self.state["job_row"]
-            if row and row["ats_type"] == params["ats_type"] and row["ats_job_id"] == params["ats_job_id"]:
-                return FakeResult([(
-                    row["id"], row["job_url"], row["description"], row.get("requirements"),
-                    row.get("skills", []), row.get("skills_required", []), row.get("experience_required"),
-                    row.get("salary_range"), row.get("employment_type"), row.get("structured_data", {}),
-                    row["ats_type"], row["ats_job_id"],
-                )])
+            if (
+                row
+                and row["ats_type"] == params["ats_type"]
+                and row["ats_job_id"] == params["ats_job_id"]
+            ):
+                return FakeResult(
+                    [
+                        (
+                            row["id"],
+                            row["job_url"],
+                            row["description"],
+                            row.get("requirements"),
+                            row.get("skills", []),
+                            row.get("skills_required", []),
+                            row.get("experience_required"),
+                            row.get("salary_range"),
+                            row.get("employment_type"),
+                            row.get("structured_data", {}),
+                            row["ats_type"],
+                            row["ats_job_id"],
+                        )
+                    ]
+                )
             return FakeResult([])
 
         if "update job_descriptions" in sql_lower:
             # Existing ATS rows are intentionally refreshed on every
             # successful observation. Identity fields remain immutable, while
             # provider metadata and lifecycle timestamps are updated.
-            for field in ("title =", "location =", "department =", "updated_at =", "last_synced_at ="):
-                assert field in sql_lower, f"Expected active-job refresh missing from SQL: {field}"
-            for field in ("company_name =", "agency_id =", "company_registry_id =", "ats_job_id =", "ats_type ="):
-                assert field not in sql_lower, f"Identity field must not be updated: {field}"
+            for field in (
+                "title =",
+                "location =",
+                "department =",
+                "updated_at =",
+                "last_synced_at =",
+            ):
+                assert field in sql_lower, (
+                    f"Expected active-job refresh missing from SQL: {field}"
+                )
+            for field in (
+                "company_name =",
+                "agency_id =",
+                "company_registry_id =",
+                "ats_job_id =",
+                "ats_type =",
+            ):
+                assert field not in sql_lower, (
+                    f"Identity field must not be updated: {field}"
+                )
 
             row = self.state["job_row"]
-            assert row is not None, "UPDATE job_descriptions executed without an existing row"
+            assert row is not None, (
+                "UPDATE job_descriptions executed without an existing row"
+            )
             if params.get("job_url") and not row["job_url"]:
                 row["job_url"] = params["job_url"]
             if params.get("refresh_description"):
@@ -108,22 +147,34 @@ class FakeSession:
             self.state["update_statements"].append((sql, params))
             return FakeResult([])
 
-        if "from company_registry" in sql_lower and "select id, company_name, ats_type, identifier" in sql_lower:
-            return FakeResult([
-                {
-                    "id": "company-1",
-                    "company_name": "Jumio",
-                    "ats_type": "greenhouse",
-                    "identifier": "jumio",
-                }
-            ])
+        if (
+            "from company_registry" in sql_lower
+            and "select id, company_name, ats_type, identifier" in sql_lower
+        ):
+            return FakeResult(
+                [
+                    {
+                        "id": "company-1",
+                        "company_name": "Jumio",
+                        "ats_type": "greenhouse",
+                        "identifier": "jumio",
+                    }
+                ]
+            )
 
             if "from company_registry" in sql_lower and "select id" in sql_lower:
                 return FakeResult([("company-1",)])
 
-            if "from job_descriptions" in sql_lower and "select id, ats_job_id" in sql_lower:
+            if (
+                "from job_descriptions" in sql_lower
+                and "select id, ats_job_id" in sql_lower
+            ):
                 row = self.state["job_row"]
-                if row and row["ats_type"] == params.get("ats_type") and row["ats_job_id"] not in self.state.get("seen_ids", set()):
+                if (
+                    row
+                    and row["ats_type"] == params.get("ats_type")
+                    and row["ats_job_id"] not in self.state.get("seen_ids", set())
+                ):
                     return FakeResult([(row["id"], row["ats_job_id"])])
                 return FakeResult([])
 
@@ -190,7 +241,9 @@ def _base_existing_row(job_url):
         (None, None, False),
     ],
 )
-async def test_upsert_ats_job_refreshes_metadata_and_only_fills_missing_url(monkeypatch, existing_url, incoming_url, should_fill_url):
+async def test_upsert_ats_job_refreshes_metadata_and_only_fills_missing_url(
+    monkeypatch, existing_url, incoming_url, should_fill_url
+):
     state = {
         "job_row": _base_existing_row(existing_url),
         "update_statements": [],
@@ -204,7 +257,10 @@ async def test_upsert_ats_job_refreshes_metadata_and_only_fills_missing_url(monk
     def fail_sync_if_called(*args, **kwargs):
         raise AssertionError("Unexpected sync dependency called for existing ATS job")
 
-    monkeypatch.setattr("app.job_ingestion.job_ingestion_service.get_or_create_ats_agency", fail_async_if_called)
+    monkeypatch.setattr(
+        "app.job_ingestion.job_ingestion_service.get_or_create_ats_agency",
+        fail_async_if_called,
+    )
 
     session_factory = SessionFactory(state)
     async with session_factory() as db:
@@ -255,14 +311,22 @@ async def test_upsert_ats_job_refreshes_a_historically_truncated_jd(monkeypatch)
         "insert_called": False,
     }
     state["job_row"]["description"] = "Role overview only."
-    monkeypatch.setattr("app.job_ingestion.job_ingestion_service.get_or_create_ats_agency", lambda *args: None)
+    monkeypatch.setattr(
+        "app.job_ingestion.job_ingestion_service.get_or_create_ats_agency",
+        lambda *args: None,
+    )
 
     async with SessionFactory(state)() as db:
-        job_id = await upsert_ats_job(db, {
-            "ats_type": "greenhouse", "ats_job_id": "ats-123", "company_name": "Jumio",
-            "description": "Role overview only.\nRequired Qualifications\nPython\nTerraform",
-            "job_url": "https://example.com/existing",
-        })
+        job_id = await upsert_ats_job(
+            db,
+            {
+                "ats_type": "greenhouse",
+                "ats_job_id": "ats-123",
+                "company_name": "Jumio",
+                "description": "Role overview only.\nRequired Qualifications\nPython\nTerraform",
+                "job_url": "https://example.com/existing",
+            },
+        )
 
     assert job_id == "existing-job-id"
     assert "Required Qualifications" in state["job_row"]["description"]
@@ -283,42 +347,70 @@ async def test_description_refresh_preserves_quality_without_losing_equal_length
 ):
     state = {
         "job_row": _base_existing_row("https://example.com/existing"),
-        "update_statements": [], "company_registry_updated": False, "insert_called": False,
+        "update_statements": [],
+        "company_registry_updated": False,
+        "insert_called": False,
     }
     state["job_row"]["description"] = stored
-    monkeypatch.setattr("app.job_ingestion.job_ingestion_service.get_or_create_ats_agency", lambda *args: None)
+    monkeypatch.setattr(
+        "app.job_ingestion.job_ingestion_service.get_or_create_ats_agency",
+        lambda *args: None,
+    )
 
     async with SessionFactory(state)() as db:
-        await upsert_ats_job(db, {
-            "ats_type": "greenhouse", "ats_job_id": "ats-123", "company_name": "Jumio",
-            "description": incoming, "job_url": "https://example.com/existing",
-        })
+        await upsert_ats_job(
+            db,
+            {
+                "ats_type": "greenhouse",
+                "ats_job_id": "ats-123",
+                "company_name": "Jumio",
+                "description": incoming,
+                "job_url": "https://example.com/existing",
+            },
+        )
 
     assert state["update_statements"][0][1]["refresh_description"] is should_refresh
     assert state["job_row"]["description"] == (incoming if should_refresh else stored)
     metadata = json.loads(state["update_statements"][0][1]["structured_data"])
     from app.job_ingestion.job_ingestion_service import description_fingerprint
-    assert metadata["description_extraction_fingerprint"] == description_fingerprint(incoming)
+
+    assert metadata["description_extraction_fingerprint"] == description_fingerprint(
+        incoming
+    )
 
 
 @pytest.mark.asyncio
-async def test_existing_job_update_types_job_url_and_preserves_experience_required(monkeypatch):
+async def test_existing_job_update_types_job_url_and_preserves_experience_required(
+    monkeypatch,
+):
     state = {
         "job_row": _base_existing_row(None),
         "update_statements": [],
         "company_registry_updated": False,
         "insert_called": False,
     }
-    monkeypatch.setattr("app.job_ingestion.job_ingestion_service.get_or_create_ats_agency", lambda *args: None)
+    monkeypatch.setattr(
+        "app.job_ingestion.job_ingestion_service.get_or_create_ats_agency",
+        lambda *args: None,
+    )
 
     async with SessionFactory(state)() as db:
-        job_id = await upsert_ats_job(db, {
-            "ats_type": "greenhouse", "ats_job_id": "ats-123", "company_name": "Jumio",
-            "description": "Updated description", "requirements": "Python and SQL",
-            "job_url": "https://example.com/new", "experience_required": "5+ years",
-            "skills_required": ["Python", "SQL"], "skills": ["Python"],
-            "structured_data": {"source": "test"}, "employment_type": None,
-        })
+        job_id = await upsert_ats_job(
+            db,
+            {
+                "ats_type": "greenhouse",
+                "ats_job_id": "ats-123",
+                "company_name": "Jumio",
+                "description": "Updated description",
+                "requirements": "Python and SQL",
+                "job_url": "https://example.com/new",
+                "experience_required": "5+ years",
+                "skills_required": ["Python", "SQL"],
+                "skills": ["Python"],
+                "structured_data": {"source": "test"},
+                "employment_type": None,
+            },
+        )
 
     assert job_id == "existing-job-id"
     sql, params = state["update_statements"][0]
@@ -356,26 +448,50 @@ async def test_existing_job_update_types_all_nullable_parameters(monkeypatch):
     }
     state["job_row"]["ats_job_id"] = "ats-nullable"
     state["job_row"]["ats_type"] = "lever"
+
     async def no_agency(*args):
         return None
 
-    monkeypatch.setattr("app.job_ingestion.job_ingestion_service.get_or_create_ats_agency", no_agency)
+    monkeypatch.setattr(
+        "app.job_ingestion.job_ingestion_service.get_or_create_ats_agency", no_agency
+    )
 
     async with SessionFactory(state)() as db:
-        await upsert_ats_job(db, {
-            "ats_type": "lever", "ats_job_id": "ats-nullable", "company_name": "Jumio",
-            "description": "Same length", "job_url": None,
-            "employment_type": None, "remote_policy": None,
-            "experience_required": None, "experience_level": None,
-            "salary_range": None, "requirements": None, "created_at": None,
-            "skills_required": None, "skills": None, "structured_data": None,
-        })
+        await upsert_ats_job(
+            db,
+            {
+                "ats_type": "lever",
+                "ats_job_id": "ats-nullable",
+                "company_name": "Jumio",
+                "description": "Same length",
+                "job_url": None,
+                "employment_type": None,
+                "remote_policy": None,
+                "experience_required": None,
+                "experience_level": None,
+                "salary_range": None,
+                "requirements": None,
+                "created_at": None,
+                "skills_required": None,
+                "skills": None,
+                "structured_data": None,
+            },
+        )
 
     sql, params = state["update_statements"][0]
     for parameter in (
-        "job_url", "requirements", "employment_type", "remote_policy",
-        "experience_level", "experience_required", "salary_range",
-        "skills_required", "skills", "structured_data", "created_at", "id",
+        "job_url",
+        "requirements",
+        "employment_type",
+        "remote_policy",
+        "experience_level",
+        "experience_required",
+        "salary_range",
+        "skills_required",
+        "skills",
+        "structured_data",
+        "created_at",
+        "id",
     ):
         assert f":{parameter}" in sql
     assert params["employment_type"] is None
@@ -413,6 +529,7 @@ async def test_scheduler_does_not_pre_skip_existing_ats_jobs(monkeypatch):
             ]
 
     extracted = []
+
     async def fake_extract(job):
         extracted.append(job["ats_job_id"])
         return job
@@ -433,20 +550,31 @@ async def test_scheduler_does_not_pre_skip_existing_ats_jobs(monkeypatch):
             sql_lower = " ".join(sql.lower().split())
             self.execute_calls.append((sql, params or {}))
 
-            if "from company_registry" in sql_lower and "select id, company_name, ats_type, identifier" in sql_lower:
-                return FakeResult([
-                    {
-                        "id": "company-1",
-                        "company_name": "Jumio",
-                        "ats_type": "greenhouse",
-                        "identifier": "jumio",
-                    }
-                ])
+            if (
+                "from company_registry" in sql_lower
+                and "select id, company_name, ats_type, identifier" in sql_lower
+            ):
+                return FakeResult(
+                    [
+                        {
+                            "id": "company-1",
+                            "company_name": "Jumio",
+                            "ats_type": "greenhouse",
+                            "identifier": "jumio",
+                        }
+                    ]
+                )
 
-            if "from job_descriptions" in sql_lower and "select id, ats_job_id" in sql_lower:
+            if (
+                "from job_descriptions" in sql_lower
+                and "select id, ats_job_id" in sql_lower
+            ):
                 return FakeResult([])
 
-            if "update job_descriptions" in sql_lower or "update candidate_job_recommendations" in sql_lower:
+            if (
+                "update job_descriptions" in sql_lower
+                or "update candidate_job_recommendations" in sql_lower
+            ):
                 return FakeResult([])
 
             if "update company_registry" in sql_lower:
@@ -455,14 +583,26 @@ async def test_scheduler_does_not_pre_skip_existing_ats_jobs(monkeypatch):
 
             raise AssertionError(f"Unexpected scheduler SQL: {sql}")
 
-    monkeypatch.setattr("app.job_ingestion.collect_jobs.JobCollector", lambda: FakeCollector())
-    monkeypatch.setattr(scheduler, "_get_session_local", lambda: SchedulerSessionFactory())
-    monkeypatch.setattr("app.job_ingestion.job_ingestion_service.upsert_ats_job", fake_upsert)
+    monkeypatch.setattr(
+        "app.job_ingestion.collect_jobs.JobCollector", lambda: FakeCollector()
+    )
+    monkeypatch.setattr(
+        scheduler, "_get_session_local", lambda: SchedulerSessionFactory()
+    )
+    monkeypatch.setattr(
+        "app.job_ingestion.job_ingestion_service.upsert_ats_job", fake_upsert
+    )
+
     async def no_existing(*_args):
         return None
 
-    monkeypatch.setattr("app.job_ingestion.job_ingestion_service.find_existing_ats_job", no_existing)
-    monkeypatch.setattr("app.job_ingestion.job_skill_extraction.extract_missing_job_skills", fake_extract)
+    monkeypatch.setattr(
+        "app.job_ingestion.job_ingestion_service.find_existing_ats_job", no_existing
+    )
+    monkeypatch.setattr(
+        "app.job_ingestion.job_skill_extraction.extract_missing_job_skills",
+        fake_extract,
+    )
 
     await scheduler.sync_jobs()
 
@@ -485,8 +625,20 @@ async def test_scheduler_continues_after_a_single_job_failure(monkeypatch):
     class Session(FakeSession):
         async def execute(self, statement, params=None):
             sql = " ".join(str(statement).lower().split())
-            if "from company_registry" in sql and "select id, company_name, ats_type, identifier" in sql:
-                return FakeResult([{"id": "company-1", "company_name": "Acme", "ats_type": "ashby", "identifier": "acme"}])
+            if (
+                "from company_registry" in sql
+                and "select id, company_name, ats_type, identifier" in sql
+            ):
+                return FakeResult(
+                    [
+                        {
+                            "id": "company-1",
+                            "company_name": "Acme",
+                            "ats_type": "ashby",
+                            "identifier": "acme",
+                        }
+                    ]
+                )
             if "update company_registry" in sql:
                 state["company_registry_updated"] = True
                 return FakeResult()
@@ -501,11 +653,20 @@ async def test_scheduler_continues_after_a_single_job_failure(monkeypatch):
         state["good_job_upserted"] = True
         return "good-id"
 
-    monkeypatch.setattr("app.job_ingestion.collect_jobs.JobCollector", lambda: Collector())
+    monkeypatch.setattr(
+        "app.job_ingestion.collect_jobs.JobCollector", lambda: Collector()
+    )
     monkeypatch.setattr(scheduler, "_get_session_local", lambda: lambda: Session(state))
-    monkeypatch.setattr("app.job_ingestion.job_ingestion_service.upsert_ats_job", fake_upsert)
-    async def no_existing(*_args): return None
-    monkeypatch.setattr("app.job_ingestion.job_ingestion_service.find_existing_ats_job", no_existing)
+    monkeypatch.setattr(
+        "app.job_ingestion.job_ingestion_service.upsert_ats_job", fake_upsert
+    )
+
+    async def no_existing(*_args):
+        return None
+
+    monkeypatch.setattr(
+        "app.job_ingestion.job_ingestion_service.find_existing_ats_job", no_existing
+    )
 
     await scheduler.sync_jobs()
 
@@ -522,29 +683,64 @@ async def test_provider_404_does_not_stop_other_company_sync(monkeypatch):
         def collect_company_jobs(self, ats_type, identifier, company_name):
             if company_name == "Broken board":
                 raise RuntimeError("Workable returned HTTP 404")
-            return [{"ats_type": "ashby", "ats_job_id": "good", "company_name": company_name, "title": "Good"}]
+            return [
+                {
+                    "ats_type": "ashby",
+                    "ats_job_id": "good",
+                    "company_name": company_name,
+                    "title": "Good",
+                }
+            ]
 
     class Session:
-        async def __aenter__(self): return self
-        async def __aexit__(self, *args): return False
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *args):
+            return False
+
         async def execute(self, statement, params=None):
             sql = " ".join(str(statement).lower().split())
             if "select id, company_name, ats_type, identifier" in sql:
-                return FakeResult([
-                    {"id": "broken", "company_name": "Broken board", "ats_type": "workable", "identifier": "gone"},
-                    {"id": "good", "company_name": "Healthy board", "ats_type": "ashby", "identifier": "healthy"},
-                ])
-            if "update company_registry" in sql: return FakeResult()
+                return FakeResult(
+                    [
+                        {
+                            "id": "broken",
+                            "company_name": "Broken board",
+                            "ats_type": "workable",
+                            "identifier": "gone",
+                        },
+                        {
+                            "id": "good",
+                            "company_name": "Healthy board",
+                            "ats_type": "ashby",
+                            "identifier": "healthy",
+                        },
+                    ]
+                )
+            if "update company_registry" in sql:
+                return FakeResult()
             raise AssertionError(sql)
-        async def commit(self): pass
+
+        async def commit(self):
+            pass
 
     async def upsert(_, job, **_kwargs):
         state["synced"].append(job["company_name"])
 
-    monkeypatch.setattr("app.job_ingestion.collect_jobs.JobCollector", lambda: Collector())
+    monkeypatch.setattr(
+        "app.job_ingestion.collect_jobs.JobCollector", lambda: Collector()
+    )
     monkeypatch.setattr(scheduler, "_get_session_local", lambda: lambda: Session())
-    monkeypatch.setattr("app.job_ingestion.job_ingestion_service.upsert_ats_job", upsert)
-    async def no_existing(*_args): return None
-    monkeypatch.setattr("app.job_ingestion.job_ingestion_service.find_existing_ats_job", no_existing)
+    monkeypatch.setattr(
+        "app.job_ingestion.job_ingestion_service.upsert_ats_job", upsert
+    )
+
+    async def no_existing(*_args):
+        return None
+
+    monkeypatch.setattr(
+        "app.job_ingestion.job_ingestion_service.find_existing_ats_job", no_existing
+    )
     await scheduler.sync_jobs()
     assert state["synced"] == ["Healthy board"]

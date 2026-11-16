@@ -3,23 +3,27 @@ Tests for Job-Specific Recommendation Confidence (Section 12 of spec).
 
 Covers all 12 required test scenarios plus structural validation.
 """
+
 import os
 import sys
-
-import pytest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 import candidate_job_matching_service as matcher
 
-
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
 
-def _intel(ev_level=3, work_mode="unknown", salary_min=None,
-           readiness_level="high", readiness_confidence=0.85,
-           inconsistencies=None):
+
+def _intel(
+    ev_level=3,
+    work_mode="unknown",
+    salary_min=None,
+    readiness_level="high",
+    readiness_confidence=0.85,
+    inconsistencies=None,
+):
     """Build a minimal intelligence dict for testing."""
     return {
         "evidence": {"skills": {"evidence_level": ev_level}},
@@ -54,6 +58,7 @@ def _explanation(components):
 # Test 1: Strong candidate + excellent matching job → High confidence
 # ---------------------------------------------------------------------------
 
+
 class TestStrongCandidateExcellentJob:
     def test_high_confidence(self):
         signals = {
@@ -77,6 +82,7 @@ class TestStrongCandidateExcellentJob:
 # ---------------------------------------------------------------------------
 # Test 2: Strong candidate + unrelated job → Low confidence
 # ---------------------------------------------------------------------------
+
 
 class TestStrongCandidateUnrelatedJob:
     def test_low_confidence(self):
@@ -103,6 +109,7 @@ class TestStrongCandidateUnrelatedJob:
 #          → Can still be High
 # ---------------------------------------------------------------------------
 
+
 class TestModerateProfileHighSuitability:
     def test_can_be_high_when_job_critical_info_known(self):
         signals = {
@@ -111,8 +118,12 @@ class TestModerateProfileHighSuitability:
             "past_roles": ["Python Developer"],
         }
         # Moderate readiness but demonstrated skills
-        intel = _intel(ev_level=3, work_mode="unknown",
-                       readiness_level="medium", readiness_confidence=0.55)
+        intel = _intel(
+            ev_level=3,
+            work_mode="unknown",
+            readiness_level="medium",
+            readiness_confidence=0.55,
+        )
         _, components = _score(
             signals,
             "Python Developer",
@@ -129,6 +140,7 @@ class TestModerateProfileHighSuitability:
 # ---------------------------------------------------------------------------
 # Test 4: High Profile Strength + missing required skill → Cannot be High
 # ---------------------------------------------------------------------------
+
 
 class TestMissingRequiredSkill:
     def test_cannot_be_high_when_required_skill_missing(self):
@@ -183,6 +195,7 @@ class TestMissingRequiredSkill:
 # Test 5: High Profile Strength + hard remote conflict → Low / near-disqualified
 # ---------------------------------------------------------------------------
 
+
 class TestHardRemoteConflict:
     def test_low_confidence_for_onsite_job(self):
         signals = {
@@ -226,6 +239,7 @@ class TestHardRemoteConflict:
 # Test 6: High Profile Strength + salary incompatibility → Reduced confidence
 # ---------------------------------------------------------------------------
 
+
 class TestSalaryIncompatibility:
     def test_salary_conflict_reduces_confidence(self):
         signals = {
@@ -234,7 +248,9 @@ class TestSalaryIncompatibility:
             "past_roles": ["Backend Engineer"],
         }
         # salary_min = 100000, job mentions 50000 (below 70% threshold)
-        intel_salary_conflict = _intel(ev_level=3, work_mode="unknown", salary_min=100000)
+        intel_salary_conflict = _intel(
+            ev_level=3, work_mode="unknown", salary_min=100000
+        )
         intel_no_conflict = _intel(ev_level=3, work_mode="unknown", salary_min=None)
 
         _, comp_conflict = _score(
@@ -262,6 +278,7 @@ class TestSalaryIncompatibility:
 # Test 7: Demonstrated required skill → stronger than claimed required skill
 # ---------------------------------------------------------------------------
 
+
 class TestDemonstratedVsClaimed:
     def test_demonstrated_beats_claimed(self):
         signals = {
@@ -273,12 +290,18 @@ class TestDemonstratedVsClaimed:
         intel_demonstrated = _intel(ev_level=3, work_mode="unknown")
 
         _, comp_claimed = _score(
-            signals, "Python Developer", "Python FastAPI developer needed.",
-            semantic=0.8, intel=intel_claimed,
+            signals,
+            "Python Developer",
+            "Python FastAPI developer needed.",
+            semantic=0.8,
+            intel=intel_claimed,
         )
         _, comp_demo = _score(
-            signals, "Python Developer", "Python FastAPI developer needed.",
-            semantic=0.8, intel=intel_demonstrated,
+            signals,
+            "Python Developer",
+            "Python FastAPI developer needed.",
+            semantic=0.8,
+            intel=intel_demonstrated,
         )
         assert _confidence(comp_demo)["score"] > _confidence(comp_claimed)["score"]
 
@@ -290,8 +313,11 @@ class TestDemonstratedVsClaimed:
         }
         intel = _intel(ev_level=3)
         _, components = _score(
-            signals, "Python Developer", "Python developer needed.",
-            semantic=0.8, intel=intel,
+            signals,
+            "Python Developer",
+            "Python developer needed.",
+            semantic=0.8,
+            intel=intel,
         )
         expl = _explanation(components)
         strong_text = " ".join(expl["strong"]).lower()
@@ -306,8 +332,11 @@ class TestDemonstratedVsClaimed:
         }
         intel = _intel(ev_level=1)
         _, components = _score(
-            signals, "Python Developer", "Python developer needed.",
-            semantic=0.8, intel=intel,
+            signals,
+            "Python Developer",
+            "Python developer needed.",
+            semantic=0.8,
+            intel=intel,
         )
         expl = _explanation(components)
         partial_text = " ".join(expl["partial"]).lower()
@@ -318,6 +347,7 @@ class TestDemonstratedVsClaimed:
 # ---------------------------------------------------------------------------
 # Test 8: Verified irrelevant skill → does not compensate for missing required skill
 # ---------------------------------------------------------------------------
+
 
 class TestIrrelevantVerifiedSkill:
     def test_irrelevant_verified_skill_does_not_compensate(self):
@@ -346,6 +376,7 @@ class TestIrrelevantVerifiedSkill:
 # Test 9: Unclear target role → recommendation confidence constrained
 # ---------------------------------------------------------------------------
 
+
 class TestUnclearTargetRole:
     def test_no_target_role_constrains_confidence(self):
         signals = {
@@ -353,8 +384,12 @@ class TestUnclearTargetRole:
             "skills": ["Python", "FastAPI", "PostgreSQL"],
             "past_roles": ["Backend Engineer"],
         }
-        intel = _intel(ev_level=3, work_mode="unknown",
-                       readiness_level="low", readiness_confidence=0.2)
+        intel = _intel(
+            ev_level=3,
+            work_mode="unknown",
+            readiness_level="low",
+            readiness_confidence=0.2,
+        )
         _, components = _score(
             signals,
             "Python Backend Engineer",
@@ -373,6 +408,7 @@ class TestUnclearTargetRole:
 # Test 10: High-severity contradiction → confidence reduced
 # ---------------------------------------------------------------------------
 
+
 class TestHighSeverityContradiction:
     def test_contradiction_reduces_confidence(self):
         signals = {
@@ -380,22 +416,30 @@ class TestHighSeverityContradiction:
             "skills": ["Python", "FastAPI"],
             "past_roles": ["Backend Engineer"],
         }
-        contradiction = [{
-            "field": "experience_years",
-            "type": "hard_contradiction",
-            "severity": "high",
-            "description": "Resume claims 8 years but voice suggests 1 year",
-        }]
+        contradiction = [
+            {
+                "field": "experience_years",
+                "type": "hard_contradiction",
+                "severity": "high",
+                "description": "Resume claims 8 years but voice suggests 1 year",
+            }
+        ]
         intel_clean = _intel(ev_level=3, inconsistencies=[])
         intel_conflict = _intel(ev_level=3, inconsistencies=contradiction)
 
         _, comp_clean = _score(
-            signals, "Backend Engineer", "Python FastAPI backend.",
-            semantic=0.85, intel=intel_clean,
+            signals,
+            "Backend Engineer",
+            "Python FastAPI backend.",
+            semantic=0.85,
+            intel=intel_clean,
         )
         _, comp_conflict = _score(
-            signals, "Backend Engineer", "Python FastAPI backend.",
-            semantic=0.85, intel=intel_conflict,
+            signals,
+            "Backend Engineer",
+            "Python FastAPI backend.",
+            semantic=0.85,
+            intel=intel_conflict,
         )
         assert _confidence(comp_conflict)["score"] < _confidence(comp_clean)["score"]
 
@@ -405,16 +449,21 @@ class TestHighSeverityContradiction:
             "skills": ["Python"],
             "past_roles": ["Engineer"],
         }
-        contradiction = [{
-            "field": "experience_years",
-            "type": "hard_contradiction",
-            "severity": "high",
-            "description": "Resume claims 8 years but voice suggests 1 year",
-        }]
+        contradiction = [
+            {
+                "field": "experience_years",
+                "type": "hard_contradiction",
+                "severity": "high",
+                "description": "Resume claims 8 years but voice suggests 1 year",
+            }
+        ]
         intel = _intel(ev_level=3, inconsistencies=contradiction)
         _, components = _score(
-            signals, "Backend Engineer", "Python backend.",
-            semantic=0.8, intel=intel,
+            signals,
+            "Backend Engineer",
+            "Python backend.",
+            semantic=0.8,
+            intel=intel,
         )
         expl = _explanation(components)
         assert len(expl["concerns"]) > 0
@@ -424,6 +473,7 @@ class TestHighSeverityContradiction:
 # Test 11: Non-technical candidate → no artificial GitHub/project requirement
 # ---------------------------------------------------------------------------
 
+
 class TestNonTechnicalCandidate:
     def test_sales_candidate_no_github_requirement(self):
         signals = {
@@ -431,8 +481,12 @@ class TestNonTechnicalCandidate:
             "skills": ["Negotiation", "CRM", "Salesforce"],
             "past_roles": ["Account Executive"],
         }
-        intel = _intel(ev_level=2, work_mode="unknown",
-                       readiness_level="high", readiness_confidence=0.8)
+        intel = _intel(
+            ev_level=2,
+            work_mode="unknown",
+            readiness_level="high",
+            readiness_confidence=0.8,
+        )
         _, components = _score(
             signals,
             "Senior Account Executive",
@@ -450,6 +504,7 @@ class TestNonTechnicalCandidate:
 # Test 12: Fresher → lack of work history does not prevent strong recommendation
 # ---------------------------------------------------------------------------
 
+
 class TestFresherCandidate:
     def test_fresher_can_get_strong_recommendation_with_relevant_evidence(self):
         signals = {
@@ -457,8 +512,12 @@ class TestFresherCandidate:
             "skills": ["Python", "FastAPI", "PostgreSQL"],
             "past_roles": [],  # no work history
         }
-        intel = _intel(ev_level=3, work_mode="unknown",
-                       readiness_level="high", readiness_confidence=0.75)
+        intel = _intel(
+            ev_level=3,
+            work_mode="unknown",
+            readiness_level="high",
+            readiness_confidence=0.75,
+        )
         _, components = _score(
             signals,
             "Backend Developer",
@@ -476,6 +535,7 @@ class TestFresherCandidate:
 # ---------------------------------------------------------------------------
 # Structural tests: output shape
 # ---------------------------------------------------------------------------
+
 
 class TestOutputStructure:
     def test_recommendation_confidence_present_in_components(self):
@@ -504,8 +564,14 @@ class TestOutputStructure:
         signals = {"target_roles": ["Engineer"], "skills": ["Python"], "past_roles": []}
         intel = _intel()
         _, components = _score(signals, "Engineer", "Python engineer.", intel=intel)
-        for key in ("target_role_score", "skills_score", "experience_score",
-                    "semantic_score", "constraint_penalty", "final_score"):
+        for key in (
+            "target_role_score",
+            "skills_score",
+            "experience_score",
+            "semantic_score",
+            "constraint_penalty",
+            "final_score",
+        ):
             assert key in components, f"Missing existing component: {key}"
 
     def test_no_intelligence_does_not_crash(self):
@@ -524,7 +590,9 @@ class TestOutputStructure:
             "email": "test@example.com",
             "current_role": "Backend Engineer",
             "skills": ["Python", "FastAPI"],
-            "work_experience": [{"title": "Engineer", "company": "Corp", "description": "APIs"}],
+            "work_experience": [
+                {"title": "Engineer", "company": "Corp", "description": "APIs"}
+            ],
             "education": [],
             "raw_data": {"preferred_roles": ["Backend Engineer"]},
             "candidate_certificates": [],
@@ -544,7 +612,9 @@ class TestOutputStructure:
             signals,
             "Backend Engineer",
             "Python FastAPI backend role.",
-            "", [], 0.8,
+            "",
+            [],
+            0.8,
             intelligence=intelligence,
         )
         job_conf = components["recommendation_confidence"]

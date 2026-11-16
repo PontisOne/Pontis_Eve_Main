@@ -1,14 +1,15 @@
 """Ingestion-time fallback for skills not exposed as ATS metadata."""
+
+import asyncio
 import json
 import logging
 import os
-import asyncio
 import re
 from typing import Any
 
-from app.job_ingestion.normalize import _normalize_skill_values, _html_text
-from skill_normalization import merge_skills, canonical_skill_key
+from app.job_ingestion.normalize import _html_text, _normalize_skill_values
 from groq_client import AllKeysRateLimitedError
+from skill_normalization import canonical_skill_key, merge_skills
 
 logger = logging.getLogger(__name__)
 
@@ -24,30 +25,54 @@ _SYSTEM = (
     "and avoid overlapping duplicates. Do not return sentences or duties."
 )
 
-_EXTRACTION_CONCURRENCY = max(1, int(os.getenv("JOB_SKILL_EXTRACTION_CONCURRENCY", "2")))
+_EXTRACTION_CONCURRENCY = max(
+    1, int(os.getenv("JOB_SKILL_EXTRACTION_CONCURRENCY", "2"))
+)
 _EXTRACTION_SEMAPHORE = asyncio.Semaphore(_EXTRACTION_CONCURRENCY)
-_FIELD_LIMITS = {"title": 500, "description": 12000, "requirements": 8000, "responsibilities": 8000}
+_FIELD_LIMITS = {
+    "title": 500,
+    "description": 12000,
+    "requirements": 8000,
+    "responsibilities": 8000,
+}
 
 _NON_SKILL_PATTERNS = (
     re.compile(r"^(?:remote|hybrid|on[- ]site)\s+(?:work|role|position)$", re.I),
     re.compile(r"^(?:esop|lta|salary|compensation|benefits?)$", re.I),
-    re.compile(r"^(?:financial|healthcare|manufacturing|hospitality|education|infrastructure|energy)\s+(?:domain|sector|industry)$", re.I),
+    re.compile(
+        r"^(?:financial|healthcare|manufacturing|hospitality|education|infrastructure|energy)\s+(?:domain|sector|industry)$",
+        re.I,
+    ),
 )
-_DOMAIN_ONLY = {"healthcare", "manufacturing", "hospitality", "infrastructure", "education", "energy", "finance", "financial"}
+_DOMAIN_ONLY = {
+    "healthcare",
+    "manufacturing",
+    "hospitality",
+    "infrastructure",
+    "education",
+    "energy",
+    "finance",
+    "financial",
+}
 _DETERMINISTIC_ATS_PROVIDERS = {"greenhouse", "lever", "ashby"}
 
 
 def _clean_extracted_skills(values: Any, job: dict[str, Any]) -> list[str]:
     """Conservatively remove metadata/title/company contamination from skills."""
     title = " ".join(str(job.get(key) or "") for key in ("title", "job_title"))
-    company = " ".join(str(job.get(key) or "") for key in ("company_name", "company", "organization"))
+    company = " ".join(
+        str(job.get(key) or "") for key in ("company_name", "company", "organization")
+    )
     excluded = {canonical_skill_key(title), canonical_skill_key(company)} - {""}
     cleaned, seen = [], set()
     for value in _normalize_skill_values(values):
         text = " ".join(str(value).split()).strip(" .,:;-")
         if not text or canonical_skill_key(text) in excluded:
             continue
-        if any(pattern.fullmatch(text) for pattern in _NON_SKILL_PATTERNS) or text.casefold() in _DOMAIN_ONLY:
+        if (
+            any(pattern.fullmatch(text) for pattern in _NON_SKILL_PATTERNS)
+            or text.casefold() in _DOMAIN_ONLY
+        ):
             continue
         folded = re.sub(r"\s+", " ", text.casefold())
         if folded == "gis technology":
@@ -71,12 +96,17 @@ def _bounded_text(value: Any, limit: int) -> str:
 def _extraction_input(job: dict[str, Any]) -> dict[str, Any]:
     """Build a deterministic, bounded request without truncating JSON."""
     return {
-        key: _bounded_text(job.get(key), limit)
-        for key, limit in _FIELD_LIMITS.items()
+        key: _bounded_text(job.get(key), limit) for key, limit in _FIELD_LIMITS.items()
     } | {
         "native_metadata": {
             key: job.get(key)
-            for key in ("skills", "skills_required", "salary_range", "employment_type", "location")
+            for key in (
+                "skills",
+                "skills_required",
+                "salary_range",
+                "employment_type",
+                "location",
+            )
             if job.get(key) is not None
         }
     }
@@ -97,16 +127,25 @@ def has_sufficient_deterministic_metadata(job: dict[str, Any]) -> bool:
     """
     if job.get("ats_type") not in _DETERMINISTIC_ATS_PROVIDERS:
         return False
-    skills = _clean_extracted_skills(merge_skills(job.get("skills_required"), job.get("skills")), job)
+    skills = _clean_extracted_skills(
+        merge_skills(job.get("skills_required"), job.get("skills")), job
+    )
     structured = job.get("structured_data")
-    undisclosed = structured.get("explicitly_undisclosed") if isinstance(structured, dict) else {}
+    undisclosed = (
+        structured.get("explicitly_undisclosed") if isinstance(structured, dict) else {}
+    )
     if not isinstance(undisclosed, dict):
         undisclosed = {}
 
     def complete(field: str) -> bool:
         return _has_text(job.get(field)) or undisclosed.get(field) is True
 
-    return bool(skills) and complete("experience_required") and complete("salary_range") and _has_text(job.get("employment_type"))
+    return (
+        bool(skills)
+        and complete("experience_required")
+        and complete("salary_range")
+        and _has_text(job.get("employment_type"))
+    )
 
 
 def has_sufficient_global_provider_metadata(job: dict[str, Any]) -> bool:
@@ -117,18 +156,34 @@ def has_sufficient_global_provider_metadata(job: dict[str, Any]) -> bool:
         _clean_extracted_skills(job.get("skills_required"), job)
     )
 
+
 async def extract_missing_job_skills(job: dict[str, Any]) -> dict[str, Any]:
     """Monotonically enrich provider skills with optional semantic extraction."""
-    original = _clean_extracted_skills(merge_skills(job.get("skills_required"), job.get("skills")), job)
-    jd = _html_text("\n".join(str(job.get(key) or "") for key in ("title", "description", "requirements", "responsibilities")))
+    original = _clean_extracted_skills(
+        merge_skills(job.get("skills_required"), job.get("skills")), job
+    )
+    jd = _html_text(
+        "\n".join(
+            str(job.get(key) or "")
+            for key in ("title", "description", "requirements", "responsibilities")
+        )
+    )
     if not jd.strip():
         return job
     # Provider metadata is already sufficient for this optional fallback. A
     # pending retry is the sole exception: it represents a prior unavailable
     # attempt and must be allowed to recover.
-    status = (job.get("structured_data") or {}).get("metadata_extraction_status") if isinstance(job.get("structured_data"), dict) else None
-    global_provider_metadata_is_sufficient = has_sufficient_global_provider_metadata(job)
-    deterministic_ats_metadata_is_sufficient = has_sufficient_deterministic_metadata(job)
+    status = (
+        (job.get("structured_data") or {}).get("metadata_extraction_status")
+        if isinstance(job.get("structured_data"), dict)
+        else None
+    )
+    global_provider_metadata_is_sufficient = has_sufficient_global_provider_metadata(
+        job
+    )
+    deterministic_ats_metadata_is_sufficient = has_sufficient_deterministic_metadata(
+        job
+    )
     if (
         # A completed record is normally safe to leave alone.  Fantastic and
         # TheirStack are the exception: their provider arrays are the
@@ -149,7 +204,8 @@ async def extract_missing_job_skills(job: dict[str, Any]) -> dict[str, Any]:
         )
         # Keep the established fallback behavior for every other provider.
         or (
-            job.get("ats_type") not in {"fantastic", "theirstack", *_DETERMINISTIC_ATS_PROVIDERS}
+            job.get("ats_type")
+            not in {"fantastic", "theirstack", *_DETERMINISTIC_ATS_PROVIDERS}
             and job.get("skills")
             and not job.get("skills_required")
         )
@@ -157,6 +213,7 @@ async def extract_missing_job_skills(job: dict[str, Any]) -> dict[str, Any]:
         return job
     try:
         from groq_client import GroqClientPool
+
         client = GroqClientPool()
         model = os.environ.get("GROQ_MODEL", "llama-3.3-70b-versatile")
         async with _EXTRACTION_SEMAPHORE:
@@ -164,8 +221,19 @@ async def extract_missing_job_skills(job: dict[str, Any]) -> dict[str, Any]:
                 model=model,
                 temperature=0,
                 response_format={"type": "json_object"},
-                _telemetry={"workflow": "job_skill_extraction", "function_name": "extract_missing_job_skills", "job_id": job.get("id") or job.get("job_id"), "model": model},
-                messages=[{"role": "system", "content": _SYSTEM}, {"role": "user", "content": json.dumps(_extraction_input(job), default=str)}],
+                _telemetry={
+                    "workflow": "job_skill_extraction",
+                    "function_name": "extract_missing_job_skills",
+                    "job_id": job.get("id") or job.get("job_id"),
+                    "model": model,
+                },
+                messages=[
+                    {"role": "system", "content": _SYSTEM},
+                    {
+                        "role": "user",
+                        "content": json.dumps(_extraction_input(job), default=str),
+                    },
+                ],
             )
         payload = json.loads(response.choices[0].message.content or "{}")
         if not isinstance(payload, dict):
@@ -180,9 +248,17 @@ async def extract_missing_job_skills(job: dict[str, Any]) -> dict[str, Any]:
             job["experience_required"] = exp.strip()
         elif exp is None and not job.get("experience_required"):
             job["experience_required"] = None
-        if not job.get("salary_range") and isinstance(payload.get("salary_range"), str) and payload["salary_range"].strip():
+        if (
+            not job.get("salary_range")
+            and isinstance(payload.get("salary_range"), str)
+            and payload["salary_range"].strip()
+        ):
             job["salary_range"] = payload["salary_range"].strip()
-        if not job.get("employment_type") and isinstance(payload.get("employment_type"), str) and payload["employment_type"].strip():
+        if (
+            not job.get("employment_type")
+            and isinstance(payload.get("employment_type"), str)
+            and payload["employment_type"].strip()
+        ):
             job["employment_type"] = payload["employment_type"].strip()
         if isinstance(job.get("structured_data"), dict):
             provenance: dict[str, list[str]] = {}
@@ -191,10 +267,17 @@ async def extract_missing_job_skills(job: dict[str, Any]) -> dict[str, Any]:
                     key = canonical_skill_key(value)
                     if key:
                         provenance.setdefault(key, []).append(source_name)
-            job["structured_data"]["llm_extraction"] = {"skills": llm_skills, "experience_required": job.get("experience_required"), "salary_range": job.get("salary_range"), "employment_type": job.get("employment_type")}
+            job["structured_data"]["llm_extraction"] = {
+                "skills": llm_skills,
+                "experience_required": job.get("experience_required"),
+                "salary_range": job.get("salary_range"),
+                "employment_type": job.get("employment_type"),
+            }
             job["structured_data"]["skill_extraction"] = {
-                "provider_skills": original, "llm_skills": llm_skills,
-                "final_skills": skills, "provenance": provenance,
+                "provider_skills": original,
+                "llm_skills": llm_skills,
+                "final_skills": skills,
+                "provenance": provenance,
             }
             job["structured_data"]["metadata_extraction_status"] = "complete"
     except (AllKeysRateLimitedError, RuntimeError) as exc:
@@ -203,9 +286,17 @@ async def extract_missing_job_skills(job: dict[str, Any]) -> dict[str, Any]:
         if isinstance(job.get("structured_data"), dict):
             job["structured_data"]["metadata_extraction_status"] = "pending_retry"
         job["metadata_extraction_status"] = "pending_retry"
-        logger.warning("[job-skills] Groq unavailable for ats_job_id=%s; queued for retry: %s", job.get("ats_job_id"), exc)
+        logger.warning(
+            "[job-skills] Groq unavailable for ats_job_id=%s; queued for retry: %s",
+            job.get("ats_job_id"),
+            exc,
+        )
     except Exception as exc:
-        logger.warning("[job-skills] LLM extraction failed for ats_job_id=%s: %s", job.get("ats_job_id"), exc)
+        logger.warning(
+            "[job-skills] LLM extraction failed for ats_job_id=%s: %s",
+            job.get("ats_job_id"),
+            exc,
+        )
         if original:
             job["skills_required"] = original
             job["skills"] = original

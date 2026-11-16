@@ -5,6 +5,7 @@ Updated to reflect the new layered scoring model (profile_strength_service).
 The intent of each test is preserved; exact legacy percentages are replaced
 with meaningful range assertions that match the new system's semantics.
 """
+
 import os
 import sys
 
@@ -83,7 +84,11 @@ def test_experienced_candidate_scores_higher_with_resume_depth():
             "current_role": "Senior Backend Engineer",
             "skills": ["Python", "FastAPI", "PostgreSQL"],
             "work_experience": [
-                {"title": "Lead Engineer", "company": "Acme", "description": "Led platform work"}
+                {
+                    "title": "Lead Engineer",
+                    "company": "Acme",
+                    "description": "Led platform work",
+                }
             ],
             "education": [{"degree": "B.Tech", "institution": "Example University"}],
         }
@@ -143,7 +148,10 @@ def test_voice_intake_additions_increase_score_without_double_counting():
                             "answer": "I built an AI automation project for onboarding.",
                         }
                     ],
-                    "known_topics": ["background_experience", "responsibilities_projects"],
+                    "known_topics": [
+                        "background_experience",
+                        "responsibilities_projects",
+                    ],
                 },
                 "availability": "Immediate",
                 "location_preferences": ["Remote"],
@@ -168,10 +176,16 @@ def test_saving_voice_intake_cannot_reduce_score_when_canonical_profile_is_uncha
             "current_role": "Senior Backend Engineer",
             "skills": ["Python", "FastAPI", "PostgreSQL"],
             "work_experience": [
-                {"title": "Lead Engineer", "company": "Acme", "description": "Led platform work"}
+                {
+                    "title": "Lead Engineer",
+                    "company": "Acme",
+                    "description": "Led platform work",
+                }
             ],
             "education": [{"degree": "B.Tech", "institution": "Example University"}],
-            "candidate_certificates": _certificate_rows("AWS Certified Solutions Architect"),
+            "candidate_certificates": _certificate_rows(
+                "AWS Certified Solutions Architect"
+            ),
             "raw_data": {
                 "availability": "Immediate",
                 "location_preferences": ["Remote", "Hybrid"],
@@ -188,7 +202,9 @@ def test_saving_voice_intake_cannot_reduce_score_when_canonical_profile_is_uncha
         }
     )
 
-    before_percent, before_label = _calculate_profile_strength(profile, profile["raw_data"])
+    before_percent, before_label = _calculate_profile_strength(
+        profile, profile["raw_data"]
+    )
     assert before_percent >= 40
     assert before_label in ("Building", "Developing", "Strong")
 
@@ -228,10 +244,16 @@ def test_fully_completed_profile_scores_hundred():
             "current_role": "Senior Backend Engineer",
             "skills": ["Python", "FastAPI", "PostgreSQL"],
             "work_experience": [
-                {"title": "Lead Engineer", "company": "Acme", "description": "Led platform work"}
+                {
+                    "title": "Lead Engineer",
+                    "company": "Acme",
+                    "description": "Led platform work",
+                }
             ],
             "education": [{"degree": "B.Tech", "institution": "Example University"}],
-            "candidate_certificates": _certificate_rows("AWS Certified Solutions Architect"),
+            "candidate_certificates": _certificate_rows(
+                "AWS Certified Solutions Architect"
+            ),
             "raw_data": {
                 "availability": "Immediate",
                 "location_preferences": ["Remote", "Hybrid"],
@@ -258,7 +280,11 @@ def test_profile_strength_certifications_score_zero_without_candidate_certificat
             "current_role": "Senior Backend Engineer",
             "skills": ["Python", "FastAPI", "PostgreSQL"],
             "work_experience": [
-                {"title": "Lead Engineer", "company": "Acme", "description": "Led platform work"}
+                {
+                    "title": "Lead Engineer",
+                    "company": "Acme",
+                    "description": "Led platform work",
+                }
             ],
             "education": [{"degree": "B.Tech", "institution": "Example University"}],
             "raw_data": {
@@ -274,8 +300,12 @@ def test_profile_strength_certifications_score_zero_without_candidate_certificat
 
     # Adding a certificate should not decrease the score
     profile_with_cert = dict(profile)
-    profile_with_cert["candidate_certificates"] = _certificate_rows("AWS Certified Solutions Architect")
-    percent_with_cert, _ = _calculate_profile_strength(profile_with_cert, profile["raw_data"])
+    profile_with_cert["candidate_certificates"] = _certificate_rows(
+        "AWS Certified Solutions Architect"
+    )
+    percent_with_cert, _ = _calculate_profile_strength(
+        profile_with_cert, profile["raw_data"]
+    )
 
     assert percent_with_cert >= percent_no_certs
 
@@ -291,10 +321,16 @@ def test_profile_strength_certifications_score_five_with_one_candidate_certifica
             "current_role": "Senior Backend Engineer",
             "skills": ["Python", "FastAPI", "PostgreSQL"],
             "work_experience": [
-                {"title": "Lead Engineer", "company": "Acme", "description": "Led platform work"}
+                {
+                    "title": "Lead Engineer",
+                    "company": "Acme",
+                    "description": "Led platform work",
+                }
             ],
             "education": [{"degree": "B.Tech", "institution": "Example University"}],
-            "candidate_certificates": _certificate_rows("AWS Certified Solutions Architect"),
+            "candidate_certificates": _certificate_rows(
+                "AWS Certified Solutions Architect"
+            ),
             "raw_data": {
                 "availability": "Immediate",
                 "location_preferences": ["Remote", "Hybrid"],
@@ -320,7 +356,11 @@ def test_profile_strength_certifications_score_stays_five_with_multiple_candidat
             "current_role": "Senior Backend Engineer",
             "skills": ["Python", "FastAPI", "PostgreSQL"],
             "work_experience": [
-                {"title": "Lead Engineer", "company": "Acme", "description": "Led platform work"}
+                {
+                    "title": "Lead Engineer",
+                    "company": "Acme",
+                    "description": "Led platform work",
+                }
             ],
             "education": [{"degree": "B.Tech", "institution": "Example University"}],
             "candidate_certificates": _certificate_rows(

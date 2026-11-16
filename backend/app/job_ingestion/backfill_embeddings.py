@@ -16,10 +16,11 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(__file__))))
 
 from sqlalchemy import text
-from server import SessionLocal
+
 from app.job_ingestion.embedding_service import generate_job_embedding
-from app.job_ingestion.qdrant_service import ensure_collection, upsert_job_embedding
 from app.job_ingestion.lifecycle import candidate_visible_where
+from app.job_ingestion.qdrant_service import ensure_collection, upsert_job_embedding
+from server import SessionLocal
 
 BATCH_SIZE = 100
 logger = logging.getLogger(__name__)
@@ -32,7 +33,9 @@ async def backfill(*, reindex: bool = False):
     ensure_collection()
     async with SessionLocal() as db:
         count_row = await db.execute(
-            text(f"SELECT COUNT(*) FROM job_descriptions WHERE {CANDIDATE_VISIBLE_WHERE}"),
+            text(
+                f"SELECT COUNT(*) FROM job_descriptions WHERE {CANDIDATE_VISIBLE_WHERE}"
+            ),
         )
         total = count_row.scalar() or 0
 
@@ -69,15 +72,23 @@ async def backfill(*, reindex: bool = False):
                 failed += 1
 
         offset += BATCH_SIZE
-        logger.info("[backfill] Qdrant points written=%d failures=%d", succeeded, failed)
-        print(f"  Processed {min(offset, total)}/{total} - succeeded={succeeded} failed={failed}")
+        logger.info(
+            "[backfill] Qdrant points written=%d failures=%d", succeeded, failed
+        )
+        print(
+            f"  Processed {min(offset, total)}/{total} - succeeded={succeeded} failed={failed}"
+        )
 
     print(f"\nDone. Successfully indexed: {succeeded} | Failures: {failed}")
 
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("--reindex", action="store_true", help="replace incompatible vector versions explicitly")
+    parser.add_argument(
+        "--reindex",
+        action="store_true",
+        help="replace incompatible vector versions explicitly",
+    )
     args = parser.parse_args()
     logging.basicConfig(level=logging.INFO)
     asyncio.run(backfill(reindex=args.reindex))

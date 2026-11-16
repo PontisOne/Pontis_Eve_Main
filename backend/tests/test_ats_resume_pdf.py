@@ -19,6 +19,7 @@ Covers:
 - Experience uses job-title-first format (not "Title at Company")
 - Skills rendered as comma-separated list (not individual bullets)
 """
+
 import asyncio
 import io
 import os
@@ -46,7 +47,12 @@ def _make_profile(overrides: dict | None = None) -> dict:
         "phone": "+1 555 010 2000",
         "location": "New York, NY",
         "bio": "Experienced product designer focused on accessibility and design systems.",
-        "keySkills": ["Figma", "Design Systems", "Accessibility", "Figma"],  # intentional dup
+        "keySkills": [
+            "Figma",
+            "Design Systems",
+            "Accessibility",
+            "Figma",
+        ],  # intentional dup
         "experience": [
             {
                 "title": "Staff Product Designer",
@@ -123,7 +129,9 @@ def test_ats_pdf_summary():
 # 5. Skills are deduplicated
 # ---------------------------------------------------------------------------
 def test_ats_pdf_skills_deduplicated():
-    profile = _make_profile({"keySkills": ["Python", "python", "PYTHON", "FastAPI", "FastAPI"]})
+    profile = _make_profile(
+        {"keySkills": ["Python", "python", "PYTHON", "FastAPI", "FastAPI"]}
+    )
     pdf = asyncio.run(_build_pdf(profile))
     text = _extract_pdf_text(pdf)
     # Count occurrences of "python" (case-insensitive) — should appear exactly once
@@ -135,15 +143,17 @@ def test_ats_pdf_skills_deduplicated():
 # 6. Conversational/noisy skill entries are removed
 # ---------------------------------------------------------------------------
 def test_ats_pdf_noisy_skills_removed():
-    profile = _make_profile({
-        "keySkills": [
-            "Python",
-            "some more skills python",
-            "voice intake",
-            "resume processing",
-            "More skills",
-        ]
-    })
+    profile = _make_profile(
+        {
+            "keySkills": [
+                "Python",
+                "some more skills python",
+                "voice intake",
+                "resume processing",
+                "More skills",
+            ]
+        }
+    )
     pdf = asyncio.run(_build_pdf(profile))
     text = _extract_pdf_text(pdf).lower()
     assert "some more skills" not in text
@@ -158,16 +168,18 @@ def test_ats_pdf_noisy_skills_removed():
 # ---------------------------------------------------------------------------
 def test_ats_pdf_duplicate_experience_sentences_removed():
     dup_desc = "Led the redesign of the candidate dashboard. Led the redesign of the candidate dashboard."
-    profile = _make_profile({
-        "experience": [
-            {
-                "title": "Designer",
-                "company": "Acme",
-                "dates": "2022 - Present",
-                "description": dup_desc,
-            }
-        ]
-    })
+    profile = _make_profile(
+        {
+            "experience": [
+                {
+                    "title": "Designer",
+                    "company": "Acme",
+                    "dates": "2022 - Present",
+                    "description": dup_desc,
+                }
+            ]
+        }
+    )
     pdf = asyncio.run(_build_pdf(profile))
     text = _extract_pdf_text(pdf)
     # The sentence should appear only once
@@ -209,11 +221,13 @@ def test_ats_pdf_certifications_included():
 # 11. Missing sections are omitted
 # ---------------------------------------------------------------------------
 def test_ats_pdf_missing_sections_omitted():
-    profile = _make_profile({
-        "bio": "",
-        "certifications": [],
-        "education": [],
-    })
+    profile = _make_profile(
+        {
+            "bio": "",
+            "certifications": [],
+            "education": [],
+        }
+    )
     pdf = asyncio.run(_build_pdf(profile))
     text = _extract_pdf_text(pdf).upper()
     assert "SUMMARY" not in text
@@ -228,22 +242,24 @@ def test_ats_pdf_missing_sections_omitted():
 # 12. No candidate information is invented
 # ---------------------------------------------------------------------------
 def test_ats_pdf_no_invented_information():
-    profile = _make_profile({
-        "name": "Alex Rivera",
-        "email": "alex@example.com",
-        "bio": "Operations leader.",
-        "keySkills": ["Python"],
-        "experience": [
-            {
-                "title": "Operations Lead",
-                "company": "Northwind",
-                "dates": "2023 - Present",
-                "description": "Owned operations workflows.",
-            }
-        ],
-        "education": [],
-        "certifications": [],
-    })
+    profile = _make_profile(
+        {
+            "name": "Alex Rivera",
+            "email": "alex@example.com",
+            "bio": "Operations leader.",
+            "keySkills": ["Python"],
+            "experience": [
+                {
+                    "title": "Operations Lead",
+                    "company": "Northwind",
+                    "dates": "2023 - Present",
+                    "description": "Owned operations workflows.",
+                }
+            ],
+            "education": [],
+            "certifications": [],
+        }
+    )
     pdf = asyncio.run(_build_pdf(profile))
     text = _extract_pdf_text(pdf)
     # Only real data should appear
@@ -296,7 +312,9 @@ def test_ats_pdf_skills_comma_separated():
     # They should appear on the same logical line (within 60 chars of each other)
     idx_figma = text.find("Figma")
     idx_ds = text.find("Design Systems")
-    assert abs(idx_figma - idx_ds) < 80, "Skills should be close together (comma-separated)"
+    assert abs(idx_figma - idx_ds) < 80, (
+        "Skills should be close together (comma-separated)"
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -309,10 +327,17 @@ def test_ats_download_endpoint_continues_to_work(monkeypatch):
     async def fake_get_candidate_row(candidate_id: str):
         return {"id": candidate_id, "raw_data": {}}
 
-    monkeypatch.setattr(server, "_get_candidate_profile_payload", fake_get_candidate_profile_payload)
+    monkeypatch.setattr(
+        server, "_get_candidate_profile_payload", fake_get_candidate_profile_payload
+    )
     monkeypatch.setattr(server, "_get_candidate_row", fake_get_candidate_row)
 
-    response = asyncio.run(server.download_candidate_profile("cand-ats-001", authorization=f"Bearer {server._issue_candidate_session_token('cand-ats-001')}"))
+    response = asyncio.run(
+        server.download_candidate_profile(
+            "cand-ats-001",
+            authorization=f"Bearer {server._issue_candidate_session_token('cand-ats-001')}",
+        )
+    )
     assert response.headers["content-type"] == "application/pdf"
     assert "filename=" in response.headers["content-disposition"]
     assert response.body.startswith(b"%PDF")
@@ -348,7 +373,14 @@ def test_candidate_profile_pdf_skills_deduplicates():
 
 
 def test_candidate_profile_pdf_skills_removes_noisy():
-    profile = {"keySkills": ["Python", "some more skills python", "voice intake", "resume processing"]}
+    profile = {
+        "keySkills": [
+            "Python",
+            "some more skills python",
+            "voice intake",
+            "resume processing",
+        ]
+    }
     skills = server._candidate_profile_pdf_skills(profile)
     lower = [s.lower() for s in skills]
     assert "python" in lower
@@ -358,16 +390,18 @@ def test_candidate_profile_pdf_skills_removes_noisy():
 
 
 def test_ats_pdf_consolidates_categorized_and_new_skills_into_core_skills():
-    profile = _make_profile({
-        "keySkills": ["Python", "FastAPI", "Python"],
-        "raw_data": {
-            "programming_languages": ["Python", "TypeScript"],
-            "frameworks": ["FastAPI", "React"],
-            "databases": ["PostgreSQL"],
-            "tools": ["Docker"],
-            "testing": ["Pytest"],
-        },
-    })
+    profile = _make_profile(
+        {
+            "keySkills": ["Python", "FastAPI", "Python"],
+            "raw_data": {
+                "programming_languages": ["Python", "TypeScript"],
+                "frameworks": ["FastAPI", "React"],
+                "databases": ["PostgreSQL"],
+                "tools": ["Docker"],
+                "testing": ["Pytest"],
+            },
+        }
+    )
     pdf = asyncio.run(_build_pdf(profile))
     text = _extract_pdf_text(pdf)
     assert "CORE SKILLS" in text.upper()
@@ -376,21 +410,33 @@ def test_ats_pdf_consolidates_categorized_and_new_skills_into_core_skills():
     assert "Databases" in text
     assert "Tools & Platforms" in text
     assert "Testing" in text
-    for skill in ("Python", "TypeScript", "FastAPI", "React", "PostgreSQL", "Docker", "Pytest"):
+    for skill in (
+        "Python",
+        "TypeScript",
+        "FastAPI",
+        "React",
+        "PostgreSQL",
+        "Docker",
+        "Pytest",
+    ):
         assert skill in text
     assert text.lower().count("python") == 1
 
 
 def test_ats_pdf_omits_empty_skill_categories_and_uses_actual_project_data():
-    profile = _make_profile({
-        "keySkills": ["Python"],
-        "raw_data": {"databases": []},
-        "projects": [{
-            "title": "Candidate Portal",
-            "description": "Built an accessible candidate portal.",
-            "technologies": ["Python", "FastAPI"],
-        }],
-    })
+    profile = _make_profile(
+        {
+            "keySkills": ["Python"],
+            "raw_data": {"databases": []},
+            "projects": [
+                {
+                    "title": "Candidate Portal",
+                    "description": "Built an accessible candidate portal.",
+                    "technologies": ["Python", "FastAPI"],
+                }
+            ],
+        }
+    )
     text = _extract_pdf_text(asyncio.run(_build_pdf(profile)))
     assert "Databases" not in text
     assert "PROJECTS" in text.upper()
@@ -419,7 +465,10 @@ def test_ats_pdf_no_avatar_initials():
     assert "Sai Varma" in text
     # "SV" should not appear as a standalone word (avatar/badge)
     import re as _re
-    assert not _re.search(r"\bSV\b", text), "Avatar initials 'SV' must not appear in PDF"
+
+    assert not _re.search(r"\bSV\b", text), (
+        "Avatar initials 'SV' must not appear in PDF"
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -428,7 +477,13 @@ def test_ats_pdf_no_avatar_initials():
 def test_ats_pdf_no_profile_meter():
     pdf = asyncio.run(_build_pdf(_make_profile()))
     text = _extract_pdf_text(pdf).lower()
-    for phrase in ("profile strength", "profile meter", "profile score", "% complete", "completion"):
+    for phrase in (
+        "profile strength",
+        "profile meter",
+        "profile score",
+        "% complete",
+        "completion",
+    ):
         assert phrase not in text, f"UI element '{phrase}' must not appear in PDF"
 
 
@@ -446,18 +501,20 @@ def test_ats_pdf_no_ui_decorative_elements():
 # 23. Raw ISO dates are formatted as 'Mon YYYY' not '2023-11-01'
 # ---------------------------------------------------------------------------
 def test_ats_pdf_iso_dates_formatted():
-    profile = _make_profile({
-        "experience": [
-            {
-                "title": "Software Engineer",
-                "company": "Deepija Telecom",
-                "start_date": "2023-11-01",
-                "end_date": "2024-10-09",
-                "dates": "",
-                "description": "Built backend services.",
-            }
-        ]
-    })
+    profile = _make_profile(
+        {
+            "experience": [
+                {
+                    "title": "Software Engineer",
+                    "company": "Deepija Telecom",
+                    "start_date": "2023-11-01",
+                    "end_date": "2024-10-09",
+                    "dates": "",
+                    "description": "Built backend services.",
+                }
+            ]
+        }
+    )
     pdf = asyncio.run(_build_pdf(profile))
     text = _extract_pdf_text(pdf)
     # Raw ISO dates must NOT appear
@@ -502,7 +559,11 @@ def test_format_pdf_date_range_present():
 
 
 def test_format_pdf_date_range_prefers_human_dates_field():
-    item = {"start_date": "2023-11-01", "end_date": "2024-10-09", "dates": "Nov 2023 - Oct 2024"}
+    item = {
+        "start_date": "2023-11-01",
+        "end_date": "2024-10-09",
+        "dates": "Nov 2023 - Oct 2024",
+    }
     result = server._format_pdf_date_range(item)
     assert result == "Nov 2023 - Oct 2024"
 
@@ -513,17 +574,35 @@ def test_ats_clean_description_strips_source_bullets_and_preserves_distinct_item
 
 
 def test_ats_pdf_source_bullets_render_once_and_duplicate_project_text_is_removed():
-    profile = _make_profile({
-        "experience": [
-            {"title": "Engineer", "company": "Acme", "dates": "2024 - Present",
-             "description": "• Built APIs.", "responsibilities": ["Built APIs.", "Improved reliability."]},
-            {"title": "Backend Developer", "company": "", "dates": "2020", "description": "Maintained services."},
-        ],
-        "projects": [{
-            "title": "Jobs Platform", "description": "• Collected jobs from public APIs.",
-            "responsibilities": ["Collected jobs from public APIs.", "Added monitoring."],
-        }],
-    })
+    profile = _make_profile(
+        {
+            "experience": [
+                {
+                    "title": "Engineer",
+                    "company": "Acme",
+                    "dates": "2024 - Present",
+                    "description": "• Built APIs.",
+                    "responsibilities": ["Built APIs.", "Improved reliability."],
+                },
+                {
+                    "title": "Backend Developer",
+                    "company": "",
+                    "dates": "2020",
+                    "description": "Maintained services.",
+                },
+            ],
+            "projects": [
+                {
+                    "title": "Jobs Platform",
+                    "description": "• Collected jobs from public APIs.",
+                    "responsibilities": [
+                        "Collected jobs from public APIs.",
+                        "Added monitoring.",
+                    ],
+                }
+            ],
+        }
+    )
     text = _extract_pdf_text(asyncio.run(_build_pdf(profile)))
     assert text.count("Built APIs") == 1
     assert text.count("Collected jobs from public APIs") == 1
@@ -533,5 +612,8 @@ def test_ats_pdf_source_bullets_render_once_and_duplicate_project_text_is_remove
 
 
 def test_pdf_date_formatting_repairs_known_mojibake_and_keeps_year_only_values():
-    assert server._format_pdf_date_range({"dates": "Jan 2024 — Present"}) == "Jan 2024 - Present"
+    assert (
+        server._format_pdf_date_range({"dates": "Jan 2024 — Present"})
+        == "Jan 2024 - Present"
+    )
     assert server._format_pdf_date_range({"dates": "2020"}) == "2020"

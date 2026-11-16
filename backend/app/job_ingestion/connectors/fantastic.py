@@ -1,4 +1,5 @@
 """Async, budget-conscious client for Fantastic.jobs' global active ATS feed."""
+
 import asyncio
 import logging
 import os
@@ -32,6 +33,7 @@ class FantasticConfig:
                 return max(minimum, int(os.getenv(name, default)))
             except ValueError:
                 return default
+
         try:
             timeout = max(1.0, float(os.getenv("FANTASTIC_TIMEOUT", "20")))
         except ValueError:
@@ -55,11 +57,17 @@ def _jobs_from_payload(payload: Any) -> list[dict[str, Any]]:
         jobs = payload.get("jobs", payload.get("data", payload.get("results", [])))
     else:
         return []
-    return [job for job in jobs if isinstance(job, dict)] if isinstance(jobs, list) else []
+    return (
+        [job for job in jobs if isinstance(job, dict)] if isinstance(jobs, list) else []
+    )
 
 
 class FantasticClient:
-    def __init__(self, config: FantasticConfig | None = None, client: httpx.AsyncClient | None = None):
+    def __init__(
+        self,
+        config: FantasticConfig | None = None,
+        client: httpx.AsyncClient | None = None,
+    ):
         self.config = config or FantasticConfig.from_env()
         self.client = client
         self._requests_used = 0
@@ -73,55 +81,101 @@ class FantasticClient:
         requests_made = 0
         pages_requested = 0
         try:
-            available_requests = max(0, self.config.max_requests_per_run - self._requests_used)
+            available_requests = max(
+                0, self.config.max_requests_per_run - self._requests_used
+            )
             for page in range(min(self.config.max_pages, available_requests)):
                 remaining = self.config.max_jobs_per_run - len(jobs)
                 if remaining <= 0:
                     break
-                params = {"time_frame": self.config.time_frame, "limit": min(self.config.limit, remaining),
-                          "offset": page * self.config.limit, "description_format": "text", "location": "India"}
-                logger.info("[fantastic] requesting %s page=%d request=%d", endpoint, page + 1, page + 1)
+                params = {
+                    "time_frame": self.config.time_frame,
+                    "limit": min(self.config.limit, remaining),
+                    "offset": page * self.config.limit,
+                    "description_format": "text",
+                    "location": "India",
+                }
+                logger.info(
+                    "[fantastic] requesting %s page=%d request=%d",
+                    endpoint,
+                    page + 1,
+                    page + 1,
+                )
                 pages_requested += 1
                 try:
-                    response = await client.get(f"{BASE_URL}/{endpoint}", params=params,
-                                                headers={"Authorization": f"Bearer {self.config.api_key}"})
+                    response = await client.get(
+                        f"{BASE_URL}/{endpoint}",
+                        params=params,
+                        headers={"Authorization": f"Bearer {self.config.api_key}"},
+                    )
                     requests_made += 1
                     self._requests_used += 1
                 except httpx.TimeoutException as exc:
                     raise FantasticAPIError("Fantastic request timed out") from exc
                 except httpx.RequestError as exc:
                     raise FantasticAPIError(f"Fantastic request failed: {exc}") from exc
-                headers = {key: value for key, value in response.headers.items()
-                           if key.lower().startswith(("x-api-", "x-rate", "rate-limit", "retry-after"))}
-                logger.info("[fantastic] response status=%d headers=%s", response.status_code, headers)
+                headers = {
+                    key: value
+                    for key, value in response.headers.items()
+                    if key.lower().startswith(
+                        ("x-api-", "x-rate", "rate-limit", "retry-after")
+                    )
+                }
+                logger.info(
+                    "[fantastic] response status=%d headers=%s",
+                    response.status_code,
+                    headers,
+                )
                 if response.status_code == 429:
                     # A single bounded retry respects Retry-After without burning request credits.
                     retry_after = response.headers.get("Retry-After")
-                    try: delay = min(float(retry_after or 0), 30.0)
-                    except ValueError: delay = 0
-                    if delay and page == 0 and self._requests_used < self.config.max_requests_per_run:
+                    try:
+                        delay = min(float(retry_after or 0), 30.0)
+                    except ValueError:
+                        delay = 0
+                    if (
+                        delay
+                        and page == 0
+                        and self._requests_used < self.config.max_requests_per_run
+                    ):
                         await asyncio.sleep(delay)
-                        response = await client.get(f"{BASE_URL}/{endpoint}", params=params,
-                                                    headers={"Authorization": f"Bearer {self.config.api_key}"})
+                        response = await client.get(
+                            f"{BASE_URL}/{endpoint}",
+                            params=params,
+                            headers={"Authorization": f"Bearer {self.config.api_key}"},
+                        )
                         requests_made += 1
                         self._requests_used += 1
                     if response.status_code == 429:
                         raise FantasticAPIError("Fantastic rate limit reached")
                 if response.status_code in {401, 403}:
-                    raise FantasticAPIError(f"Fantastic authorization failed (HTTP {response.status_code})")
+                    raise FantasticAPIError(
+                        f"Fantastic authorization failed (HTTP {response.status_code})"
+                    )
                 if response.status_code >= 500:
-                    raise FantasticAPIError(f"Fantastic server error (HTTP {response.status_code})")
+                    raise FantasticAPIError(
+                        f"Fantastic server error (HTTP {response.status_code})"
+                    )
                 try:
-                    response.raise_for_status(); batch = _jobs_from_payload(response.json())
+                    response.raise_for_status()
+                    batch = _jobs_from_payload(response.json())
                 except (httpx.HTTPStatusError, ValueError) as exc:
-                    raise FantasticAPIError("Fantastic returned a malformed response") from exc
+                    raise FantasticAPIError(
+                        "Fantastic returned a malformed response"
+                    ) from exc
                 jobs.extend(batch)
-                logger.info("[fantastic] fetched %d jobs (total=%d)", len(batch), len(jobs))
+                logger.info(
+                    "[fantastic] fetched %d jobs (total=%d)", len(batch), len(jobs)
+                )
                 if len(batch) < params["limit"]:
                     break
-            result = jobs[:self.config.max_jobs_per_run]
-            self.last_fetch_stats = {"endpoint": endpoint, "pages_requested": pages_requested,
-                                     "requests_made": requests_made, "fetched": len(result)}
+            result = jobs[: self.config.max_jobs_per_run]
+            self.last_fetch_stats = {
+                "endpoint": endpoint,
+                "pages_requested": pages_requested,
+                "requests_made": requests_made,
+                "fetched": len(result),
+            }
             return result
         finally:
             if owned_client:
@@ -148,9 +202,13 @@ class FantasticClient:
             if response.status_code == 429:
                 raise FantasticAPIError("Fantastic rate limit reached")
             if response.status_code in {401, 403}:
-                raise FantasticAPIError(f"Fantastic authorization failed (HTTP {response.status_code})")
+                raise FantasticAPIError(
+                    f"Fantastic authorization failed (HTTP {response.status_code})"
+                )
             if response.status_code >= 500:
-                raise FantasticAPIError(f"Fantastic server error (HTTP {response.status_code})")
+                raise FantasticAPIError(
+                    f"Fantastic server error (HTTP {response.status_code})"
+                )
             response.raise_for_status()
             payload = response.json()
             if not isinstance(payload, list):

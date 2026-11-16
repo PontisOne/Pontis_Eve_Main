@@ -8,14 +8,15 @@ All other errors are re-raised immediately without rotation.
 """
 
 import asyncio
+import inspect
 import logging
 import os
 import time
-import inspect
 import uuid
-from typing import Any, Optional
+from typing import Any
 
-from openai import AsyncOpenAI, RateLimitError as OpenAIRateLimitError
+from openai import AsyncOpenAI
+from openai import RateLimitError as OpenAIRateLimitError
 
 logger = logging.getLogger(__name__)
 
@@ -42,13 +43,20 @@ def _call_metadata(kwargs: dict[str, Any]) -> dict[str, Any]:
         if workflow:
             metadata.update({"workflow": workflow, "function_name": frame.function})
             return metadata
-    metadata.update({"workflow": "chat_generation", "function_name": "chat_completions_create"})
+    metadata.update(
+        {"workflow": "chat_generation", "function_name": "chat_completions_create"}
+    )
     return metadata
 
 
 def _usage(response: Any) -> tuple[int | None, int | None, int | None]:
     usage = getattr(response, "usage", None)
-    return (getattr(usage, "prompt_tokens", None), getattr(usage, "completion_tokens", None), getattr(usage, "total_tokens", None))
+    return (
+        getattr(usage, "prompt_tokens", None),
+        getattr(usage, "completion_tokens", None),
+        getattr(usage, "total_tokens", None),
+    )
+
 
 _DEFAULT_COOLDOWN_SECONDS = 60  # fallback when Retry-After header is absent
 
@@ -73,9 +81,11 @@ def _parse_retry_after(exc: OpenAIRateLimitError) -> float:
     try:
         headers = getattr(exc, "response", None)
         if headers is not None:
-            header_val = getattr(headers, "headers", {}).get("retry-after") or \
-                         getattr(headers, "headers", {}).get("x-ratelimit-reset-requests") or \
-                         getattr(headers, "headers", {}).get("x-ratelimit-reset-tokens")
+            header_val = (
+                getattr(headers, "headers", {}).get("retry-after")
+                or getattr(headers, "headers", {}).get("x-ratelimit-reset-requests")
+                or getattr(headers, "headers", {}).get("x-ratelimit-reset-tokens")
+            )
             if header_val:
                 return max(1.0, float(header_val))
     except Exception:
@@ -120,11 +130,12 @@ class GroqClientPool:
         Raises the last RateLimitError (wrapped as AllKeysRateLimitedError) if
         every key is exhausted, or re-raises non-429 errors immediately.
         """
-        from llm_telemetry import cost_usd, submit
+        from llm_telemetry import submit
+
         metadata = _call_metadata(kwargs)
         request_id = metadata.get("request_id") or str(uuid.uuid4())
         events: list[dict[str, Any]] = []
-        last_exc: Optional[OpenAIRateLimitError] = None
+        last_exc: OpenAIRateLimitError | None = None
 
         for attempt in range(len(self._keys)):
             key_index = await self._pick_available_key()
@@ -140,8 +151,25 @@ class GroqClientPool:
             try:
                 response = await client.chat.completions.create(**kwargs)
                 input_tokens, output_tokens, total_tokens = _usage(response)
-                status = getattr(getattr(response, "_response", None), "status_code", None) or 200
-                events.append(self._event(metadata, request_id, attempt, key_label, status, True, started, input_tokens, output_tokens, total_tokens, response=response))
+                status = (
+                    getattr(getattr(response, "_response", None), "status_code", None)
+                    or 200
+                )
+                events.append(
+                    self._event(
+                        metadata,
+                        request_id,
+                        attempt,
+                        key_label,
+                        status,
+                        True,
+                        started,
+                        input_tokens,
+                        output_tokens,
+                        total_tokens,
+                        response=response,
+                    )
+                )
                 total_attempts = len(events)
                 for event in events:
                     event["total_attempts"] = total_attempts
@@ -158,11 +186,39 @@ class GroqClientPool:
                     cooldown,
                 )
                 last_exc = exc
-                events.append(self._event(metadata, request_id, attempt, key_label, 429, False, started, None, None, None, exc=exc))
+                events.append(
+                    self._event(
+                        metadata,
+                        request_id,
+                        attempt,
+                        key_label,
+                        429,
+                        False,
+                        started,
+                        None,
+                        None,
+                        None,
+                        exc=exc,
+                    )
+                )
                 # Continue loop — try next available key
             except Exception as exc:
                 # Non-429 errors: do NOT rotate, re-raise immediately
-                events.append(self._event(metadata, request_id, attempt, key_label, getattr(getattr(exc, "response", None), "status_code", None), False, started, None, None, None, exc=exc))
+                events.append(
+                    self._event(
+                        metadata,
+                        request_id,
+                        attempt,
+                        key_label,
+                        getattr(getattr(exc, "response", None), "status_code", None),
+                        False,
+                        started,
+                        None,
+                        None,
+                        None,
+                        exc=exc,
+                    )
+                )
                 for event in events:
                     event["total_attempts"] = len(events)
                     event["previous_attempt_failed"] = event["attempt"] > 1
@@ -179,26 +235,53 @@ class GroqClientPool:
         ) from last_exc
 
     @staticmethod
-    def _event(metadata: dict[str, Any], request_id: str, attempt: int, key_label: int,
-               status: Any, success: bool, started: float, input_tokens: Any,
-               output_tokens: Any, total_tokens: Any, response: Any = None,
-               exc: Any = None) -> dict[str, Any]:
+    def _event(
+        metadata: dict[str, Any],
+        request_id: str,
+        attempt: int,
+        key_label: int,
+        status: Any,
+        success: bool,
+        started: float,
+        input_tokens: Any,
+        output_tokens: Any,
+        total_tokens: Any,
+        response: Any = None,
+        exc: Any = None,
+    ) -> dict[str, Any]:
         from llm_telemetry import cost_usd
-        return {"created_at": __import__("datetime").datetime.now(__import__("datetime").timezone.utc),
-                "provider": "groq", "model": metadata.get("model"),
-                "workflow": metadata.get("workflow", "chat_generation"),
-                "function_name": metadata.get("function_name"), "candidate_id": metadata.get("candidate_id"),
-                "user_id": metadata.get("user_id"), "job_id": metadata.get("job_id"),
-                "endpoint": metadata.get("endpoint"), "request_id": request_id,
-                "session_id": metadata.get("session_id"), "vapi_call_id": metadata.get("vapi_call_id"),
-                "attempt": attempt, "key_id": f"groq_key_{key_label}", "status": status,
-                "success": success, "input_tokens": input_tokens, "output_tokens": output_tokens,
-                "total_tokens": total_tokens, "latency_ms": (time.monotonic() - started) * 1000,
-                "cost_usd": cost_usd(input_tokens, output_tokens),
-                "error_type": type(exc).__name__ if exc else None,
-                "provider_request_id": getattr(response, "id", None), "total_attempts": 1,
-                "is_retry": attempt > 1, "previous_attempt_failed": attempt > 1,
-                "is_fallback": bool(metadata.get("is_fallback"))}
+
+        return {
+            "created_at": __import__("datetime").datetime.now(
+                __import__("datetime").timezone.utc
+            ),
+            "provider": "groq",
+            "model": metadata.get("model"),
+            "workflow": metadata.get("workflow", "chat_generation"),
+            "function_name": metadata.get("function_name"),
+            "candidate_id": metadata.get("candidate_id"),
+            "user_id": metadata.get("user_id"),
+            "job_id": metadata.get("job_id"),
+            "endpoint": metadata.get("endpoint"),
+            "request_id": request_id,
+            "session_id": metadata.get("session_id"),
+            "vapi_call_id": metadata.get("vapi_call_id"),
+            "attempt": attempt,
+            "key_id": f"groq_key_{key_label}",
+            "status": status,
+            "success": success,
+            "input_tokens": input_tokens,
+            "output_tokens": output_tokens,
+            "total_tokens": total_tokens,
+            "latency_ms": (time.monotonic() - started) * 1000,
+            "cost_usd": cost_usd(input_tokens, output_tokens),
+            "error_type": type(exc).__name__ if exc else None,
+            "provider_request_id": getattr(response, "id", None),
+            "total_attempts": 1,
+            "is_retry": attempt > 1,
+            "previous_attempt_failed": attempt > 1,
+            "is_fallback": bool(metadata.get("is_fallback")),
+        }
 
     # ------------------------------------------------------------------
     # Compatibility shim: expose .chat.completions.create attribute path
@@ -214,7 +297,7 @@ class GroqClientPool:
     # Internal helpers
     # ------------------------------------------------------------------
 
-    async def _pick_available_key(self) -> Optional[int]:
+    async def _pick_available_key(self) -> int | None:
         """Return the index of the first available (non-rate-limited) key."""
         now = time.monotonic()
         async with self._lock:
@@ -234,7 +317,9 @@ class GroqClientPool:
     def is_key_available(self, index: int) -> bool:
         return time.monotonic() >= self._available_after[index]
 
-    def mark_key_rate_limited(self, index: int, cooldown: float = _DEFAULT_COOLDOWN_SECONDS) -> None:
+    def mark_key_rate_limited(
+        self, index: int, cooldown: float = _DEFAULT_COOLDOWN_SECONDS
+    ) -> None:
         """Manually mark a key as rate-limited (used in tests)."""
         self._available_after[index] = time.monotonic() + cooldown
 
@@ -250,6 +335,7 @@ class AllKeysRateLimitedError(Exception):
 # ---------------------------------------------------------------------------
 # Compatibility shim objects
 # ---------------------------------------------------------------------------
+
 
 class _CompletionsNamespace:
     def __init__(self, pool: GroqClientPool) -> None:
