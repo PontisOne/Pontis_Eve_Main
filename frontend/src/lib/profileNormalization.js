@@ -64,9 +64,10 @@ function normalizeText(value) {
   return String(value)
     .replace(/\u0393\u00c7\u00f4/g, "–")
     .replace(/\u0393\u00c7\u00f6/g, "—")
-    .replace(/├óΓé¼ΓÇ¥/g, "—")
-    .replace(/Ã¢â‚¬â€\u009D/g, "—")
-    .replace(/â€”/g, "—")
+    // Preserve compatibility with previously corrupted persisted/API values.
+    .replace(/\u251c\u00f3\u0393\u00e9\u00bc\u0393\u00c7\u00a5/g, "—")
+    .replace(/\u00c3\u00a2\u00e2\u201a\u00ac\u00e2\u20ac\u2020\u009D/g, "—")
+    .replace(/\u00e2\u20ac\u201d/g, "—")
     .replace(/\s+/g, " ")
     .trim();
 }
@@ -1159,6 +1160,19 @@ export function mergeProfilesForDisplay(resumeProfile = {}, voiceProfile = {}) {
         .map((role) => [normalizeKey(role), role]),
     ).values(),
   );
+  const preferredIndustries = new Set(
+    [
+      ...collectProfileList(resume, ["preferred_industries"]),
+      ...collectProfileList(voice, ["preferred_industries"]),
+      ...toArray(mergedRaw.preferred_industries),
+      ...toArray(mergedRaw.target_industries),
+    ]
+      .map((value) => normalizeKey(value))
+      .filter(Boolean),
+  );
+  const rolesWithoutIndustries = preferredRoles.filter(
+    (role) => !preferredIndustries.has(normalizeKey(role)),
+  );
   const employmentTypes = Array.from(
     new Map(
       collectProfileList(resume, ["employment_types"])
@@ -1179,7 +1193,7 @@ export function mergeProfilesForDisplay(resumeProfile = {}, voiceProfile = {}) {
     experience,
     work_experience: experience,
     education,
-    preferred_roles: preferredRoles,
+    preferred_roles: rolesWithoutIndustries,
     employment_types: employmentTypes,
   };
 

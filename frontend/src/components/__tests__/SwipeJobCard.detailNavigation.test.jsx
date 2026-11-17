@@ -237,13 +237,13 @@ describe("SwipeJobDeck job details navigation", () => {
     expect(renderResult.container.querySelector('[data-testid="improve-match-modal"]')).toBeTruthy();
     expect(renderResult.container.textContent).toContain("Kubernetes");
     expect(renderResult.container.textContent).toContain("72%");
-    expect(renderResult.container.textContent).toContain("Customize Your Resume");
-    expect(renderResult.container.textContent).not.toContain("Job requirements to confirm");
-    expect(renderResult.container.textContent).not.toContain("Kubernetes experience required");
+    expect(renderResult.container.textContent).toContain("Fix My Resume");
+    expect(renderResult.container.textContent).toContain("Missing skills");
+    expect(renderResult.container.textContent).toContain("Kubernetes experience required");
     expect(openSpy).not.toHaveBeenCalled();
   });
 
-  it("opens Fix My Resume as an in-page workflow before navigating to the editor", async () => {
+  it("shows the compact Fix My Resume workflow before navigating to the editor", async () => {
     axios.get.mockResolvedValueOnce({ data: { match_score: 0.72, missing_skills: ["Kubernetes"], requirements: ["Kubernetes experience required"] } });
     renderResult = renderDeck({ jobs: [{ id: "job-1", title: "Senior Product Manager", company: "Acme", match_score: 0.72, job_url: "https://acme.example/jobs/1" }] });
     await act(async () => {
@@ -252,9 +252,8 @@ describe("SwipeJobDeck job details navigation", () => {
     });
     const fix = renderResult.container.querySelector('[data-testid="fix-my-resume"]');
     expect(fix.disabled).toBe(false);
-    act(() => fix.dispatchEvent(new MouseEvent("click", { bubbles: true })));
-    expect(renderResult.container.textContent).toContain("Generate Your Custom Resume");
-    expect(renderResult.container.textContent).toContain("Improve My Resume for This Job");
+    expect(renderResult.container.textContent).toContain("Continue to Resume Editor");
+    expect(renderResult.container.textContent).toContain("Add relevant missing skills");
     expect(openSpy).not.toHaveBeenCalled();
   });
 });

@@ -12,21 +12,20 @@ BUG 2: "Remove any from Certifications"
         -> other certifications must be preserved.
         -> deleting a non-existent cert must not add it.
 """
+
 import asyncio
 import json
 import os
 import sys
 import unittest.mock as mock
 
-import pytest
-
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 import server
-
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
 
 def _make_candidate(certifications=None, **overrides):
     base = {
@@ -83,15 +82,22 @@ def _run_apply(candidate_state, updates):
                 if "skills" in params:
                     candidate_state["skills"] = json.loads(params["skills"])
                 if "work_experience" in params:
-                    candidate_state["work_experience"] = json.loads(params["work_experience"])
+                    candidate_state["work_experience"] = json.loads(
+                        params["work_experience"]
+                    )
                 if "education" in params:
                     candidate_state["education"] = json.loads(params["education"])
                 if "raw_data" in params:
                     candidate_state["raw_data"] = json.loads(params["raw_data"])
                 if "parsed_resume_json" in params:
-                    candidate_state["parsed_resume_json"] = json.loads(params["parsed_resume_json"])
+                    candidate_state["parsed_resume_json"] = json.loads(
+                        params["parsed_resume_json"]
+                    )
                 return FakeResult()
-            if "INSERT INTO candidate_preferences" in sql or "UPDATE candidate_preferences" in sql:
+            if (
+                "INSERT INTO candidate_preferences" in sql
+                or "UPDATE candidate_preferences" in sql
+            ):
                 return FakeResult()
             return FakeResult()
 
@@ -114,8 +120,8 @@ def _get_certs(state):
 # BUG 1 — "any" must NOT be added as a certification
 # ---------------------------------------------------------------------------
 
-class TestBug1AnyNotAddedAsCertification:
 
+class TestBug1AnyNotAddedAsCertification:
     def test_sanitize_strips_any_from_list(self):
         items = ["any", "Java Full Stack", "AWS Certificate"]
         result = server._sanitize_structured_list_items(items)
@@ -177,15 +183,27 @@ class TestBug1AnyNotAddedAsCertification:
         assert any("aws certificate" in c.lower() for c in certs)
 
     def test_normalize_certifications_strips_any(self):
-        result = server._normalize_certifications(["any", "Java Full Stack", "AWS Certificate"])
+        result = server._normalize_certifications(
+            ["any", "Java Full Stack", "AWS Certificate"]
+        )
         assert "any" not in [c.lower() for c in result]
         assert any("java full stack" in c.lower() for c in result)
         assert any("aws certificate" in c.lower() for c in result)
+
+    def test_normalize_certifications_keeps_only_credential_names(self):
+        result = server._normalize_certifications(
+            [
+                "professional certificate",
+                "Earned a black belt in a discipline after years of training",
+            ]
+        )
+        assert result == ["professional", "A Discipline Black Belt"]
 
 
 # ---------------------------------------------------------------------------
 # BUG 2 — Certification deletion persisted and reflected
 # ---------------------------------------------------------------------------
+
 
 class TestBug2CertificationDeletion:
     """
@@ -195,7 +213,9 @@ class TestBug2CertificationDeletion:
     """
 
     def _initial_state(self):
-        return _make_candidate(certifications=["any", "Java Full Stack", "AWS Certificate"])
+        return _make_candidate(
+            certifications=["any", "Java Full Stack", "AWS Certificate"]
+        )
 
     def test_deletion_intent_detected_for_any(self):
         result = server._detect_deletion_intent("Remove any from Certifications")
@@ -268,7 +288,9 @@ class TestBug2CertificationDeletion:
 
     def test_end_to_end_any_in_db_then_deleted(self):
         """If 'any' is in the DB (pre-fix data), deletion must remove it cleanly."""
-        state = _make_candidate(certifications=["any", "Java Full Stack", "AWS Certificate"])
+        state = _make_candidate(
+            certifications=["any", "Java Full Stack", "AWS Certificate"]
+        )
         updates = {"profile_deletions": {"certifications": ["any"]}}
         _run_apply(state, updates)
         certs = _get_certs(state)
@@ -276,13 +298,17 @@ class TestBug2CertificationDeletion:
         assert any("java full stack" in c.lower() for c in certs)
         assert any("aws certificate" in c.lower() for c in certs)
 
-    def test_delete_aws_certificate_persists_across_raw_and_resume_sources_then_refresh(self):
+    def test_delete_aws_certificate_persists_across_raw_and_resume_sources_then_refresh(
+        self,
+    ):
         """A dashboard refresh must not revive a cert from parsed_resume_json."""
         state = _make_candidate(
             certifications=["AWS Certificate", "PMP"],
             parsed_resume_json={"certifications": ["AWS Certificate", "PMP"]},
         )
-        _run_apply(state, {"profile_deletions": {"certifications": ["AWS Certificate"]}})
+        _run_apply(
+            state, {"profile_deletions": {"certifications": ["AWS Certificate"]}}
+        )
 
         assert "aws certificate" not in [c.lower() for c in _get_certs(state)]
         assert "aws certificate" not in [

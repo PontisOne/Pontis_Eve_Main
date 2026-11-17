@@ -1,8 +1,6 @@
 import json
-from typing import Any, Dict
-
 import re
-
+from typing import Any
 
 _CERTIFICATION_BOILERPLATE_WORDS = {
     "cert",
@@ -25,13 +23,34 @@ def _normalize_text(value: Any) -> str:
     return re.sub(r"\s+", " ", str(value)).strip()
 
 
+def _format_experience_duration(value: Any) -> str:
+    try:
+        years = float(value)
+    except (TypeError, ValueError):
+        return ""
+    if years < 0:
+        return ""
+    total_months = round(years * 12)
+    whole_years, months = divmod(total_months, 12)
+    parts = []
+    if whole_years:
+        parts.append(f"{whole_years} year{'s' if whole_years != 1 else ''}")
+    if months:
+        parts.append(f"{months} month{'s' if months != 1 else ''}")
+    return " ".join(parts) or "0 months"
+
+
 def _normalize_key(value: Any) -> str:
     return _normalize_text(value).lower()
 
 
 def _relaxed_cert_key(value: Any) -> str:
     stripped = re.sub(r"[^\w\s]+", " ", _normalize_key(value))
-    tokens = [token for token in stripped.split() if token not in _CERTIFICATION_BOILERPLATE_WORDS]
+    tokens = [
+        token
+        for token in stripped.split()
+        if token not in _CERTIFICATION_BOILERPLATE_WORDS
+    ]
     return " ".join(tokens) or stripped
 
 
@@ -64,16 +83,26 @@ def _normalize_skills(skills: Any, certifications: Any = None) -> list[str]:
     seen: set[str] = set()
 
     for skill in skills:
-        cleaned = _normalize_text(skill.get("name") if isinstance(skill, dict) else skill)
+        cleaned = _normalize_text(
+            skill.get("name") if isinstance(skill, dict) else skill
+        )
         if not cleaned:
             continue
         key = _normalize_key(cleaned)
         if key in seen:
             continue
         if any(_normalize_key(cert) == key for cert in normalized_certs) and (
-            re.search(r"\b(?:cert|certificate|certificates|certification|certifications|certified|course|courses|credential|credentials|training|license|licence)\b", cleaned, re.I)
+            re.search(
+                r"\b(?:cert|certificate|certificates|certification|certifications|certified|course|courses|credential|credentials|training|license|licence)\b",
+                cleaned,
+                re.I,
+            )
             or any(
-                re.search(r"\b(?:cert|certificate|certificates|certification|certifications|certified|course|courses|credential|credentials|training|license|licence)\b", cert, re.I)
+                re.search(
+                    r"\b(?:cert|certificate|certificates|certification|certifications|certified|course|courses|credential|credentials|training|license|licence)\b",
+                    cert,
+                    re.I,
+                )
                 for cert in normalized_certs
             )
         ):
@@ -84,7 +113,7 @@ def _normalize_skills(skills: Any, certifications: Any = None) -> list[str]:
     return normalized
 
 
-def build_candidate_text(candidate: Dict[str, Any]) -> str:
+def build_candidate_text(candidate: dict[str, Any]) -> str:
     """
     Build structured semantic text from a candidate DB row for embedding.
     Mirrors Adam's candidate text format for compatibility with the shared vector space.
@@ -102,15 +131,23 @@ def build_candidate_text(candidate: Dict[str, Any]) -> str:
     # candidate's desired direction, while their current role remains context.
     try:
         from profile_strength_service import get_canonical_preferences
-        preferred_roles = get_canonical_preferences(
-            candidate, candidate.get("_prefs_row")
-        ).get("preferred_roles") or []
+
+        preferred_roles = (
+            get_canonical_preferences(candidate, candidate.get("_prefs_row")).get(
+                "preferred_roles"
+            )
+            or []
+        )
     except Exception:
-        preferred_roles = raw_data.get("preferred_roles") or raw_data.get("target_roles") or []
+        preferred_roles = (
+            raw_data.get("preferred_roles") or raw_data.get("target_roles") or []
+        )
     if isinstance(preferred_roles, str):
         preferred_roles = [preferred_roles]
     if preferred_roles:
-        parts.append(f"Target / Preferred Roles:\n{', '.join(str(role) for role in preferred_roles if role)}")
+        parts.append(
+            f"Target / Preferred Roles:\n{', '.join(str(role) for role in preferred_roles if role)}"
+        )
 
     current_role = (candidate.get("current_role") or "").strip()
     if current_role:
@@ -124,9 +161,13 @@ def build_candidate_text(candidate: Dict[str, Any]) -> str:
     if location:
         parts.append(f"Location:\n{location}")
 
-    exp_years = candidate.get("experience_years") or candidate.get("total_experience_years")
+    exp_years = candidate.get("experience_years") or candidate.get(
+        "total_experience_years"
+    )
     if exp_years is not None:
-        parts.append(f"Experience:\n{exp_years} years of professional experience")
+        duration = _format_experience_duration(exp_years)
+        if duration:
+            parts.append(f"Experience:\n{duration} of professional experience")
 
     skills_raw = candidate.get("skills") or []
     if isinstance(skills_raw, str):
@@ -189,9 +230,7 @@ def build_candidate_text(candidate: Dict[str, Any]) -> str:
 
     # Use parsed_resume_text if available, else resume_text
     resume_text = (
-        candidate.get("parsed_resume_text")
-        or candidate.get("resume_text")
-        or ""
+        candidate.get("parsed_resume_text") or candidate.get("resume_text") or ""
     ).strip()
     if resume_text:
         parts.append(f"Resume:\n{resume_text[:2000]}")

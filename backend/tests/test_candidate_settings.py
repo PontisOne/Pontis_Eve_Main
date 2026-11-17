@@ -2,7 +2,6 @@ import asyncio
 import json
 import os
 import sys
-from pathlib import Path
 
 import pytest
 from fastapi import HTTPException
@@ -27,7 +26,9 @@ def test_candidate_help_requires_auth():
     assert exc.value.status_code == 401
 
 
-def test_delete_candidate_account_removes_candidate_rows_and_storage(tmp_path, monkeypatch):
+def test_delete_candidate_account_removes_candidate_rows_and_storage(
+    tmp_path, monkeypatch
+):
     deleted_tables = []
 
     class FakeResult:
@@ -125,7 +126,11 @@ def test_candidate_help_sends_email_with_resend(monkeypatch):
             return {"id": "email-123"}
 
     monkeypatch.setattr(server, "_get_candidate_row", fake_get_candidate_row)
-    monkeypatch.setattr(server, "resend", type("FakeResend", (), {"api_key": None, "Emails": FakeEmails})())
+    monkeypatch.setattr(
+        server,
+        "resend",
+        type("FakeResend", (), {"api_key": None, "Emails": FakeEmails})(),
+    )
     monkeypatch.setenv("RESEND_API_KEY", "re_test_key")
     monkeypatch.setenv("RESEND_FROM_EMAIL", "support@pontis.one")
 
@@ -163,7 +168,11 @@ def test_candidate_help_returns_502_when_resend_fails(monkeypatch):
             raise RuntimeError("resend unavailable")
 
     monkeypatch.setattr(server, "_get_candidate_row", fake_get_candidate_row)
-    monkeypatch.setattr(server, "resend", type("FakeResend", (), {"api_key": None, "Emails": FakeEmails})())
+    monkeypatch.setattr(
+        server,
+        "resend",
+        type("FakeResend", (), {"api_key": None, "Emails": FakeEmails})(),
+    )
     monkeypatch.setenv("RESEND_API_KEY", "re_test_key")
     monkeypatch.setenv("RESEND_FROM_EMAIL", "support@pontis.one")
 

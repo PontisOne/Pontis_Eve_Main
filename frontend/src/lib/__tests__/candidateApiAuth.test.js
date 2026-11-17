@@ -1,10 +1,17 @@
+vi.mock("sonner", () => ({
+  __esModule: true,
+  toast: { error: vi.fn() },
+}));
+
 import axios from "axios";
+import { toast } from "sonner";
 import { candidateAuthHeaders } from "../candidateApiAuth";
 import { saveOnboardingState, loadOnboardingState } from "../onboardingStorage";
 
 describe("candidate API authentication", () => {
   beforeEach(() => {
     localStorage.clear();
+    vi.clearAllMocks();
     saveOnboardingState({ candidateId: "candidate-a", candidateToken: "session-token-a" });
   });
 
@@ -43,5 +50,16 @@ describe("candidate API authentication", () => {
     })).rejects.toMatchObject({ response: { status: 401 } });
 
     expect(loadOnboardingState().candidateToken).toBe("session-token-a");
+  });
+
+  it("does not toast failures from silent background requests", async () => {
+    const responseInterceptor = axios.interceptors.response.handlers.at(-1).rejected;
+
+    await expect(responseInterceptor({
+      config: { url: "https://api.example.test/api/voice/candidate-intake/progress", __eveSilentError: true },
+      request: {},
+    })).rejects.toMatchObject({ request: {} });
+
+    expect(toast.error).not.toHaveBeenCalled();
   });
 });

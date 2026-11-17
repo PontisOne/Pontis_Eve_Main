@@ -1,7 +1,8 @@
 import pytest
+
 from app.job_ingestion import scheduler
-from groq_client import AllKeysRateLimitedError
 from app.job_ingestion.job_skill_extraction import extract_missing_job_skills
+from groq_client import AllKeysRateLimitedError
 
 
 class _Result:
@@ -40,10 +41,19 @@ class _Session:
 
 def _pending_row():
     return {
-        "id": "existing-id", "ats_type": "greenhouse", "ats_job_id": "ats-1",
-        "title": "Engineer", "company_name": "Acme", "description": "Build APIs",
-        "requirements": "Python", "skills": ["Python"], "skills_required": ["Python"],
-        "structured_data": {"metadata_extraction_status": "pending_retry", "old": "keep"},
+        "id": "existing-id",
+        "ats_type": "greenhouse",
+        "ats_job_id": "ats-1",
+        "title": "Engineer",
+        "company_name": "Acme",
+        "description": "Build APIs",
+        "requirements": "Python",
+        "skills": ["Python"],
+        "skills_required": ["Python"],
+        "structured_data": {
+            "metadata_extraction_status": "pending_retry",
+            "old": "keep",
+        },
     }
 
 
@@ -62,8 +72,12 @@ async def test_pending_metadata_retry_updates_existing_job_after_success(monkeyp
         return job["id"]
 
     monkeypatch.setattr(scheduler, "_get_session_local", lambda: lambda: session)
-    monkeypatch.setattr("app.job_ingestion.job_skill_extraction.extract_missing_job_skills", extract)
-    monkeypatch.setattr("app.job_ingestion.job_ingestion_service.upsert_ats_job", upsert)
+    monkeypatch.setattr(
+        "app.job_ingestion.job_skill_extraction.extract_missing_job_skills", extract
+    )
+    monkeypatch.setattr(
+        "app.job_ingestion.job_ingestion_service.upsert_ats_job", upsert
+    )
 
     assert await scheduler.retry_pending_metadata_extraction() == 1
     assert len(upserted) == 1
@@ -72,7 +86,9 @@ async def test_pending_metadata_retry_updates_existing_job_after_success(monkeyp
 
 
 @pytest.mark.asyncio
-async def test_pending_metadata_retry_does_not_update_when_still_unavailable(monkeypatch):
+async def test_pending_metadata_retry_does_not_update_when_still_unavailable(
+    monkeypatch,
+):
     session = _Session(_pending_row())
     upserted = []
 
@@ -84,8 +100,12 @@ async def test_pending_metadata_retry_does_not_update_when_still_unavailable(mon
         upserted.append(job)
 
     monkeypatch.setattr(scheduler, "_get_session_local", lambda: lambda: session)
-    monkeypatch.setattr("app.job_ingestion.job_skill_extraction.extract_missing_job_skills", extract)
-    monkeypatch.setattr("app.job_ingestion.job_ingestion_service.upsert_ats_job", upsert)
+    monkeypatch.setattr(
+        "app.job_ingestion.job_skill_extraction.extract_missing_job_skills", extract
+    )
+    monkeypatch.setattr(
+        "app.job_ingestion.job_ingestion_service.upsert_ats_job", upsert
+    )
 
     assert await scheduler.retry_pending_metadata_extraction() == 0
     assert upserted == []
@@ -93,7 +113,9 @@ async def test_pending_metadata_retry_does_not_update_when_still_unavailable(mon
 
 
 @pytest.mark.asyncio
-async def test_production_shaped_area_sales_manager_metadata_retry_is_in_place(monkeypatch):
+async def test_production_shaped_area_sales_manager_metadata_retry_is_in_place(
+    monkeypatch,
+):
     """Rate limiting queues the existing job; recovery enriches that same row."""
     job_id = "3833ab4b-9082-46c1-b68a-5013c239ebc7"
     original = {
@@ -109,7 +131,10 @@ async def test_production_shaped_area_sales_manager_metadata_retry_is_in_place(m
         "experience_required": "5+ years",
         "salary_range": "₹12,00,000-₹18,00,000",
         "employment_type": "Full-time",
-        "structured_data": {"source": "production-shaped", "metadata_extraction_status": "pending"},
+        "structured_data": {
+            "source": "production-shaped",
+            "metadata_extraction_status": "pending",
+        },
     }
 
     # Simulate all Groq keys being unavailable through the real extractor.
@@ -137,7 +162,9 @@ async def test_production_shaped_area_sales_manager_metadata_retry_is_in_place(m
         job["skills"] = ["Salesforce", "Negotiation", "Pipeline Management"]
         job["skills_required"] = job["skills"]
         job["structured_data"]["metadata_extraction_status"] = "complete"
-        job["structured_data"]["skill_extraction"] = {"provider_skills": ["Salesforce", "Negotiation"]}
+        job["structured_data"]["skill_extraction"] = {
+            "provider_skills": ["Salesforce", "Negotiation"]
+        }
         return job
 
     async def upsert(_, job):
@@ -145,15 +172,24 @@ async def test_production_shaped_area_sales_manager_metadata_retry_is_in_place(m
         return job["id"]
 
     monkeypatch.setattr(scheduler, "_get_session_local", lambda: lambda: session)
-    monkeypatch.setattr("app.job_ingestion.job_skill_extraction.extract_missing_job_skills", successful_extract)
-    monkeypatch.setattr("app.job_ingestion.job_ingestion_service.upsert_ats_job", upsert)
+    monkeypatch.setattr(
+        "app.job_ingestion.job_skill_extraction.extract_missing_job_skills",
+        successful_extract,
+    )
+    monkeypatch.setattr(
+        "app.job_ingestion.job_ingestion_service.upsert_ats_job", upsert
+    )
 
     assert await scheduler.retry_pending_metadata_extraction() == 1
     assert len(upserted) == 1
     persisted = upserted[0]
     assert persisted["id"] == job_id
     assert persisted["structured_data"]["metadata_extraction_status"] == "complete"
-    assert persisted["skills_required"] == ["Salesforce", "Negotiation", "Pipeline Management"]
+    assert persisted["skills_required"] == [
+        "Salesforce",
+        "Negotiation",
+        "Pipeline Management",
+    ]
     assert persisted["experience_required"] == "5+ years"
     assert persisted["salary_range"] == "₹12,00,000-₹18,00,000"
     assert persisted["employment_type"] == "Full-time"

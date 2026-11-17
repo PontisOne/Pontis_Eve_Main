@@ -22,6 +22,7 @@ import {
 import React from "react";
 import { API, BACKEND_URL } from "../lib/apiConfig";
 import { normalizeJobDescription } from "../lib/jobDescription";
+import { formatEmploymentType } from "../lib/jobFormatting";
 import { loadOnboardingState } from "../lib/onboardingStorage";
 import { buildProfileBio } from "../lib/profileBio";
 import {
@@ -270,14 +271,14 @@ function _formatEducationDates(education) {
   const startYear = year(education?.start_date ?? education?.startDate);
   const endYear = year(education?.end_date ?? education?.endDate);
 
-  if (startYear && endYear) return `${startYear} ΓÇô ${endYear}`;
+  if (startYear && endYear) return `${startYear} – ${endYear}`;
   return education?.dates || "";
 }
 
 function ResumeExperienceEntry({ exp }) {
   const _highlights = String(exp.description || exp.summary || "")
     .split(/\n+|(?<=\.)\s+(?=[A-Z])/)
-    .map((item) => item.replace(/^[-ΓÇó]\s*/, "").trim())
+    .map((item) => item.replace(/^[–•-]\s*/, "").trim())
     .filter(Boolean);
 
   return (
@@ -516,22 +517,33 @@ function parseCsv(value) {
     .filter(Boolean);
 }
 
+function parseExperienceDuration(value) {
+  const text = String(value ?? "").trim().toLowerCase();
+  if (!text) return 0;
+  const years = Number(text.match(/(\d+(?:\.\d+)?)\s*years?/)?.[1] || 0);
+  const months = Number(text.match(/(\d+)\s*months?/)?.[1] || 0);
+  if (years || months) return years + months / 12;
+  return Number(text) || 0;
+}
+
 export function ProfileEditor({ profile, candidateId, onClose, onSaved }) {
   const [draft, setDraft] = React.useState(() => ({
     name: profile.name || "",
     headline: profile.headline || profile.current_role || "",
     location: profile.location || "",
-    experience_years: profile.experience_years ?? "",
+    experience_years: formatExperienceDuration(profile.experience_years),
     availability: profile.availability || "",
     salary_expectation: profile.salary_expectation || "",
     bio: profile.bio || generateBio(profile),
     work_experience: (profile.experience || []).map((item) => ({
+      ...item,
       title: item.title || "",
       company: item.company || "",
       dates: item.dates || "",
       description: item.description || item.summary || "",
     })),
     education: (profile.education || []).map((item) => ({
+      ...item,
       degree: item.degree || "",
       institution: item.institution || "",
       dates: item.dates || "",
@@ -565,7 +577,7 @@ export function ProfileEditor({ profile, candidateId, onClose, onSaved }) {
     try {
       await axios.put(`${API}/candidate/${candidateId}/profile`, {
         ...draft,
-        experience_years: draft.experience_years === "" ? 0 : Number(draft.experience_years),
+        experience_years: parseExperienceDuration(draft.experience_years),
         skills: parseCsv(draft.skills),
         certifications: draft.certifications
           .map((certification) => certification.trim())
@@ -583,23 +595,23 @@ export function ProfileEditor({ profile, candidateId, onClose, onSaved }) {
   };
   return (
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/35 p-4"
+      className="fixed inset-0 z-50 flex items-center justify-center overflow-y-auto bg-black/35 p-3 sm:p-6"
       role="dialog"
       aria-modal="true"
       aria-label="Edit profile"
     >
-      <div className="flex max-h-[92vh] w-full max-w-3xl flex-col overflow-hidden rounded-2xl bg-[#FDFDFC] shadow-2xl">
-        <div className="flex items-center justify-between border-b px-6 py-4">
-          <div>
+      <div className="flex max-h-[calc(100vh-1.5rem)] w-full max-w-3xl flex-col overflow-hidden rounded-2xl bg-[#FDFDFC] shadow-2xl sm:max-h-[92vh]">
+        <div className="flex shrink-0 items-start justify-between gap-4 border-b px-5 py-4 sm:px-6">
+          <div className="min-w-0 pr-2">
             <h2 className="text-lg font-semibold">Edit profile</h2>
             <p className="text-xs text-[#777774]">Update any section of your candidate profile.</p>
           </div>
-          <button type="button" onClick={onClose} aria-label="Close profile editor">
+          <button type="button" onClick={onClose} aria-label="Close profile editor" className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-full text-[#555552] transition-colors hover:bg-black/[0.06] hover:text-[#1F1F1F] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#7B6FB8]">
             <X className="h-5 w-5" />
           </button>
         </div>
-        <div className="space-y-7 overflow-y-auto px-6 py-5">
-          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+        <div className="min-h-0 space-y-7 overflow-y-auto px-5 py-5 sm:px-6">
+          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
             {[
               ["name", "Full name"],
               ["headline", "Professional headline"],
@@ -611,9 +623,8 @@ export function ProfileEditor({ profile, candidateId, onClose, onSaved }) {
               <label key={key} className="text-xs font-medium text-[#4A4A48]">
                 {label}
                 <input
-                  type={key === "experience_years" ? "number" : "text"}
+                  type="text"
                   min="0"
-                  step="0.1"
                   value={draft[key]}
                   onChange={(e) => field(key, e.target.value)}
                   className={`${editorInput} mt-1`}
@@ -650,12 +661,12 @@ export function ProfileEditor({ profile, candidateId, onClose, onSaved }) {
             {draft.work_experience.map((item, index) => (
               <div
                 key={`${item.title}-${item.company}-${item.dates}`}
-                className="relative mb-3 grid gap-2 rounded-xl border p-3 sm:grid-cols-2"
+                className="relative mb-4 grid gap-3 rounded-xl border p-3 pt-12 sm:grid-cols-2"
               >
                 <button
                   type="button"
                   onClick={() => removeRecord("work_experience", index)}
-                  className="absolute right-2 top-2"
+                  className="absolute right-2 top-2 inline-flex h-8 w-8 items-center justify-center rounded-full text-[#777774] transition-colors hover:bg-black/[0.06] hover:text-[#1F1F1F] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#7B6FB8]"
                   aria-label="Remove experience"
                 >
                   <X className="h-4 w-4" />
@@ -707,12 +718,12 @@ export function ProfileEditor({ profile, candidateId, onClose, onSaved }) {
             {draft.education.map((item, index) => (
               <div
                 key={`${item.degree}-${item.institution}-${item.dates}`}
-                className="relative mb-3 grid gap-2 rounded-xl border p-3 sm:grid-cols-3"
+                className="relative mb-4 grid gap-3 rounded-xl border p-3 pt-12 sm:grid-cols-3"
               >
                 <button
                   type="button"
                   onClick={() => removeRecord("education", index)}
-                  className="absolute right-2 top-2"
+                  className="absolute right-2 top-2 inline-flex h-8 w-8 items-center justify-center rounded-full text-[#777774] transition-colors hover:bg-black/[0.06] hover:text-[#1F1F1F] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#7B6FB8]"
                   aria-label="Remove education"
                 >
                   <X className="h-4 w-4" />
@@ -817,7 +828,7 @@ export function ProfileEditor({ profile, candidateId, onClose, onSaved }) {
             </p>
           )}
         </div>
-        <div className="flex justify-end gap-2 border-t px-6 py-4">
+        <div className="flex shrink-0 justify-end gap-3 border-t px-5 py-4 sm:px-6">
           <button
             type="button"
             onClick={onClose}
@@ -832,7 +843,7 @@ export function ProfileEditor({ profile, candidateId, onClose, onSaved }) {
             disabled={saving || !candidateId}
             className="rounded-full bg-[#1F1F1F] px-5 py-2 text-sm font-medium text-white disabled:opacity-50"
           >
-            {saving ? "SavingΓÇª" : "Save profile"}
+            {saving ? "Saving…" : "Save profile"}
           </button>
         </div>
       </div>
@@ -1067,6 +1078,15 @@ export function ProfileTab({
         )}
       </section>
 
+      <section id={profileSectionId("relocation")}>
+        <SectionLabel>Relocation</SectionLabel>
+        {profile.willing_to_relocate === true ? (
+          <p className="text-[13px] text-[#4A4A48] font-normal">Ready to relocate</p>
+        ) : (
+          <p className="text-[13px] text-[#9A9A98] font-normal">Not provided yet</p>
+        )}
+      </section>
+
       <section id={profileSectionId("additional-information")}>
         <SectionLabel>Additional Information</SectionLabel>
         {profile.additional_information ? (
@@ -1133,7 +1153,7 @@ export function JobsTab({
   // jobs a candidate can open before the subscription-locked placeholders.
   // Confirmed applications belong in Tracked Jobs. Regularly tracked jobs
   // remain visible here so the existing Track workflow is unchanged.
-  const accessibleJobs = jobs.filter((job) => !job.locked && !job.applied);
+  const accessibleJobs = jobs.filter((job) => !job.locked);
   const lockedJobs = jobs.filter((job) => job.locked);
   const orderedJobs = [...accessibleJobs, ...lockedJobs];
 
@@ -1395,7 +1415,9 @@ export function JobsTab({
             const companyName = job.company || job.company_name || job.employer || "";
             const location =
               job.location || [job.city, job.state, job.country].filter(Boolean).join(", ");
-            const jobType = job.employment_type || job.job_type || job.employmentType || job.type;
+            const jobType = formatEmploymentType(
+              job.employment_type || job.job_type || job.employmentType || job.type,
+            );
             const rawWorkMode =
               job.work_mode ||
               job.workplace_type ||
@@ -1779,11 +1801,17 @@ function TrackedTab({ jobs, onTrack, onDismissJob, candidateId, onApplied }) {
                 type="button"
                 onClick={(e) => {
                   e.stopPropagation();
+                  if (job.applied && !window.confirm("This job is marked as an application. Are you sure you want to untrack this application?")) {
+                    return;
+                  }
                   onTrack(job.id);
                 }}
                 onKeyDown={(e) => {
                   if (e.key === "Enter") {
                     e.stopPropagation();
+                    if (job.applied && !window.confirm("This job is marked as an application. Are you sure you want to untrack this application?")) {
+                      return;
+                    }
                     onTrack(job.id);
                   }
                 }}
@@ -1933,7 +1961,7 @@ function DocumentsTab({
   };
 
   if (docsLoading) {
-    return <p className="text-[13px] text-[#9A9A98] font-normal">Loading documentsΓÇª</p>;
+    return <p className="text-[13px] text-[#9A9A98] font-normal">Loading documents…</p>;
   }
 
   return (
@@ -1974,7 +2002,7 @@ function DocumentsTab({
                 disabled={busy}
                 className="flex-1 py-2 rounded-xl bg-red-500 text-white text-[13px] font-medium hover:bg-red-600 transition-colors disabled:opacity-50"
               >
-                {busy ? "DeletingΓÇª" : "Delete"}
+                {busy ? "Deleting…" : "Delete"}
               </button>
             </div>
           </div>
@@ -2337,7 +2365,7 @@ function OpportunitiesTab({ candidateId, onInterested }) {
   };
 
   if (error) return <p className="text-[13px] text-red-500">{error}</p>;
-  if (opps === null) return <p className="text-[13px] text-[#9A9A98]">LoadingΓÇª</p>;
+  if (opps === null) return <p className="text-[13px] text-[#9A9A98]">Loading…</p>;
 
   const pending = opps.filter((o) => !o.candidate_response);
   const responded = opps.filter((o) => o.candidate_response);
@@ -2364,7 +2392,7 @@ function OpportunitiesTab({ candidateId, onInterested }) {
           onClick={() => setSelected(null)}
           className="text-[12px] text-[#4A4A48] hover:text-[#1F1F1F] underline underline-offset-2"
         >
-          ΓåÉ Back
+              ← Back
         </button>
         <div className="space-y-1">
           <h2 className="text-[16px] font-semibold text-[#1F1F1F]">{job.title || "Role"}</h2>
@@ -2414,7 +2442,7 @@ function OpportunitiesTab({ candidateId, onInterested }) {
         <div className="pt-2">
           {responded_val === "interested" && (
             <p className="text-[13px] font-medium text-[#2E7538]">
-              Γ£ô You expressed interest in this role.
+              ✓ You expressed interest in this role.
             </p>
           )}
           {responded_val === "not_interested" && (
@@ -2628,7 +2656,7 @@ export default function LivingProfile({
               title="Download profile as PDF"
             >
               <Download className="w-3.5 h-3.5" strokeWidth={1.75} />
-              {pdfGenerating ? "GeneratingΓÇª" : "Download PDF"}
+              {pdfGenerating ? "Generating…" : "Download PDF"}
             </button>
           )}
           <ProfileStrengthBar label={userProfile.strength} percent={userProfile.strengthPercent} />
@@ -2715,7 +2743,7 @@ function _ResumeContextTab({ resume, docsLoading }) {
   if (docsLoading) {
     return (
       <p className="text-[13px] text-[#9A9A98]" data-testid="resume-context-loading">
-        Loading resumeΓÇª
+        Loading resume…
       </p>
     );
   }

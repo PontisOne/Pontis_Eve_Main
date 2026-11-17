@@ -1,6 +1,5 @@
 from app.job_ingestion.collect_jobs import JobCollector
 
-
 collector = JobCollector()
 
 jobs = collector.collect_company_jobs(

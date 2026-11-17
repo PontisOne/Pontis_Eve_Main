@@ -1,4 +1,5 @@
 """Regression coverage for Resume Editor -> canonical profile synchronization."""
+
 import asyncio
 import json
 import os
@@ -17,7 +18,8 @@ def _use_test_updated_resume_directory(monkeypatch, tmp_path):
     """Keep Resume Editor PDF artifacts out of the development document store."""
     monkeypatch.setattr(server, "DOCS_DIR", tmp_path / "documents")
     monkeypatch.setattr(
-        server, "_updated_resume_pdf_path",
+        server,
+        "_updated_resume_pdf_path",
         lambda candidate_id: tmp_path / candidate_id / "updated_resume.pdf",
     )
 
@@ -56,7 +58,9 @@ class _Result:
 
 
 def _candidate_update_params(state):
-    return next(params for sql, params in state["calls"] if "UPDATE candidates SET" in sql)
+    return next(
+        params for sql, params in state["calls"] if "UPDATE candidates SET" in sql
+    )
 
 
 def _candidate():
@@ -80,46 +84,63 @@ def _candidate():
 
 def test_resume_editor_payload_unions_canonical_and_parsed_skills():
     assert server._resume_editor_payload(_candidate())["skills"] == [
-        "Python", "FastAPI", "PostgreSQL"
+        "Python",
+        "FastAPI",
+        "PostgreSQL",
     ]
 
 
 def test_skill_normalization_keeps_multi_word_skills_and_repairs_safe_legacy_concatenation():
-    skills = server._normalize_skills([
-        "React.js Node.jsFrontend DevelopmentAI Applications",
-        "Google Cloud Platform; Object-Oriented Programming\nReact.js",
-    ])
+    skills = server._normalize_skills(
+        [
+            "React.js Node.jsFrontend DevelopmentAI Applications",
+            "Google Cloud Platform; Object-Oriented Programming\nReact.js",
+        ]
+    )
 
     assert skills == [
-        "React.js", "Node.js", "Frontend Development", "AI Applications",
-        "Google Cloud Platform", "Object-Oriented Programming",
+        "React.js",
+        "Node.js",
+        "Frontend Development",
+        "AI Applications",
+        "Google Cloud Platform",
+        "Object-Oriented Programming",
     ]
     assert all("Node.jsFrontend" not in skill for skill in skills)
 
 
 def test_skill_normalization_splits_reported_separator_less_skills_and_deduplicates():
-    skills = server._normalize_skills([
-        "HTML5 Express.js FlaskCSS3",
-        "ExpressJS",
-        "CSS3",
-    ])
+    skills = server._normalize_skills(
+        [
+            "HTML5 Express.js FlaskCSS3",
+            "ExpressJS",
+            "CSS3",
+        ]
+    )
 
     assert skills == ["HTML5", "Express.js", "Flask", "CSS3"]
-    assert server._job_missing_requirements(
-        ["HTML5", "Express.js", "Flask", "CSS3"],
-        "",
-        {"skills": skills},
-    )["missing_skills"] == []
+    assert (
+        server._job_missing_requirements(
+            ["HTML5", "Express.js", "Flask", "CSS3"],
+            "",
+            {"skills": skills},
+        )["missing_skills"]
+        == []
+    )
 
 
 def test_skill_normalization_repairs_exact_css3_opencv_legacy_case():
     assert server._normalize_skills(["CSS3", "CSS3 OpenCV Computer Vision"]) == [
-        "CSS3", "OpenCV", "Computer Vision",
+        "CSS3",
+        "OpenCV",
+        "Computer Vision",
     ]
     assert server._normalize_skills(["Computer Vision"]) == ["Computer Vision"]
 
 
-def test_resume_editor_save_persists_deduplicated_canonical_skills_and_parse(monkeypatch):
+def test_resume_editor_save_persists_deduplicated_canonical_skills_and_parse(
+    monkeypatch,
+):
     state = {}
     candidate = _candidate()
 
@@ -129,9 +150,21 @@ def test_resume_editor_save_persists_deduplicated_canonical_skills_and_parse(mon
     monkeypatch.setattr(server, "_get_candidate_row", get_candidate)
     monkeypatch.setattr(server, "SessionLocal", _SessionFactory(state))
 
-    result = asyncio.run(server._save_resume_editor_updates("candidate-1", {
-        "skills": ["Python", "FastAPI", "PostgreSQL", "Java", "Spring Boot", "java"],
-    }))
+    result = asyncio.run(
+        server._save_resume_editor_updates(
+            "candidate-1",
+            {
+                "skills": [
+                    "Python",
+                    "FastAPI",
+                    "PostgreSQL",
+                    "Java",
+                    "Spring Boot",
+                    "java",
+                ],
+            },
+        )
+    )
 
     assert result["updated"] is True
     persisted = _candidate_update_params(state)
@@ -146,7 +179,9 @@ def test_resume_editor_save_persists_deduplicated_canonical_skills_and_parse(mon
     assert profile["keySkills"] == saved_skills
 
     # The selected-job matcher/gap calculation receives the same canonical row.
-    gaps = server._job_missing_requirements(["Java", "Spring Boot"], "", {"skills": saved_skills})
+    gaps = server._job_missing_requirements(
+        ["Java", "Spring Boot"], "", {"skills": saved_skills}
+    )
     assert gaps["missing_skills"] == []
 
 
@@ -159,16 +194,26 @@ def test_resume_editor_save_never_persists_a_delimited_skill_as_one_item(monkeyp
     monkeypatch.setattr(server, "_get_candidate_row", get_candidate)
     monkeypatch.setattr(server, "SessionLocal", _SessionFactory(state))
 
-    asyncio.run(server._save_resume_editor_updates("candidate-1", {
-        "skills": ["React.js, Node.js; Frontend Development\nAI Applications"],
-    }))
+    asyncio.run(
+        server._save_resume_editor_updates(
+            "candidate-1",
+            {
+                "skills": ["React.js, Node.js; Frontend Development\nAI Applications"],
+            },
+        )
+    )
 
     saved_skills = json.loads(_candidate_update_params(state)["skills"])
-    assert all(skill in saved_skills for skill in ["React.js", "Node.js", "Frontend Development", "AI Applications"])
+    assert all(
+        skill in saved_skills
+        for skill in ["React.js", "Node.js", "Frontend Development", "AI Applications"]
+    )
     assert all("React.js, Node.js" not in skill for skill in saved_skills)
 
 
-def test_resume_editor_save_keeps_new_comma_separated_multi_word_skills_as_distinct_candidates_skills(monkeypatch):
+def test_resume_editor_save_keeps_new_comma_separated_multi_word_skills_as_distinct_candidates_skills(
+    monkeypatch,
+):
     """The save payload, DB column, parsed resume, and gap refresh share one array."""
     state = {}
 
@@ -178,24 +223,39 @@ def test_resume_editor_save_keeps_new_comma_separated_multi_word_skills_as_disti
     monkeypatch.setattr(server, "_get_candidate_row", get_candidate)
     monkeypatch.setattr(server, "SessionLocal", _SessionFactory(state))
 
-    asyncio.run(server._save_resume_editor_updates("candidate-1", {
-        "skills": [
-            "OpenCV, Computer Vision, Responsive Web Development, Data Structures",
-            "opencv",
-        ],
-    }))
+    asyncio.run(
+        server._save_resume_editor_updates(
+            "candidate-1",
+            {
+                "skills": [
+                    "OpenCV, Computer Vision, Responsive Web Development, Data Structures",
+                    "opencv",
+                ],
+            },
+        )
+    )
 
     persisted = _candidate_update_params(state)
     saved_skills = json.loads(persisted["skills"])
     saved_parse = json.loads(persisted["parsed_resume_json"])
     assert saved_skills[-4:] == [
-        "OpenCV", "Computer Vision", "Responsive Web Development", "Data Structures",
+        "OpenCV",
+        "Computer Vision",
+        "Responsive Web Development",
+        "Data Structures",
     ]
     assert saved_parse["skills"] == saved_skills
-    assert server._job_missing_requirements(saved_skills, "", {"skills": saved_skills})["missing_skills"] == []
+    assert (
+        server._job_missing_requirements(saved_skills, "", {"skills": saved_skills})[
+            "missing_skills"
+        ]
+        == []
+    )
 
 
-def test_resume_editor_save_canonicalizes_new_combined_skills_and_refreshes_gaps(monkeypatch):
+def test_resume_editor_save_canonicalizes_new_combined_skills_and_refreshes_gaps(
+    monkeypatch,
+):
     """New editor input must be canonical before it reaches candidates.skills."""
     state = {}
 
@@ -207,35 +267,56 @@ def test_resume_editor_save_canonicalizes_new_combined_skills_and_refreshes_gaps
 
     # This models the one contentEditable value sent by Resume Editor, rather
     # than repairing a pre-existing database row.
-    asyncio.run(server._save_resume_editor_updates("candidate-1", {
-        "skills": ["HTML5 Express.js FlaskCSS3"],
-    }))
+    asyncio.run(
+        server._save_resume_editor_updates(
+            "candidate-1",
+            {
+                "skills": ["HTML5 Express.js FlaskCSS3"],
+            },
+        )
+    )
 
     saved_skills = json.loads(_candidate_update_params(state)["skills"])
     assert saved_skills[-4:] == ["HTML5", "Express.js", "Flask", "CSS3"]
     assert all(skill != "HTML5 Express.js FlaskCSS3" for skill in saved_skills)
-    assert server._job_missing_requirements(
-        ["HTML5", "Express.js", "Flask", "CSS3"], "", {"skills": saved_skills}
-    )["missing_skills"] == []
+    assert (
+        server._job_missing_requirements(
+            ["HTML5", "Express.js", "Flask", "CSS3"], "", {"skills": saved_skills}
+        )["missing_skills"]
+        == []
+    )
 
 
 def test_new_skill_input_supports_all_editor_separators_without_splitting_phrases():
     assert server._normalize_skills(["HTML5", "Express.js", "Flask", "CSS3"]) == [
-        "HTML5", "Express.js", "Flask", "CSS3",
+        "HTML5",
+        "Express.js",
+        "Flask",
+        "CSS3",
     ]
-    assert server._normalize_skills([
-        "HTML5, Express.js; Flask\n• CSS3|HTML5",
+    assert server._normalize_skills(
+        [
+            "HTML5, Express.js; Flask\n• CSS3|HTML5",
+            "Google Cloud Platform",
+            "Frontend Development",
+            "Object-Oriented Programming",
+            "Problem Solving",
+        ]
+    ) == [
+        "HTML5",
+        "Express.js",
+        "Flask",
+        "CSS3",
         "Google Cloud Platform",
         "Frontend Development",
         "Object-Oriented Programming",
         "Problem Solving",
-    ]) == [
-        "HTML5", "Express.js", "Flask", "CSS3", "Google Cloud Platform",
-        "Frontend Development", "Object-Oriented Programming", "Problem Solving",
     ]
 
 
-def test_resume_editor_save_does_not_restore_legacy_members_omitted_by_editor(monkeypatch):
+def test_resume_editor_save_does_not_restore_legacy_members_omitted_by_editor(
+    monkeypatch,
+):
     state = {}
 
     async def get_candidate(_candidate_id):
@@ -249,13 +330,23 @@ def test_resume_editor_save_does_not_restore_legacy_members_omitted_by_editor(mo
     monkeypatch.setattr(server, "_get_candidate_row", get_candidate)
     monkeypatch.setattr(server, "SessionLocal", _SessionFactory(state))
 
-    asyncio.run(server._save_resume_editor_updates("candidate-1", {
-        "skills": ["React.jsNode.js", "HTML5", "SQL"],
-    }))
+    asyncio.run(
+        server._save_resume_editor_updates(
+            "candidate-1",
+            {
+                "skills": ["React.jsNode.js", "HTML5", "SQL"],
+            },
+        )
+    )
 
     saved_skills = json.loads(_candidate_update_params(state)["skills"])
     assert saved_skills == ["React.js", "Node.js", "HTML5", "SQL"]
-    assert server._job_missing_requirements(saved_skills, "", {"skills": saved_skills})["missing_skills"] == []
+    assert (
+        server._job_missing_requirements(saved_skills, "", {"skills": saved_skills})[
+            "missing_skills"
+        ]
+        == []
+    )
 
 
 def test_resume_editor_save_repairs_exact_legacy_case_before_persisting(monkeypatch):
@@ -270,11 +361,20 @@ def test_resume_editor_save_repairs_exact_legacy_case_before_persisting(monkeypa
     monkeypatch.setattr(server, "SessionLocal", _SessionFactory(state))
 
     # This is the complete editor document returned from the legacy candidate.
-    asyncio.run(server._save_resume_editor_updates("candidate-1", {
-        "skills": ["CSS3", "CSS3 OpenCV Computer Vision"],
-    }))
+    asyncio.run(
+        server._save_resume_editor_updates(
+            "candidate-1",
+            {
+                "skills": ["CSS3", "CSS3 OpenCV Computer Vision"],
+            },
+        )
+    )
 
-    assert json.loads(_candidate_update_params(state)["skills"]) == ["CSS3", "OpenCV", "Computer Vision"]
+    assert json.loads(_candidate_update_params(state)["skills"]) == [
+        "CSS3",
+        "OpenCV",
+        "Computer Vision",
+    ]
 
 
 def test_missing_skills_uses_normalized_canonical_profile_skills():
@@ -298,7 +398,9 @@ def test_missing_skills_uses_selected_ats_job_skills_required_and_resume_evidenc
     }
 
     gaps = server._job_missing_requirements(
-        [], "", candidate,
+        [],
+        "",
+        candidate,
         skills_required="Python, React JS, PostgreSQL, Docker",
     )
 
@@ -317,8 +419,11 @@ def test_missing_skills_unions_partial_structured_skills_with_rich_text_jd_requi
 * Strong working knowledge of relational databases (e.g., MySQL, PostgreSQL).
 **Why Join Us?** Build great products."""
     gaps = server._job_missing_requirements(
-        None, None, {"skills": ["Java", "MySQL", "PostgreSQL"]},
-        skills_required=["Java"], description=description,
+        None,
+        None,
+        {"skills": ["Java", "MySQL", "PostgreSQL"]},
+        skills_required=["Java"],
+        description=description,
         structured_data={"skills": ["Java"]},
     )
     assert "Spring Boot" in gaps["missing_skills"]
@@ -332,7 +437,9 @@ def test_missing_skills_uses_jd_requirement_list_when_selected_job_has_no_skills
     assert gaps["missing_skills"] == ["FastAPI", "Kubernetes"]
 
 
-def test_match_improvement_endpoint_extracts_competencies_from_live_failure_shape(monkeypatch):
+def test_match_improvement_endpoint_extracts_competencies_from_live_failure_shape(
+    monkeypatch,
+):
     """Regression: the live Level AI recommendation had no structured skills.
 
     Its only declared skill list was a ``Competencies:`` line in ``description``;
@@ -377,23 +484,48 @@ def test_match_improvement_endpoint_extracts_competencies_from_live_failure_shap
     monkeypatch.setattr(server, "_get_job_match_improvement_row", get_row)
     monkeypatch.setattr(server, "_get_candidate_profile_payload", get_profile)
 
-    response = asyncio.run(server.get_job_match_improvement("candidate-live-shape", "rec-live-shape", authorization=f"Bearer {server._issue_candidate_session_token('candidate-live-shape')}"))
+    response = asyncio.run(
+        server.get_job_match_improvement(
+            "candidate-live-shape",
+            "rec-live-shape",
+            authorization=f"Bearer {server._issue_candidate_session_token('candidate-live-shape')}",
+        )
+    )
 
     assert response["missing_skills"]
     assert response["requirements"]
-    assert {"Django", "ETL", "Celery", "GCP", "Kubernetes"}.issubset(response["missing_skills"])
+    assert {"Django", "ETL", "Celery", "GCP", "Kubernetes"}.issubset(
+        response["missing_skills"]
+    )
     assert "REST APIs" not in response["missing_skills"]
-    assert not any("Relational database understanding" in skill for skill in response["missing_skills"])
+    assert not any(
+        "Relational database understanding" in skill
+        for skill in response["missing_skills"]
+    )
 
 
 def test_missing_skills_reads_nested_structured_required_skills_and_voice_evidence():
     candidate = {
         "skills": ["python"],
-        "raw_data": json.dumps({"voice_intake": {"extracted": {"technical_skills": ["React JS"]}}}),
+        "raw_data": json.dumps(
+            {"voice_intake": {"extracted": {"technical_skills": ["React JS"]}}}
+        ),
     }
     gaps = server._job_missing_requirements(
-        [], "", candidate,
-        structured_data={"job": {"qualification": {"required_skills": [{"name": "Python"}, {"name": "React.js"}, {"name": "Terraform"}]}}},
+        [],
+        "",
+        candidate,
+        structured_data={
+            "job": {
+                "qualification": {
+                    "required_skills": [
+                        {"name": "Python"},
+                        {"name": "React.js"},
+                        {"name": "Terraform"},
+                    ]
+                }
+            }
+        },
     )
     assert gaps["missing_skills"] == ["Terraform"]
 
@@ -409,7 +541,8 @@ def test_missing_skills_jd_fallback_ignores_non_skill_requirements():
 
 def test_missing_skills_returns_empty_only_when_candidate_has_every_required_skill():
     gaps = server._job_missing_requirements(
-        ["Go", "Docker", "Kubernetes"], "",
+        ["Go", "Docker", "Kubernetes"],
+        "",
         {"skills": ["GO", "docker", "Kubernetes"]},
     )
     assert gaps["missing_skills"] == []
@@ -417,13 +550,17 @@ def test_missing_skills_returns_empty_only_when_candidate_has_every_required_ski
 
 def test_missing_skills_handles_malformed_job_skill_data_without_non_skill_gaps():
     gaps = server._job_missing_requirements(
-        "{not-json", "Requirements: location: London; salary: competitive; clearance required",
-        {"skills": []}, structured_data={"metadata": {"country": "UK"}},
+        "{not-json",
+        "Requirements: location: London; salary: competitive; clearance required",
+        {"skills": []},
+        structured_data={"metadata": {"country": "UK"}},
     )
     assert gaps["missing_skills"] == []
 
 
-def test_improve_job_match_returns_refreshed_canonical_profile_without_duplicate_recommendation(monkeypatch):
+def test_improve_job_match_returns_refreshed_canonical_profile_without_duplicate_recommendation(
+    monkeypatch,
+):
     """Saving an edited resume must return its canonical profile and update only its selected match."""
     state = {
         "candidate": _candidate(),
@@ -486,25 +623,35 @@ def test_improve_job_match_returns_refreshed_canonical_profile_without_duplicate
             return _ScoreResult()
 
     import candidate_job_matching_service
+
     monkeypatch.setattr(server, "get_job_match_improvement", get_guidance)
     monkeypatch.setattr(server, "_get_job_match_improvement_row", get_job_context)
     monkeypatch.setattr(server, "_save_resume_editor_updates", save_updates)
     monkeypatch.setattr(server, "_get_candidate_row", get_candidate)
     monkeypatch.setattr(server, "_get_candidate_profile_payload", get_profile)
+
     # Credit authorization is covered separately; this regression exercises
     # canonical profile synchronization after an already-authorized save.
     async def authorized(*_args):
         return None
+
     monkeypatch.setattr(server, "_validate_resume_fix_credit_claim", authorized)
     monkeypatch.setattr(server, "SessionLocal", lambda: _ScoreSession())
-    monkeypatch.setattr(candidate_job_matching_service, "refresh_candidate_job_match", refresh_match)
+    monkeypatch.setattr(
+        candidate_job_matching_service, "refresh_candidate_job_match", refresh_match
+    )
 
-    response = asyncio.run(server.improve_job_match(
-        "candidate-1",
-        "rec-1",
-        server.JobMatchImprovementRequest(profile_updates={"skills": ["Python", "Rust"]}, confirmed_skills=["Rust"]),
-        authorization=f"Bearer {server._issue_candidate_session_token('candidate-1')}",
-    ))
+    response = asyncio.run(
+        server.improve_job_match(
+            "candidate-1",
+            "rec-1",
+            server.JobMatchImprovementRequest(
+                profile_updates={"skills": ["Python", "Rust"]},
+                confirmed_skills=["Rust"],
+            ),
+            authorization=f"Bearer {server._issue_candidate_session_token('candidate-1')}",
+        )
+    )
 
     assert response["match_score"] == 84.0
     assert response["profile"]
@@ -512,11 +659,15 @@ def test_improve_job_match_returns_refreshed_canonical_profile_without_duplicate
     # The persisted Resume Editor skill is immediately used for refreshed
     # selected-job gap guidance.
     assert response["remaining_missing_skills"] == []
-    assert state["refresh_calls"] == [("candidate-1", "rec-1", ["Python", "FastAPI", "PostgreSQL", "Rust"])]
+    assert state["refresh_calls"] == [
+        ("candidate-1", "rec-1", ["Python", "FastAPI", "PostgreSQL", "Rust"])
+    ]
     assert state["recommendation_ids"] == ["rec-1"]
 
 
-def test_updated_resume_download_serves_the_pdf_generated_by_resume_editor_save(monkeypatch):
+def test_updated_resume_download_serves_the_pdf_generated_by_resume_editor_save(
+    monkeypatch,
+):
     state = {}
     candidate = _candidate()
 
@@ -526,10 +677,19 @@ def test_updated_resume_download_serves_the_pdf_generated_by_resume_editor_save(
     monkeypatch.setattr(server, "_get_candidate_row", get_candidate)
     monkeypatch.setattr(server, "SessionLocal", _SessionFactory(state))
 
-    asyncio.run(server._save_resume_editor_updates("candidate-1", {"skills": ["Python", "FastAPI"]}))
+    asyncio.run(
+        server._save_resume_editor_updates(
+            "candidate-1", {"skills": ["Python", "FastAPI"]}
+        )
+    )
     saved_raw = json.loads(_candidate_update_params(state)["raw_data"])
     candidate["raw_data"] = saved_raw
-    response = asyncio.run(server.download_updated_resume("candidate-1", authorization=f"Bearer {server._issue_candidate_session_token('candidate-1')}"))
+    response = asyncio.run(
+        server.download_updated_resume(
+            "candidate-1",
+            authorization=f"Bearer {server._issue_candidate_session_token('candidate-1')}",
+        )
+    )
 
     assert response.path == saved_raw["updated_resume_file_path"]
     assert Path(response.path).read_bytes().startswith(b"%PDF")
@@ -545,32 +705,55 @@ def test_resume_editor_save_promotes_generated_pdf_to_canonical_resume(monkeypat
         return candidate
 
     monkeypatch.setattr(server, "_get_candidate_row", get_candidate)
-    monkeypatch.setattr(server, "_build_candidate_profile_pdf", lambda _profile: generated_pdf)
+    monkeypatch.setattr(
+        server, "_build_candidate_profile_pdf", lambda _profile: generated_pdf
+    )
     monkeypatch.setattr(server, "SessionLocal", _SessionFactory(state))
 
-    asyncio.run(server._save_resume_editor_updates("candidate-1", {"skills": ["Python"]}))
+    asyncio.run(
+        server._save_resume_editor_updates("candidate-1", {"skills": ["Python"]})
+    )
 
     candidate_update = _candidate_update_params(state)
     stored_name = candidate_update["resume_file_path"]
     stored_path = server._candidate_storage_dir("candidate-1") / "resume" / stored_name
     assert stored_path.read_bytes() == generated_pdf
-    resume_insert = next(params for sql, params in state["calls"] if "INSERT INTO internal_candidate_resumes" in sql)
+    resume_insert = next(
+        params
+        for sql, params in state["calls"]
+        if "INSERT INTO internal_candidate_resumes" in sql
+    )
     assert resume_insert["cid"] == "candidate-1"
     assert resume_insert["path"] == stored_name
-    assert resume_insert["fingerprint"] == server.hashlib.sha256(generated_pdf).hexdigest()
+    assert (
+        resume_insert["fingerprint"] == server.hashlib.sha256(generated_pdf).hexdigest()
+    )
 
 
-def test_updated_resume_download_returns_404_when_generated_pdf_is_missing(monkeypatch, tmp_path):
+def test_updated_resume_download_returns_404_when_generated_pdf_is_missing(
+    monkeypatch, tmp_path
+):
     missing_path = tmp_path / "candidate-1" / "updated_resume.pdf"
 
     async def get_candidate(_candidate_id):
-        return {"id": "candidate-1", "name": "Candidate", "raw_data": {"updated_resume_file_path": str(missing_path)}}
+        return {
+            "id": "candidate-1",
+            "name": "Candidate",
+            "raw_data": {"updated_resume_file_path": str(missing_path)},
+        }
 
     monkeypatch.setattr(server, "_get_candidate_row", get_candidate)
-    monkeypatch.setattr(server, "_updated_resume_pdf_path", lambda _candidate_id: missing_path)
+    monkeypatch.setattr(
+        server, "_updated_resume_pdf_path", lambda _candidate_id: missing_path
+    )
 
     with pytest.raises(server.HTTPException) as exc_info:
-        asyncio.run(server.download_updated_resume("candidate-1", authorization=f"Bearer {server._issue_candidate_session_token('candidate-1')}"))
+        asyncio.run(
+            server.download_updated_resume(
+                "candidate-1",
+                authorization=f"Bearer {server._issue_candidate_session_token('candidate-1')}",
+            )
+        )
 
     assert exc_info.value.status_code == 404
     assert exc_info.value.detail == "Updated resume PDF not found."

@@ -1,5 +1,5 @@
 """Regression coverage for ordered, fresh Chat with Eve turns."""
-import asyncio
+
 import os
 import sys
 from types import SimpleNamespace
@@ -11,7 +11,9 @@ import server
 
 
 @pytest.mark.asyncio
-async def test_new_salary_turn_uses_current_message_not_previous_assistant_reply(monkeypatch):
+async def test_new_salary_turn_uses_current_message_not_previous_assistant_reply(
+    monkeypatch,
+):
     saved_window = []
     llm_inputs = []
 
@@ -39,11 +41,14 @@ async def test_new_salary_turn_uses_current_message_not_previous_assistant_reply
             if "7-10 LPA" in current
             else "AWS Certificate has been removed."
         )
-        return SimpleNamespace(choices=[SimpleNamespace(message=SimpleNamespace(content=reply))])
+        return SimpleNamespace(
+            choices=[SimpleNamespace(message=SimpleNamespace(content=reply))]
+        )
 
     class FakeMappings:
         def fetchone(self):
             return None
+
         def fetchall(self):
             return []
 
@@ -55,9 +60,14 @@ async def test_new_salary_turn_uses_current_message_not_previous_assistant_reply
             return []
 
     class FakeSession:
-        async def __aenter__(self): return self
-        async def __aexit__(self, *_args): return False
-        async def execute(self, *_args, **_kwargs): return FakeResult()
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args):
+            return False
+
+        async def execute(self, *_args, **_kwargs):
+            return FakeResult()
 
     # This unit test uses an isolated in-memory candidate fixture. Preserve the
     # endpoint's production authorization implementation, but bypass ownership
@@ -68,24 +78,40 @@ async def test_new_salary_turn_uses_current_message_not_previous_assistant_reply
     monkeypatch.setattr(server, "_save_chat_window", save_window)
     monkeypatch.setattr(server, "_get_candidate_row", get_candidate)
     monkeypatch.setattr(server, "_normalize_for_frontend", lambda _row: {})
-    monkeypatch.setattr(server, "_build_profile_context", lambda _profile: ("profile", []))
+    monkeypatch.setattr(
+        server, "_build_profile_context", lambda _profile: ("profile", [])
+    )
     monkeypatch.setattr(server, "_advance_voice_intake_from_chat", noop)
     monkeypatch.setattr(server, "_trigger_matching", noop)
     monkeypatch.setattr(server, "_apply_profile_updates", apply_updates)
     monkeypatch.setattr(
         server,
         "openai_client",
-        SimpleNamespace(chat=SimpleNamespace(completions=SimpleNamespace(create=complete))),
+        SimpleNamespace(
+            chat=SimpleNamespace(completions=SimpleNamespace(create=complete))
+        ),
     )
 
-    first = await server.chat(server.ChatRequest(
-        candidate_id="cand-1", session_id="s1",
-        messages=[server.ChatMessageIn(role="user", content="Remove AWS Certificate from Certifications")],
-    ))
-    second = await server.chat(server.ChatRequest(
-        candidate_id="cand-1", session_id="s1",
-        messages=[server.ChatMessageIn(role="user", content="I am expecting 7-10 LPA")],
-    ))
+    first = await server.chat(
+        server.ChatRequest(
+            candidate_id="cand-1",
+            session_id="s1",
+            messages=[
+                server.ChatMessageIn(
+                    role="user", content="Remove AWS Certificate from Certifications"
+                )
+            ],
+        )
+    )
+    second = await server.chat(
+        server.ChatRequest(
+            candidate_id="cand-1",
+            session_id="s1",
+            messages=[
+                server.ChatMessageIn(role="user", content="I am expecting 7-10 LPA")
+            ],
+        )
+    )
 
     assert first.reply == "AWS Certificate has been removed."
     assert second.reply == "I've noted your expected salary of 7-10 LPA."
@@ -138,9 +164,15 @@ async def test_sanitized_completion_claim_is_persisted_and_returned(monkeypatch)
         }
 
     async def complete(**_kwargs):
-        return SimpleNamespace(choices=[SimpleNamespace(message=SimpleNamespace(
-            content="Your profile is already 100% complete—there are no missing fields left."
-        ))])
+        return SimpleNamespace(
+            choices=[
+                SimpleNamespace(
+                    message=SimpleNamespace(
+                        content="Your profile is already 100% complete—there are no missing fields left."
+                    )
+                )
+            ]
+        )
 
     monkeypatch.setattr(server, "SessionLocal", lambda: FakeSession())
     monkeypatch.setattr(server, "_authorize_candidate", lambda *_args, **_kwargs: None)
@@ -149,25 +181,41 @@ async def test_sanitized_completion_claim_is_persisted_and_returned(monkeypatch)
     monkeypatch.setattr(server, "_load_intake_ledger", load_empty)
     monkeypatch.setattr(server, "_get_candidate_row", get_candidate)
     monkeypatch.setattr(server, "_get_candidate_profile_payload", authoritative_profile)
-    monkeypatch.setattr(server, "_normalize_for_frontend", lambda _row: {
-        "profile_strength_detail": {"percent": 87},
-    })
-    monkeypatch.setattr(server, "_build_profile_context", lambda _profile: ("profile", []))
-    monkeypatch.setattr(server, "_missing_canonical_preference_fields", lambda *_args: [])
+    monkeypatch.setattr(
+        server,
+        "_normalize_for_frontend",
+        lambda _row: {
+            "profile_strength_detail": {"percent": 87},
+        },
+    )
+    monkeypatch.setattr(
+        server, "_build_profile_context", lambda _profile: ("profile", [])
+    )
+    monkeypatch.setattr(
+        server, "_missing_canonical_preference_fields", lambda *_args: []
+    )
     monkeypatch.setattr(server, "_advance_voice_intake_from_chat", noop)
     monkeypatch.setattr(server, "_record_demonstrated_skill_usage", noop)
-    monkeypatch.setattr(server, "openai_client", SimpleNamespace(
-        chat=SimpleNamespace(completions=SimpleNamespace(create=complete))
-    ))
+    monkeypatch.setattr(
+        server,
+        "openai_client",
+        SimpleNamespace(
+            chat=SimpleNamespace(completions=SimpleNamespace(create=complete))
+        ),
+    )
 
-    response = await server.chat(server.ChatRequest(
-        candidate_id="cand-87",
-        session_id="s87",
-        messages=[server.ChatMessageIn(
-            role="user",
-            content="What are the missing details to make my profile 90%?",
-        )],
-    ))
+    response = await server.chat(
+        server.ChatRequest(
+            candidate_id="cand-87",
+            session_id="s87",
+            messages=[
+                server.ChatMessageIn(
+                    role="user",
+                    content="What are the missing details to make my profile 90%?",
+                )
+            ],
+        )
+    )
 
     assert "100% complete" not in response.reply
     assert "currently 87%" in response.reply

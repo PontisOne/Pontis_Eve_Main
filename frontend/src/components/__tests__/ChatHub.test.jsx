@@ -51,20 +51,20 @@ describe("ChatHub composer", () => {
     expect(input.style.overflowY).toBe("auto");
   });
 
-  it("keeps Enter for a newline and submits with Ctrl/Cmd + Enter", () => {
+  it("submits with Enter and keeps Shift + Enter for a newline", () => {
     const input = container.querySelector('[data-testid="chat-text-input"]');
     act(() => {
       input.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
     });
-    expect(onSend).not.toHaveBeenCalled();
+    expect(onSend).toHaveBeenCalledTimes(1);
 
     act(() => {
-      input.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", ctrlKey: true, bubbles: true }));
+      input.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", shiftKey: true, bubbles: true }));
     });
     expect(onSend).toHaveBeenCalledTimes(1);
 
     act(() => {
-      input.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", metaKey: true, bubbles: true }));
+      input.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", ctrlKey: true, bubbles: true }));
     });
     expect(onSend).toHaveBeenCalledTimes(2);
   });

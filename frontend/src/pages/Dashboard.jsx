@@ -783,6 +783,22 @@ function Dashboard() {
       });
       if (turnId !== latestChatTurnRef.current) return;
       const reply = res?.data?.reply?.trim();
+      if (res?.data?.profile_updates) {
+        setUserProfile((previous) => {
+          const merged = mergeProfileUpdatesForDisplay(previous, res.data.profile_updates);
+          const updates = res.data.profile_updates;
+          if (!Array.isArray(updates.employment_types) || updates.employment_types.length === 0) {
+            return merged;
+          }
+          return {
+            ...merged,
+            missing_questions: (merged.missing_questions || []).filter(
+              (item) => item?.topic_id !== "employment_types" &&
+                !String(item?.question || "").toLowerCase().includes("full-time, part-time, contract, or freelance"),
+            ),
+          };
+        });
+      }
       if (reply) {
         setChats((prev) => [
           ...prev,
@@ -902,6 +918,18 @@ function Dashboard() {
       toast.error("Could not update tracking.");
     }
   };
+
+  const handleApplicationApplied = React.useCallback((jobId) => {
+    setAvailableJobs((prev) => prev.map((job) => (
+      job.id === jobId ? { ...job, tracked: true, applied: true } : job
+    )));
+    setSelectedJob((prev) => (
+      prev?.id === jobId ? { ...prev, tracked: true, applied: true } : prev
+    ));
+    // Reconcile server metadata in the background without making the local UI
+    // wait for a refresh before moving the job to Tracked Jobs.
+    fetchJobs();
+  }, [fetchJobs]);
 
   const handleDismissJob = async (jobId, reason = null) => {
     const job = availableJobs.find((j) => j.id === jobId);
@@ -1159,7 +1187,7 @@ function Dashboard() {
                 onCertReplaced={handleCertReplaced}
                 onResumeDeleted={handleResumeDeleted}
                 onCertDeleted={handleCertDeleted}
-                onInterested={fetchJobs}
+                onInterested={handleApplicationApplied}
                 onPhotoChange={handlePhotoChange}
                 onProfileUpdated={refreshProfile}
                 onJobViewed={(jobId) => setAvailableJobs((prev) => prev.map((j) => (j.id === jobId ? { ...j, viewed: true } : j)))}
@@ -1298,7 +1326,7 @@ function Dashboard() {
                       )
                     }
                     onLockedJobClick={() => setShowSubscriptionPopup(true)}
-                    onApplied={fetchJobs}
+                    onApplied={handleApplicationApplied}
                   />
                 </div>
               )
@@ -1353,7 +1381,7 @@ function Dashboard() {
             onCertReplaced={handleCertReplaced}
             onResumeDeleted={handleResumeDeleted}
             onCertDeleted={handleCertDeleted}
-            onInterested={fetchJobs}
+            onInterested={handleApplicationApplied}
             onPhotoChange={handlePhotoChange}
             onProfileUpdated={refreshProfile}
             onJobViewed={(jobId) =>

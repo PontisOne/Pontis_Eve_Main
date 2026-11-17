@@ -2,7 +2,6 @@
 
 import os
 
-
 _SUPPORTED_PROVIDERS = frozenset(
     {"greenhouse", "lever", "ashby", "workable", "fantastic", "theirstack"}
 )

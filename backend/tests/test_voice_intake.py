@@ -11,11 +11,12 @@ Covers:
 - Onboarding state
 - Retry / idempotency
 """
-import os
-import json
+
 import asyncio
+import json
+import os
 import uuid
-import pytest
+
 import requests
 from sqlalchemy import text
 
@@ -27,9 +28,11 @@ API = f"{BASE_URL}/api"
 # Helpers
 # ─────────────────────────────────────────────
 
+
 def _create_candidate(name="Test Voice", email=None) -> str:
     """Create a minimal candidate via parse-resume and return candidate_id."""
     import io
+
     from reportlab.pdfgen import canvas as rl_canvas
 
     email = email or f"voice-test-{uuid.uuid4().hex[:8]}@example.com"
@@ -56,8 +59,8 @@ def _create_candidate(name="Test Voice", email=None) -> str:
 
 
 def _fetch_candidate_preferences(candidate_id: str) -> dict:
-    import sys
     import os as _os
+    import sys
 
     sys.path.insert(0, _os.path.join(_os.path.dirname(__file__), ".."))
     from server import SessionLocal
@@ -78,8 +81,8 @@ def _fetch_candidate_preferences(candidate_id: str) -> dict:
 
 
 def _count_candidate_preferences_rows(candidate_id: str) -> int:
-    import sys
     import os as _os
+    import sys
 
     sys.path.insert(0, _os.path.join(_os.path.dirname(__file__), ".."))
     from server import SessionLocal
@@ -87,7 +90,9 @@ def _count_candidate_preferences_rows(candidate_id: str) -> int:
     async def _query():
         async with SessionLocal() as db:
             row = await db.execute(
-                text("SELECT COUNT(*) FROM candidate_preferences WHERE candidate_id = :cid"),
+                text(
+                    "SELECT COUNT(*) FROM candidate_preferences WHERE candidate_id = :cid"
+                ),
                 {"cid": candidate_id},
             )
             return int(row.scalar() or 0)
@@ -116,6 +121,7 @@ SAMPLE_TRANSCRIPT = (
 # 1. Vapi configuration
 # ─────────────────────────────────────────────
 
+
 class TestVapiConfig:
     def test_config_endpoint_exists(self):
         """GET /api/config/vapi returns 200 or 503 (not 404)."""
@@ -143,6 +149,7 @@ class TestVapiConfig:
 # ─────────────────────────────────────────────
 # 2. Candidate authorization
 # ─────────────────────────────────────────────
+
 
 class TestCandidateAuthorization:
     def test_valid_candidate_intake_accepted(self):
@@ -178,6 +185,7 @@ class TestCandidateAuthorization:
 # ─────────────────────────────────────────────
 # 3. Transcript validation
 # ─────────────────────────────────────────────
+
 
 class TestTranscript:
     def test_empty_transcript_rejected(self):
@@ -231,9 +239,15 @@ class TestTranscript:
                 "role": "assistant",
                 "text": "Take your time, and remember you can pause or refresh the page whenever you need. Are you ready?",
             },
-            {"role": "user", "text": "I'm a Java backend engineer with 8 years of experience."},
+            {
+                "role": "user",
+                "text": "I'm a Java backend engineer with 8 years of experience.",
+            },
             {"role": "assistant", "text": "Tell me about your background."},
-            {"role": "user", "text": "I've built Kafka systems and Spring Boot services."},
+            {
+                "role": "user",
+                "text": "I've built Kafka systems and Spring Boot services.",
+            },
         ]
 
         r = requests.post(
@@ -250,7 +264,9 @@ class TestTranscript:
         assert resume["status"] == "in_progress"
         assert resume["progress"] == 1
         assert len(resume.get("completed_turns") or []) == 1
-        assert resume["completed_turns"][0]["question"] == "Tell me about your background."
+        assert (
+            resume["completed_turns"][0]["question"] == "Tell me about your background."
+        )
         assert resume["next_question"] == "What are your key skills?"
 
         profile = requests.get(f"{API}/candidate/{cid}/profile", timeout=15).json()
@@ -272,7 +288,9 @@ class TestTranscript:
         assert final.status_code == 200
         assert final.json()["status"] == "in_progress"
 
-        profile_after = requests.get(f"{API}/candidate/{cid}/profile", timeout=15).json()
+        profile_after = requests.get(
+            f"{API}/candidate/{cid}/profile", timeout=15
+        ).json()
         vir_after = profile_after.get("voice_intake_resume") or {}
         assert vir_after.get("status") == "in_progress"
         assert vir_after.get("progress") == 1
@@ -281,15 +299,18 @@ class TestTranscript:
 
     def test_progress_persists_interrupted_state_even_without_candidate_speech(self):
         """If Eve asks a question and the candidate hangs up immediately, the unanswered question must persist."""
-        import sys
         import os
+        import sys
 
         sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
         from server import _build_voice_intake_resume_from_notes
 
         current_question = "What are your key skills?"
         voice_notes = [
-            {"role": "assistant", "text": f"Hi there, I'm Eve. Let's pick up your profile. {current_question}"},
+            {
+                "role": "assistant",
+                "text": f"Hi there, I'm Eve. Let's pick up your profile. {current_question}",
+            },
         ]
 
         resume = _build_voice_intake_resume_from_notes(voice_notes, "")
@@ -303,7 +324,10 @@ class TestTranscript:
             "status": "in_progress",
             "progress": 2,
             "completed_turns": [
-                {"question": "Tell me about your background.", "answer": "I build APIs."},
+                {
+                    "question": "Tell me about your background.",
+                    "answer": "I build APIs.",
+                },
                 {"question": "What are your key skills?", "answer": "Python, FastAPI."},
             ],
             "current_question": current_question,
@@ -311,14 +335,18 @@ class TestTranscript:
             "known_topics": ["background_experience", "skills_technologies"],
             "missing_topics": ["target_role"],
         }
-        resumed = _build_voice_intake_resume_from_notes(voice_notes, "", existing_resume)
+        resumed = _build_voice_intake_resume_from_notes(
+            voice_notes, "", existing_resume
+        )
         assert resumed["status"] == "in_progress"
         assert resumed["progress"] == 2
         assert resumed["completed_turns"] == existing_resume["completed_turns"]
         assert resumed["current_question"] == current_question
         assert resumed.get("has_open_question") is True
 
-    def test_progress_ignores_setup_yes_and_binds_first_real_question_to_candidate_intro(self):
+    def test_progress_ignores_setup_yes_and_binds_first_real_question_to_candidate_intro(
+        self,
+    ):
         """A setup 'Yes' must not be paired with a later intake question."""
         cid = _create_candidate("Progress Setup Yes")
         transcript = (
@@ -334,9 +362,18 @@ class TestTranscript:
             {"role": "assistant", "text": "Are you ready?"},
             {"role": "user", "text": "Yes."},
             {"role": "assistant", "text": "What roles are you targeting right now?"},
-            {"role": "user", "text": "I have 2 years of experience as a Python developer and working at Viral Bug."},
-            {"role": "user", "text": "We built a product using Python, PostgreSQL, FastAPI and REST APIs..."},
-            {"role": "user", "text": "I was looking for opportunities where I can work as a backend developer..."},
+            {
+                "role": "user",
+                "text": "I have 2 years of experience as a Python developer and working at Viral Bug.",
+            },
+            {
+                "role": "user",
+                "text": "We built a product using Python, PostgreSQL, FastAPI and REST APIs...",
+            },
+            {
+                "role": "user",
+                "text": "I was looking for opportunities where I can work as a backend developer...",
+            },
             {"role": "assistant", "text": "Tell me about your background."},
         ]
 
@@ -355,11 +392,22 @@ class TestTranscript:
         assert resume["status"] == "in_progress"
         assert resume["progress"] == 1
         assert len(resume.get("completed_turns") or []) == 1
-        assert resume["completed_turns"][0]["question"] == "Tell me about your background."
+        assert (
+            resume["completed_turns"][0]["question"] == "Tell me about your background."
+        )
         assert "Yes." not in resume["completed_turns"][0]["answer"]
-        assert "I have 2 years of experience as a Python developer and working at Viral Bug." in resume["completed_turns"][0]["answer"]
-        assert "We built a product using Python, PostgreSQL, FastAPI and REST APIs..." in resume["completed_turns"][0]["answer"]
-        assert "I was looking for opportunities where I can work as a backend developer..." in resume["completed_turns"][0]["answer"]
+        assert (
+            "I have 2 years of experience as a Python developer and working at Viral Bug."
+            in resume["completed_turns"][0]["answer"]
+        )
+        assert (
+            "We built a product using Python, PostgreSQL, FastAPI and REST APIs..."
+            in resume["completed_turns"][0]["answer"]
+        )
+        assert (
+            "I was looking for opportunities where I can work as a backend developer..."
+            in resume["completed_turns"][0]["answer"]
+        )
         assert resume["next_question"] == "What are your key skills?"
 
         profile = requests.get(f"{API}/candidate/{cid}/profile", timeout=15).json()
@@ -367,7 +415,10 @@ class TestTranscript:
         assert vir.get("status") == "in_progress"
         assert vir.get("progress") == 1
         assert len(vir.get("completed_turns") or []) == 1
-        assert vir.get("completed_turns")[0]["question"] == "Tell me about your background."
+        assert (
+            vir.get("completed_turns")[0]["question"]
+            == "Tell me about your background."
+        )
         assert vir.get("next_question") == "What are your key skills?"
 
     def test_small_talk_excluded_only_real_question_gets_completed_turn(self):
@@ -394,12 +445,12 @@ class TestTranscript:
         cid = _create_candidate("Regression SmallTalk Exclusion")
         voice_notes = [
             {"role": "assistant", "text": "How are you doing today?"},
-            {"role": "user",      "text": "Doing good. What about you?"},
+            {"role": "user", "text": "Doing good. What about you?"},
             {"role": "assistant", "text": "Are you ready?"},
-            {"role": "user",      "text": "Yes, I'm ready."},
+            {"role": "user", "text": "Yes, I'm ready."},
             {"role": "assistant", "text": "What roles are you targeting right now?"},
-            {"role": "user",      "text": "I'm looking for senior Python backend roles."},
-            {"role": "user",      "text": "Preferably remote in fintech."},
+            {"role": "user", "text": "I'm looking for senior Python backend roles."},
+            {"role": "user", "text": "Preferably remote in fintech."},
         ]
         transcript = (
             "Assistant: How are you doing today?\n"
@@ -413,7 +464,11 @@ class TestTranscript:
 
         r = requests.post(
             f"{API}/voice/candidate-intake/progress",
-            json={"transcript": transcript, "voice_notes": voice_notes, "candidate_id": cid},
+            json={
+                "transcript": transcript,
+                "voice_notes": voice_notes,
+                "candidate_id": cid,
+            },
             timeout=60,
         )
         assert r.status_code == 200, r.text
@@ -474,10 +529,22 @@ class TestTranscript:
             {"role": "assistant", "text": "Are you ready?"},
             {"role": "user", "text": "Yes."},
             {"role": "assistant", "text": "Tell me about your background."},
-            {"role": "user", "text": "I have 2 years of experience as a software engineer at Viral Bug."},
-            {"role": "user", "text": "I was working with Python, FastAPI, Postgres and REST APIs."},
-            {"role": "user", "text": "I'm looking for new opportunities as a backend developer."},
-            {"role": "user", "text": "Java, OOPS, Hibernate, Kubernetes and Spring Boot."},
+            {
+                "role": "user",
+                "text": "I have 2 years of experience as a software engineer at Viral Bug.",
+            },
+            {
+                "role": "user",
+                "text": "I was working with Python, FastAPI, Postgres and REST APIs.",
+            },
+            {
+                "role": "user",
+                "text": "I'm looking for new opportunities as a backend developer.",
+            },
+            {
+                "role": "user",
+                "text": "Java, OOPS, Hibernate, Kubernetes and Spring Boot.",
+            },
         ]
         transcript = (
             "Assistant: Are you ready?\n"
@@ -491,7 +558,11 @@ class TestTranscript:
 
         r = requests.post(
             f"{API}/voice/candidate-intake/progress",
-            json={"transcript": transcript, "voice_notes": voice_notes, "candidate_id": cid},
+            json={
+                "transcript": transcript,
+                "voice_notes": voice_notes,
+                "candidate_id": cid,
+            },
             timeout=60,
         )
         assert r.status_code == 200, r.text
@@ -517,6 +588,7 @@ class TestTranscript:
 # ─────────────────────────────────────────────
 # 4. Idempotency / duplicate handling
 # ─────────────────────────────────────────────
+
 
 class TestIdempotency:
     def test_duplicate_request_returns_duplicate_status(self):
@@ -555,10 +627,13 @@ class TestIdempotency:
 # 5. Profile merge — resume data preserved
 # ─────────────────────────────────────────────
 
+
 class TestProfileMerge:
     def test_resume_data_preserved_after_voice_intake(self):
         """Existing resume fields are not overwritten by voice intake."""
-        cid = _create_candidate("Merge Test Candidate", email=f"merge-{uuid.uuid4().hex[:6]}@example.com")
+        cid = _create_candidate(
+            "Merge Test Candidate", email=f"merge-{uuid.uuid4().hex[:6]}@example.com"
+        )
 
         # Get profile before voice intake
         before = requests.get(f"{API}/candidate/{cid}/profile", timeout=15).json()
@@ -603,9 +678,13 @@ class TestProfileMerge:
 
 
 class TestVoiceIntakePersistenceRegression:
-    def test_completed_intake_returns_success_when_merge_result_is_none(self, monkeypatch):
+    def test_completed_intake_returns_success_when_merge_result_is_none(
+        self, monkeypatch
+    ):
         """A successful intake save must not 500 while building response metadata."""
-        import sys, os
+        import os
+        import sys
+
         sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
         import server
 
@@ -654,25 +733,33 @@ class TestVoiceIntakePersistenceRegression:
         monkeypatch.setattr(server, "SessionLocal", lambda: FakeSession())
         monkeypatch.setattr(server, "_get_candidate_row", fake_get_candidate_row)
         monkeypatch.setattr(server, "_persist_voice_intake_profile_state", fake_persist)
-        monkeypatch.setattr(server, "_load_candidate_certificates", fake_load_certificates)
+        monkeypatch.setattr(
+            server, "_load_candidate_certificates", fake_load_certificates
+        )
         monkeypatch.setattr(server, "_llm_analyze_intake", fake_llm_analysis)
-        monkeypatch.setattr(server, "_build_voice_intake_resume_from_notes", lambda *_args, **_kwargs: {
-            "status": "in_progress", "completed_turns": []
-        })
+        monkeypatch.setattr(
+            server,
+            "_build_voice_intake_resume_from_notes",
+            lambda *_args, **_kwargs: {"status": "in_progress", "completed_turns": []},
+        )
         monkeypatch.setattr(server, "_extract_voice_info", fake_extract_voice_info)
 
-        response = asyncio.run(server.candidate_voice_intake(
-            server.VoiceCandidateIntakeRequest(
-                candidate_id=candidate["id"], transcript="I am looking for a backend role."
+        response = asyncio.run(
+            server.candidate_voice_intake(
+                server.VoiceCandidateIntakeRequest(
+                    candidate_id=candidate["id"],
+                    transcript="I am looking for a backend role.",
+                )
             )
-        ))
+        )
 
         assert response["status"] == "in_progress"
         assert response["fields_updated"] == []
 
     def test_new_candidate_progress_saves_with_verified_candidate_id(self, monkeypatch):
         """A parsed, new candidate without availability can persist /progress."""
-        import sys, os
+        import os
+        import sys
         from types import SimpleNamespace
 
         sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
@@ -703,7 +790,9 @@ class TestVoiceIntakePersistenceRegression:
             saved["resume_candidate_id"] = received_candidate_id
             saved["resume"] = resume
 
-        async def fake_persist(received_candidate_id, received_candidate, voice_data, resume):
+        async def fake_persist(
+            received_candidate_id, received_candidate, voice_data, resume
+        ):
             saved["persist_candidate_id"] = received_candidate_id
             saved["persist_candidate"] = received_candidate
             saved["voice_data"] = voice_data
@@ -716,7 +805,13 @@ class TestVoiceIntakePersistenceRegression:
         class FakeCompletions:
             async def create(self, *args, **kwargs):
                 return SimpleNamespace(
-                    choices=[SimpleNamespace(message=SimpleNamespace(content='{"known_topics": [], "missing_topics": ["target_role"], "completed": false}'))]
+                    choices=[
+                        SimpleNamespace(
+                            message=SimpleNamespace(
+                                content='{"known_topics": [], "missing_topics": ["target_role"], "completed": false}'
+                            )
+                        )
+                    ]
                 )
 
         monkeypatch.setattr(server, "_get_candidate_row", fake_get_candidate_row)
@@ -746,8 +841,12 @@ class TestVoiceIntakePersistenceRegression:
         assert saved["persist_candidate"] is candidate
         assert saved["persisted_resume"] == response["voice_intake_resume"]
 
-    def test_persistence_helper_writes_preferences_and_voice_intake_state(self, monkeypatch):
-        import sys, os
+    def test_persistence_helper_writes_preferences_and_voice_intake_state(
+        self, monkeypatch
+    ):
+        import os
+        import sys
+
         sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
         import server
 
@@ -769,6 +868,20 @@ class TestVoiceIntakePersistenceRegression:
                 return self._scalar_value
 
         class FakeSession:
+            class Transaction:
+                def __init__(self, session):
+                    self.session = session
+
+                async def __aenter__(self):
+                    return self.session
+
+                async def __aexit__(self, exc_type, exc, tb):
+                    if exc_type is None:
+                        await self.session.commit()
+                    else:
+                        await self.session.rollback()
+                    return False
+
             async def __aenter__(self):
                 return self
 
@@ -786,6 +899,12 @@ class TestVoiceIntakePersistenceRegression:
 
             async def commit(self):
                 return None
+
+            async def rollback(self):
+                return None
+
+            def begin(self):
+                return self.Transaction(self)
 
         monkeypatch.setattr(server, "SessionLocal", lambda: FakeSession())
 
@@ -826,7 +945,9 @@ class TestVoiceIntakePersistenceRegression:
         }
 
         merged = asyncio.run(
-            server._persist_voice_intake_profile_state("candidate-1", candidate, voice_data, voice_intake_state)
+            server._persist_voice_intake_profile_state(
+                "candidate-1", candidate, voice_data, voice_intake_state
+            )
         )
 
         assert merged["raw_data"]["voice_intake"] == voice_intake_state
@@ -840,7 +961,11 @@ class TestVoiceIntakePersistenceRegression:
         assert merged["raw_data"]["willing_to_relocate"] is False
         assert any("UPDATE candidates SET" in sql for sql, _ in executed)
         assert any("INSERT INTO candidate_preferences" in sql for sql, _ in executed)
-        insert_params = next(params for sql, params in executed if "INSERT INTO candidate_preferences" in sql)
+        insert_params = next(
+            params
+            for sql, params in executed
+            if "INSERT INTO candidate_preferences" in sql
+        )
         assert "Java Backend Developer" in insert_params["preferred_roles"]
         assert insert_params["notice_period"] == "I can join immediately."
         assert insert_params["remote_preference"] == "Hybrid"
@@ -850,8 +975,12 @@ class TestVoiceIntakePersistenceRegression:
         assert insert_params["expected_salary"] == "₹25 LPA"
         assert insert_params["willing_to_relocate"] is False
 
-    def test_voice_intake_persists_resume_certifications_without_duplicates(self, monkeypatch):
-        import sys, os
+    def test_voice_intake_persists_resume_certifications_without_duplicates(
+        self, monkeypatch
+    ):
+        import os
+        import sys
+
         sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
         import server
 
@@ -890,6 +1019,20 @@ class TestVoiceIntakePersistenceRegression:
                 return self._scalar_value
 
         class FakeSession:
+            class Transaction:
+                def __init__(self, session):
+                    self.session = session
+
+                async def __aenter__(self):
+                    return self.session
+
+                async def __aexit__(self, exc_type, exc, tb):
+                    if exc_type is None:
+                        await self.session.commit()
+                    else:
+                        await self.session.rollback()
+                    return False
+
             async def __aenter__(self):
                 return self
 
@@ -912,17 +1055,25 @@ class TestVoiceIntakePersistenceRegression:
                     if "current_role" in params:
                         state["candidate"]["current_role"] = params["current_role"]
                     if "current_company" in params:
-                        state["candidate"]["current_company"] = params["current_company"]
+                        state["candidate"]["current_company"] = params[
+                            "current_company"
+                        ]
                     if "location" in params:
                         state["candidate"]["location"] = params["location"]
                     if "experience_years" in params:
-                        state["candidate"]["experience_years"] = params["experience_years"]
+                        state["candidate"]["experience_years"] = params[
+                            "experience_years"
+                        ]
                     if "skills" in params:
                         state["candidate"]["skills"] = json.loads(params["skills"])
                     if "work_experience" in params:
-                        state["candidate"]["work_experience"] = json.loads(params["work_experience"])
+                        state["candidate"]["work_experience"] = json.loads(
+                            params["work_experience"]
+                        )
                     if "education" in params:
-                        state["candidate"]["education"] = json.loads(params["education"])
+                        state["candidate"]["education"] = json.loads(
+                            params["education"]
+                        )
                     if "raw_data" in params:
                         state["candidate"]["raw_data"] = json.loads(params["raw_data"])
                     return FakeResult()
@@ -939,6 +1090,12 @@ class TestVoiceIntakePersistenceRegression:
 
             async def commit(self):
                 return None
+
+            async def rollback(self):
+                return None
+
+            def begin(self):
+                return self.Transaction(self)
 
         monkeypatch.setattr(server, "SessionLocal", lambda: FakeSession())
 
@@ -986,13 +1143,25 @@ class TestVoiceIntakePersistenceRegression:
             "Candidate: I want a Java Backend Developer or Engineer role."
         )
         voice_notes = [
-            {"role": "assistant", "text": "What kind of role are you looking for next?", "final": True},
-            {"role": "user", "text": "I want a Java Backend Developer or Engineer role.", "final": True},
+            {
+                "role": "assistant",
+                "text": "What kind of role are you looking for next?",
+                "final": True,
+            },
+            {
+                "role": "user",
+                "text": "I want a Java Backend Developer or Engineer role.",
+                "final": True,
+            },
         ]
 
         r = requests.post(
             f"{API}/voice/candidate-intake/progress",
-            json={"transcript": transcript, "voice_notes": voice_notes, "candidate_id": cid},
+            json={
+                "transcript": transcript,
+                "voice_notes": voice_notes,
+                "candidate_id": cid,
+            },
             timeout=60,
         )
         assert r.status_code == 200, r.text
@@ -1010,13 +1179,21 @@ class TestVoiceIntakePersistenceRegression:
             "Candidate: I can join immediately."
         )
         voice_notes = [
-            {"role": "assistant", "text": "When would you be able to start a new position?", "final": True},
+            {
+                "role": "assistant",
+                "text": "When would you be able to start a new position?",
+                "final": True,
+            },
             {"role": "user", "text": "I can join immediately.", "final": True},
         ]
 
         r = requests.post(
             f"{API}/voice/candidate-intake/progress",
-            json={"transcript": transcript, "voice_notes": voice_notes, "candidate_id": cid},
+            json={
+                "transcript": transcript,
+                "voice_notes": voice_notes,
+                "candidate_id": cid,
+            },
             timeout=60,
         )
         assert r.status_code == 200, r.text
@@ -1030,8 +1207,16 @@ class TestVoiceIntakePersistenceRegression:
     def test_voice_intake_state_advances_after_answer(self):
         cid = _create_candidate("Resume Advancement")
         voice_notes = [
-            {"role": "assistant", "text": "What roles are you targeting right now?", "final": True},
-            {"role": "user", "text": "I'm looking for senior Java backend roles.", "final": True},
+            {
+                "role": "assistant",
+                "text": "What roles are you targeting right now?",
+                "final": True,
+            },
+            {
+                "role": "user",
+                "text": "I'm looking for senior Java backend roles.",
+                "final": True,
+            },
         ]
 
         r = requests.post(
@@ -1047,7 +1232,9 @@ class TestVoiceIntakePersistenceRegression:
         turns = resume.get("completed_turns") or []
         assert len(turns) == 1
         assert turns[0]["question"] == "What roles are you targeting right now?"
-        assert resume.get("current_question") != "What roles are you targeting right now?"
+        assert (
+            resume.get("current_question") != "What roles are you targeting right now?"
+        )
 
         profile = _fetch_candidate_profile(cid)
         vir = profile.get("voice_intake_resume") or {}
@@ -1058,8 +1245,16 @@ class TestVoiceIntakePersistenceRegression:
     def test_repeated_progress_submission_does_not_duplicate_completed_turns(self):
         cid = _create_candidate("Repeated Progress Submission")
         voice_notes = [
-            {"role": "assistant", "text": "What kind of role are you looking for next?", "final": True},
-            {"role": "user", "text": "I want a Java Backend Developer role.", "final": True},
+            {
+                "role": "assistant",
+                "text": "What kind of role are you looking for next?",
+                "final": True,
+            },
+            {
+                "role": "user",
+                "text": "I want a Java Backend Developer role.",
+                "final": True,
+            },
         ]
 
         first = requests.post(
@@ -1082,7 +1277,9 @@ class TestVoiceIntakePersistenceRegression:
         assert _count_candidate_preferences_rows(cid) == 1
 
     def test_existing_resume_and_interruption_behavior_is_preserved(self):
-        import sys, os
+        import os
+        import sys
+
         sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
         from server import _build_voice_intake_resume_from_notes
 
@@ -1090,8 +1287,14 @@ class TestVoiceIntakePersistenceRegression:
             "status": "in_progress",
             "progress": 2,
             "completed_turns": [
-                {"question": "What made you start exploring your next opportunity?", "answer": "I was interested in Java."},
-                {"question": "Which Java technologies or frameworks do you enjoy working with the most?", "answer": "Spring Boot and Hibernate."},
+                {
+                    "question": "What made you start exploring your next opportunity?",
+                    "answer": "I was interested in Java.",
+                },
+                {
+                    "question": "Which Java technologies or frameworks do you enjoy working with the most?",
+                    "answer": "Spring Boot and Hibernate.",
+                },
             ],
             "current_question": "What kind of projects have you worked on using Spring Boot and Hibernate?",
             "next_question": "What kind of team or work environment helps you do your best work in your next role?",
@@ -1110,21 +1313,33 @@ class TestVoiceIntakePersistenceRegression:
 # 6. LLM extraction
 # ─────────────────────────────────────────────
 
+
 class TestVoiceIntakeProgressRevisionScope:
-    def test_revision_is_scoped_to_vapi_call_and_stale_same_call_is_rejected(self, monkeypatch):
-        import sys, os
+    def test_revision_is_scoped_to_vapi_call_and_stale_same_call_is_rejected(
+        self, monkeypatch
+    ):
+        import os
+        import sys
+
         sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
         import server
 
         candidate_id = "revision-scope-candidate"
-        candidate = {"id": candidate_id, "raw_data": {"voice_intake": {
-            "status": "in_progress",
-            "vapi_call_id": "call-a",
-            "transcript_revision": 8,
-            "completed_turns": [{"question": "What role?", "answer": "Backend engineer"}],
-            "current_question": "Why are you looking?",
-            "next_question": "Why are you looking?",
-        }}}
+        candidate = {
+            "id": candidate_id,
+            "raw_data": {
+                "voice_intake": {
+                    "status": "in_progress",
+                    "vapi_call_id": "call-a",
+                    "transcript_revision": 8,
+                    "completed_turns": [
+                        {"question": "What role?", "answer": "Backend engineer"}
+                    ],
+                    "current_question": "Why are you looking?",
+                    "next_question": "Why are you looking?",
+                }
+            },
+        }
         saved = []
 
         async def fake_get(_candidate_id):
@@ -1144,15 +1359,27 @@ class TestVoiceIntakeProgressRevisionScope:
             return None
 
         async def fake_llm(*_args, **_kwargs):
-            return {"known_topics": [], "missing_topics": ["preferences"], "completed": False}
+            return {
+                "known_topics": [],
+                "missing_topics": ["preferences"],
+                "completed": False,
+            }
 
         def fake_pairs(_notes, _transcript=""):
-            return ([{"question": "Why are you looking?", "answer": "I want more growth."}], None)
+            return (
+                [{"question": "Why are you looking?", "answer": "I want more growth."}],
+                None,
+            )
 
         def fake_builder(_notes, _transcript, existing_resume, **_kwargs):
             turns = list(existing_resume.get("completed_turns") or [])
             if not any(t["question"] == "Why are you looking?" for t in turns):
-                turns.append({"question": "Why are you looking?", "answer": "I want more growth."})
+                turns.append(
+                    {
+                        "question": "Why are you looking?",
+                        "answer": "I want more growth.",
+                    }
+                )
             return {
                 **existing_resume,
                 "status": "in_progress",
@@ -1163,38 +1390,51 @@ class TestVoiceIntakeProgressRevisionScope:
             }
 
         monkeypatch.setattr(server, "_get_candidate_row", fake_get)
-        monkeypatch.setattr(server, "_authorize_candidate", lambda *_args, **_kwargs: None)
+        monkeypatch.setattr(
+            server, "_authorize_candidate", lambda *_args, **_kwargs: None
+        )
         monkeypatch.setattr(server, "_save_voice_intake_resume", fake_save)
         monkeypatch.setattr(server, "_persist_voice_intake_profile_state", fake_persist)
         monkeypatch.setattr(server, "_extract_voice_info", fake_extract)
         monkeypatch.setattr(server, "_sync_voice_ledger", fake_sync)
         monkeypatch.setattr(server, "_sync_profile_updates_to_ledger", fake_sync)
-        monkeypatch.setattr(server, "_schedule_voice_intake_matching", lambda *_args, **_kwargs: None)
+        monkeypatch.setattr(
+            server, "_schedule_voice_intake_matching", lambda *_args, **_kwargs: None
+        )
         monkeypatch.setattr(server, "_llm_analyze_intake", fake_llm)
         monkeypatch.setattr(server, "_voice_intake_turn_pairs", fake_pairs)
-        monkeypatch.setattr(server, "_build_voice_intake_resume_from_notes", fake_builder)
+        monkeypatch.setattr(
+            server, "_build_voice_intake_resume_from_notes", fake_builder
+        )
 
-        new_call = asyncio.run(server.candidate_voice_intake_progress(
-            server.VoiceCandidateIntakeProgressRequest(
-                candidate_id=candidate_id,
-                vapi_call_id="call-b",
-                transcript_revision="1",
-                transcript="Candidate: I want more growth.",
+        new_call = asyncio.run(
+            server.candidate_voice_intake_progress(
+                server.VoiceCandidateIntakeProgressRequest(
+                    candidate_id=candidate_id,
+                    vapi_call_id="call-b",
+                    transcript_revision="1",
+                    transcript="Candidate: I want more growth.",
+                )
             )
-        ))
+        )
         assert new_call["accepted"] is True
         assert new_call["voice_intake_resume"]["vapi_call_id"] == "call-b"
         assert new_call["voice_intake_resume"]["transcript_revision"] == 1
-        assert new_call["voice_intake_resume"]["current_question"] == "What kind of work do you prefer?"
+        assert (
+            new_call["voice_intake_resume"]["current_question"]
+            == "What kind of work do you prefer?"
+        )
 
-        stale = asyncio.run(server.candidate_voice_intake_progress(
-            server.VoiceCandidateIntakeProgressRequest(
-                candidate_id=candidate_id,
-                vapi_call_id="call-b",
-                transcript_revision="0",
-                transcript="Candidate: stale update.",
+        stale = asyncio.run(
+            server.candidate_voice_intake_progress(
+                server.VoiceCandidateIntakeProgressRequest(
+                    candidate_id=candidate_id,
+                    vapi_call_id="call-b",
+                    transcript_revision="0",
+                    transcript="Candidate: stale update.",
+                )
             )
-        ))
+        )
         assert stale["accepted"] is False
         assert stale["status"] == "ignored_stale"
         assert len(saved) == 1
@@ -1219,8 +1459,9 @@ class TestLLMExtraction:
         profile = requests.get(f"{API}/candidate/{cid}/profile", timeout=15).json()
         skills_lower = [s.lower() for s in (profile.get("keySkills") or [])]
         # At least one of the mentioned skills should appear
-        assert any(s in skills_lower for s in ["kubernetes", "terraform", "go"]), \
+        assert any(s in skills_lower for s in ["kubernetes", "terraform", "go"]), (
             f"Expected skills not found in: {skills_lower}"
+        )
 
     def test_intake_completes_even_if_extraction_sparse(self):
         """A very short transcript still saves without forcing completion."""
@@ -1241,6 +1482,7 @@ class TestLLMExtraction:
 # 7. Onboarding flow
 # ─────────────────────────────────────────────
 
+
 class TestOnboardingFlow:
     def test_full_onboarding_sequence(self):
         """
@@ -1248,6 +1490,7 @@ class TestOnboardingFlow:
         Verifies the complete onboarding sequence works end-to-end.
         """
         import io
+
         from reportlab.pdfgen import canvas as rl_canvas
 
         # Step 1: Parse resume
@@ -1311,6 +1554,7 @@ class TestOnboardingFlow:
     def test_voice_intake_after_uploads_does_not_lose_certs(self):
         """Certificates uploaded before voice intake are still present after."""
         import io
+
         from reportlab.pdfgen import canvas as rl_canvas
 
         cid = _create_candidate("Cert Preservation")
@@ -1344,6 +1588,7 @@ class TestOnboardingFlow:
 # 8. Retry safety
 # ─────────────────────────────────────────────
 
+
 class TestRetry:
     def test_retry_with_different_transcript_succeeds(self):
         """A candidate can retry voice intake with a new transcript."""
@@ -1374,6 +1619,7 @@ class TestRetry:
 # 9. Regression: production bug — acknowledgements / embedded questions
 # ─────────────────────────────────────────────
 
+
 class TestProductionRegressions:
     """
     Regression tests derived from the production bug where:
@@ -1400,12 +1646,15 @@ class TestProductionRegressions:
         """
         cid = _create_candidate("Regression Ack Between Fragments")
         voice_notes = [
-            {"role": "assistant", "text": "What kind of projects or technologies excite you the most right now?"},
-            {"role": "user",      "text": "Projects like app development and."},
+            {
+                "role": "assistant",
+                "text": "What kind of projects or technologies excite you the most right now?",
+            },
+            {"role": "user", "text": "Projects like app development and."},
             {"role": "assistant", "text": "Thanks for that."},
-            {"role": "user",      "text": "Recru"},
+            {"role": "user", "text": "Recru"},
             {"role": "assistant", "text": "Thanks for that."},
-            {"role": "user",      "text": "Recruitment platforms."},
+            {"role": "user", "text": "Recruitment platforms."},
         ]
         transcript = (
             "Assistant: What kind of projects or technologies excite you the most right now?\n"
@@ -1418,7 +1667,11 @@ class TestProductionRegressions:
 
         r = requests.post(
             f"{API}/voice/candidate-intake/progress",
-            json={"transcript": transcript, "voice_notes": voice_notes, "candidate_id": cid},
+            json={
+                "transcript": transcript,
+                "voice_notes": voice_notes,
+                "candidate_id": cid,
+            },
             timeout=60,
         )
         assert r.status_code == 200, r.text
@@ -1431,8 +1684,11 @@ class TestProductionRegressions:
         # The question must be the real canonical question, never "Thanks for that."
         assert "Thanks for that" not in turn["question"]
         assert "Thanks for that." not in turn["question"]
-        assert "projects or technologies" in turn["question"].lower() or \
-               turn["question"] == "What kind of projects or technologies excite you the most right now?"
+        assert (
+            "projects or technologies" in turn["question"].lower()
+            or turn["question"]
+            == "What kind of projects or technologies excite you the most right now?"
+        )
 
         # All three candidate fragments must be in the combined answer
         answer = turn["answer"]
@@ -1478,7 +1734,11 @@ class TestProductionRegressions:
 
         r = requests.post(
             f"{API}/voice/candidate-intake/progress",
-            json={"transcript": transcript, "voice_notes": voice_notes, "candidate_id": cid},
+            json={
+                "transcript": transcript,
+                "voice_notes": voice_notes,
+                "candidate_id": cid,
+            },
             timeout=60,
         )
         assert r.status_code == 200, r.text
@@ -1488,10 +1748,12 @@ class TestProductionRegressions:
         # OR it may be flushed as a completed turn if the parser flushes trailing answers.
         # Either way, the question must be the canonical one, never "Interesting."
         turns = resume.get("completed_turns") or []
-        pending_q = resume.get("next_question") or ""
 
         if turns:
-            assert turns[-1]["question"] == "What kind of role would you ideally like to move into next?"
+            assert (
+                turns[-1]["question"]
+                == "What kind of role would you ideally like to move into next?"
+            )
             assert "Python" in turns[-1]["answer"] or ".NET" in turns[-1]["answer"]
         else:
             # Answer is still open — the canonical question should be the active one
@@ -1532,19 +1794,20 @@ class TestProductionRegressions:
         for phrase in ack_phrases:
             notes = [
                 {"role": "assistant", "text": phrase, "final": True},
-                {"role": "user",      "text": "I am a Python developer.", "final": True},
+                {"role": "user", "text": "I am a Python developer.", "final": True},
             ]
             completed, pending = _voice_intake_turn_pairs(notes)
             for turn in completed:
-                assert turn["question"] != phrase, \
+                assert turn["question"] != phrase, (
                     f'"{phrase}" must never be a completed_turn question'
-            assert pending != phrase, \
-                f'"{phrase}" must never be a pending_question'
+                )
+            assert pending != phrase, f'"{phrase}" must never be a pending_question'
 
 
 # ─────────────────────────────────────────────
 # 10. Production regression: dynamic VAPI questions + clarification requests
 # ─────────────────────────────────────────────
+
 
 class TestDynamicVapiTranscript:
     """
@@ -1559,9 +1822,21 @@ class TestDynamicVapiTranscript:
     # Exact production voice_notes from the bug report
     PRODUCTION_VOICE_NOTES = [
         # Q1 — dynamic question not in hardcoded flow
-        {"role": "assistant", "text": "What made you start exploring your next opportunity?", "final": True},
-        {"role": "user", "text": "Uh, present I was working as an Python developer, uh.", "final": True},
-        {"role": "user", "text": "By using the technologies Python, FastAPI, Postgres, and for.", "final": True},
+        {
+            "role": "assistant",
+            "text": "What made you start exploring your next opportunity?",
+            "final": True,
+        },
+        {
+            "role": "user",
+            "text": "Uh, present I was working as an Python developer, uh.",
+            "final": True,
+        },
+        {
+            "role": "user",
+            "text": "By using the technologies Python, FastAPI, Postgres, and for.",
+            "final": True,
+        },
         {"role": "user", "text": "And REST APIs. So.", "final": True},
         {"role": "user", "text": "I was currently looking.", "final": True},
         {"role": "user", "text": "For the opportunities, uh, as.", "final": True},
@@ -1571,15 +1846,39 @@ class TestDynamicVapiTranscript:
         {"role": "user", "text": "Java.", "final": True},
         {"role": "user", "text": "Spring Boot, and Hibernate.", "final": True},
         # Q2 — second dynamic question
-        {"role": "assistant", "text": "What would you like your next role to look like, compared with what you're doing today?", "final": True},
+        {
+            "role": "assistant",
+            "text": "What would you like your next role to look like, compared with what you're doing today?",
+            "final": True,
+        },
         {"role": "user", "text": "Yeah.", "final": True},
-        {"role": "user", "text": "I want to gain more knowledge and more skill, skillful person, uh, in Java.", "final": True},
+        {
+            "role": "user",
+            "text": "I want to gain more knowledge and more skill, skillful person, uh, in Java.",
+            "final": True,
+        },
         # Clarification sequence — must NOT increment progress
-        {"role": "assistant", "text": "That's great. Can you tell me more about the kind of team environment you're looking for?", "final": True},
+        {
+            "role": "assistant",
+            "text": "That's great. Can you tell me more about the kind of team environment you're looking for?",
+            "final": True,
+        },
         {"role": "user", "text": "Can you repeat the question?", "final": True},
-        {"role": "assistant", "text": "Sure. What kind of team or company culture are you hoping to find in your next role?", "final": True},
-        {"role": "user", "text": "Can you reframe the question? I can't get it.", "final": True},
-        {"role": "assistant", "text": "Of course. What type of work environment would make you feel most engaged and productive?", "final": True},
+        {
+            "role": "assistant",
+            "text": "Sure. What kind of team or company culture are you hoping to find in your next role?",
+            "final": True,
+        },
+        {
+            "role": "user",
+            "text": "Can you reframe the question? I can't get it.",
+            "final": True,
+        },
+        {
+            "role": "assistant",
+            "text": "Of course. What type of work environment would make you feel most engaged and productive?",
+            "final": True,
+        },
         {"role": "user", "text": "Are you there?", "final": True},
     ]
 
@@ -1587,7 +1886,9 @@ class TestDynamicVapiTranscript:
         """
         Unit test (no HTTP): exact production notes must yield progress=2.
         """
-        import sys, os
+        import os
+        import sys
+
         sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
         from server import _voice_intake_turn_pairs
 
@@ -1598,16 +1899,23 @@ class TestDynamicVapiTranscript:
 
     def test_unit_first_turn_question(self):
         """First completed turn question must be the first dynamic VAPI question."""
-        import sys, os
+        import os
+        import sys
+
         sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
         from server import _voice_intake_turn_pairs
 
         completed, _ = _voice_intake_turn_pairs(self.PRODUCTION_VOICE_NOTES)
-        assert completed[0]["question"] == "What made you start exploring your next opportunity?"
+        assert (
+            completed[0]["question"]
+            == "What made you start exploring your next opportunity?"
+        )
 
     def test_unit_first_turn_answer_contains_all_fragments(self):
         """First answer must combine all 10 candidate fragments into one string."""
-        import sys, os
+        import os
+        import sys
+
         sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
         from server import _voice_intake_turn_pairs
 
@@ -1642,10 +1950,22 @@ class TestVoiceIntakeProduction67c819b0:
 
     VOICE_NOTES = [
         {"role": "assistant", "text": Q1, "final": True},
-        {"role": "user", "text": "Do you need a car for my appointment today?", "final": True},
-        {"role": "user", "text": "See, present I was working as a Python developer.", "final": True},
+        {
+            "role": "user",
+            "text": "Do you need a car for my appointment today?",
+            "final": True,
+        },
+        {
+            "role": "user",
+            "text": "See, present I was working as a Python developer.",
+            "final": True,
+        },
         {"role": "assistant", "text": Q2, "final": True},
-        {"role": "user", "text": "See, I have more interest on Java. Technology. So I want to move. My career to Java technologies.", "final": True},
+        {
+            "role": "user",
+            "text": "See, I have more interest on Java. Technology. So I want to move. My career to Java technologies.",
+            "final": True,
+        },
         {"role": "assistant", "text": Q3, "final": True},
         {"role": "user", "text": "There is no particular. Industry.", "final": True},
     ]
@@ -1678,7 +1998,9 @@ class TestVoiceIntakeProduction67c819b0:
     }
 
     def _build_resume(self, existing_resume=None, llm_analysis=None):
-        import sys, os
+        import os
+        import sys
+
         sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
         from server import _build_voice_intake_resume_from_notes
 
@@ -1690,7 +2012,9 @@ class TestVoiceIntakeProduction67c819b0:
         )
 
     def test_A_off_topic_fragment_is_excluded(self):
-        import sys, os
+        import os
+        import sys
+
         sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
         from server import _voice_intake_turn_pairs
 
@@ -1712,28 +2036,38 @@ class TestVoiceIntakeProduction67c819b0:
         assert resume.get("next_question") in (None, "")
 
     def test_D_persisted_voice_intake_matches_returned_state(self):
-        import sys, os
+        import os
+        import sys
+
         sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
         from server import _normalize_for_frontend
 
         resume = self._build_resume()
-        profile = _normalize_for_frontend({
-            "id": self.PRODUCTION_ID,
-            "name": "Production 67c819b0",
-            "raw_data": {"voice_intake": resume},
-        })
+        profile = _normalize_for_frontend(
+            {
+                "id": self.PRODUCTION_ID,
+                "name": "Production 67c819b0",
+                "raw_data": {"voice_intake": resume},
+            }
+        )
         assert profile["voice_intake_resume"] == resume
 
     def test_E_disconnect_after_new_question_preserves_current_question(self):
-        import sys, os
+        import os
+        import sys
+
         sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
         from server import _build_voice_intake_resume_from_notes
 
         existing_resume = dict(self.EXISTING_RESUME)
         existing_resume["current_question"] = self.NEXT_QUESTION
-        existing_resume["next_question"] = "What kinds of responsibilities would you like next?"
+        existing_resume["next_question"] = (
+            "What kinds of responsibilities would you like next?"
+        )
 
-        resume = _build_voice_intake_resume_from_notes([], "", existing_resume, llm_analysis=self.LLM_ANALYSIS)
+        resume = _build_voice_intake_resume_from_notes(
+            [], "", existing_resume, llm_analysis=self.LLM_ANALYSIS
+        )
         assert resume["current_question"] == self.NEXT_QUESTION
 
     def test_F_repeated_cumulative_submission_is_idempotent(self):
@@ -1742,11 +2076,15 @@ class TestVoiceIntakeProduction67c819b0:
 
         assert second["progress"] == first["progress"]
         assert second["completed_turns"] == first["completed_turns"]
-        assert len(second.get("completed_turns") or []) == len({t["question"] for t in second.get("completed_turns") or []})
+        assert len(second.get("completed_turns") or []) == len(
+            {t["question"] for t in second.get("completed_turns") or []}
+        )
 
     def test_unit_second_turn_question(self):
         """Second completed turn question must be the second dynamic VAPI question."""
-        import sys, os
+        import os
+        import sys
+
         sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
         from server import _voice_intake_turn_pairs
 
@@ -1755,7 +2093,9 @@ class TestVoiceIntakeProduction67c819b0:
 
     def test_unit_second_turn_answer_contains_java(self):
         """Second answer must contain the candidate's Java upskilling intent."""
-        import sys, os
+        import os
+        import sys
+
         sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
         from server import _voice_intake_turn_pairs
 
@@ -1769,7 +2109,9 @@ class TestVoiceIntakeProduction67c819b0:
         'Can you repeat the question?', 'Can you reframe the question?',
         and 'Are you there?' must NOT appear in any completed answer.
         """
-        import sys, os
+        import os
+        import sys
+
         sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
         from server import _voice_intake_turn_pairs
 
@@ -1781,20 +2123,32 @@ class TestVoiceIntakeProduction67c819b0:
 
     def test_unit_status_in_progress(self):
         """Status must remain in_progress (not completed) after 2 of N questions."""
-        import sys, os
+        import os
+        import sys
+
         sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
-        from server import _voice_intake_turn_pairs, _next_voice_intake_question, VOICE_INTAKE_TOTAL_QUESTIONS
+        from server import (
+            VOICE_INTAKE_TOTAL_QUESTIONS,
+            _next_voice_intake_question,
+            _voice_intake_turn_pairs,
+        )
 
         completed, pending = _voice_intake_turn_pairs(self.PRODUCTION_VOICE_NOTES)
         next_q = _next_voice_intake_question(completed, pending)
-        status = "completed" if len(completed) >= VOICE_INTAKE_TOTAL_QUESTIONS and not next_q else "in_progress"
+        status = (
+            "completed"
+            if len(completed) >= VOICE_INTAKE_TOTAL_QUESTIONS and not next_q
+            else "in_progress"
+        )
         assert status == "in_progress"
 
     def test_unit_next_question_is_not_none(self):
         """next_question must point to the next unanswered question."""
-        import sys, os
+        import os
+        import sys
+
         sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
-        from server import _voice_intake_turn_pairs, _next_voice_intake_question
+        from server import _next_voice_intake_question, _voice_intake_turn_pairs
 
         completed, pending = _voice_intake_turn_pairs(self.PRODUCTION_VOICE_NOTES)
         next_q = _next_voice_intake_question(completed, pending)
@@ -1808,18 +2162,31 @@ class TestVoiceIntakeProduction67c819b0:
         Rule 3/4: consecutive assistant fragments that together form one question
         must be combined before question detection.
         """
-        import sys, os
+        import os
+        import sys
+
         sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
         from server import _voice_intake_turn_pairs
 
         notes = [
             {"role": "assistant", "text": "That's interesting.", "final": True},
-            {"role": "assistant", "text": "What made you start exploring your next opportunity?", "final": True},
-            {"role": "user", "text": "I was looking for a Java backend role.", "final": True},
+            {
+                "role": "assistant",
+                "text": "What made you start exploring your next opportunity?",
+                "final": True,
+            },
+            {
+                "role": "user",
+                "text": "I was looking for a Java backend role.",
+                "final": True,
+            },
         ]
         completed, _ = _voice_intake_turn_pairs(notes)
         assert len(completed) == 1
-        assert completed[0]["question"] == "What made you start exploring your next opportunity?"
+        assert (
+            completed[0]["question"]
+            == "What made you start exploring your next opportunity?"
+        )
         assert "Java" in completed[0]["answer"]
 
     def test_unit_question_rephrasing_does_not_create_new_turn(self):
@@ -1827,20 +2194,36 @@ class TestVoiceIntakeProduction67c819b0:
         Rule 12: if Eve rephrases the same question, it must NOT create a new
         completed turn. The original pending question is kept.
         """
-        import sys, os
+        import os
+        import sys
+
         sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
         from server import _voice_intake_turn_pairs
 
         notes = [
-            {"role": "assistant", "text": "What made you start exploring your next opportunity?", "final": True},
+            {
+                "role": "assistant",
+                "text": "What made you start exploring your next opportunity?",
+                "final": True,
+            },
             {"role": "user", "text": "Can you repeat the question?", "final": True},
             # Rephrasing of the same question
-            {"role": "assistant", "text": "Sure — what prompted you to start looking for a new opportunity?", "final": True},
-            {"role": "user", "text": "I wanted to move into Java backend development.", "final": True},
+            {
+                "role": "assistant",
+                "text": "Sure — what prompted you to start looking for a new opportunity?",
+                "final": True,
+            },
+            {
+                "role": "user",
+                "text": "I wanted to move into Java backend development.",
+                "final": True,
+            },
         ]
         completed, _ = _voice_intake_turn_pairs(notes)
         # Must be exactly 1 completed turn, not 2
-        assert len(completed) == 1, f"Expected 1 turn (rephrasing), got {len(completed)}: {completed}"
+        assert len(completed) == 1, (
+            f"Expected 1 turn (rephrasing), got {len(completed)}: {completed}"
+        )
         assert "Java" in completed[0]["answer"]
 
     def test_unit_acknowledgement_between_turns_does_not_clear_question(self):
@@ -1848,12 +2231,18 @@ class TestVoiceIntakeProduction67c819b0:
         Rule 9: acknowledgement-only assistant turns between candidate fragments
         must NOT clear the pending question or split the answer.
         """
-        import sys, os
+        import os
+        import sys
+
         sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
         from server import _voice_intake_turn_pairs
 
         notes = [
-            {"role": "assistant", "text": "What made you start exploring your next opportunity?", "final": True},
+            {
+                "role": "assistant",
+                "text": "What made you start exploring your next opportunity?",
+                "final": True,
+            },
             {"role": "user", "text": "I was a Python developer.", "final": True},
             {"role": "assistant", "text": "Got it.", "final": True},
             {"role": "user", "text": "And I wanted to move into Java.", "final": True},
@@ -1891,6 +2280,7 @@ class TestVoiceIntakeProduction67c819b0:
 # 11. Persistence accumulation regression (83a3bf06)
 # ─────────────────────────────────────────────
 
+
 class TestPersistenceAccumulation:
     """
     Regression for production candidate 83a3bf06-7960-4513-9fa7-aa78484c6eab.
@@ -1906,9 +2296,21 @@ class TestPersistenceAccumulation:
 
     # Exact voice_notes for Turn 1 (Java/Spring Boot/Kubernetes answer)
     TURN1_NOTES = [
-        {"role": "assistant", "text": "What made you start exploring your next opportunity?", "final": True},
-        {"role": "user", "text": "I was interested in Java programming language, so I was looking for the opportunities.", "final": True},
-        {"role": "user", "text": "Where I can work with the technology of Java.", "final": True},
+        {
+            "role": "assistant",
+            "text": "What made you start exploring your next opportunity?",
+            "final": True,
+        },
+        {
+            "role": "user",
+            "text": "I was interested in Java programming language, so I was looking for the opportunities.",
+            "final": True,
+        },
+        {
+            "role": "user",
+            "text": "Where I can work with the technology of Java.",
+            "final": True,
+        },
         {"role": "user", "text": "And Java frameworks.", "final": True},
         {"role": "user", "text": "Like.", "final": True},
         {"role": "user", "text": "Spring Boot.", "final": True},
@@ -1919,28 +2321,55 @@ class TestPersistenceAccumulation:
 
     # Cumulative voice_notes: Turn 1 + Turn 2
     TURN1_AND_2_NOTES = [
-        {"role": "assistant", "text": "What made you start exploring your next opportunity?", "final": True},
-        {"role": "user", "text": "I was interested in Java programming language, so I was looking for the opportunities.", "final": True},
-        {"role": "user", "text": "Where I can work with the technology of Java.", "final": True},
+        {
+            "role": "assistant",
+            "text": "What made you start exploring your next opportunity?",
+            "final": True,
+        },
+        {
+            "role": "user",
+            "text": "I was interested in Java programming language, so I was looking for the opportunities.",
+            "final": True,
+        },
+        {
+            "role": "user",
+            "text": "Where I can work with the technology of Java.",
+            "final": True,
+        },
         {"role": "user", "text": "And Java frameworks.", "final": True},
         {"role": "user", "text": "Like.", "final": True},
         {"role": "user", "text": "Spring Boot.", "final": True},
         {"role": "user", "text": "I.", "final": True},
         {"role": "user", "text": "It. And.", "final": True},
         {"role": "user", "text": "Kubernetes.", "final": True},
-        {"role": "assistant", "text": "What kind of role would you ideally like to move into next?", "final": True},
-        {"role": "user", "text": "As a backend developer, or Java developer.", "final": True},
+        {
+            "role": "assistant",
+            "text": "What kind of role would you ideally like to move into next?",
+            "final": True,
+        },
+        {
+            "role": "user",
+            "text": "As a backend developer, or Java developer.",
+            "final": True,
+        },
     ]
 
     def test_unit_turn1_parsed_correctly(self):
         """Turn 1 notes alone must yield 1 completed turn with Java/Spring Boot/Kubernetes answer."""
-        import sys, os
+        import os
+        import sys
+
         sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
         from server import _voice_intake_turn_pairs
 
         completed, pending = _voice_intake_turn_pairs(self.TURN1_NOTES)
-        assert len(completed) == 1, f"Expected 1 turn, got {len(completed)}: {completed}"
-        assert completed[0]["question"] == "What made you start exploring your next opportunity?"
+        assert len(completed) == 1, (
+            f"Expected 1 turn, got {len(completed)}: {completed}"
+        )
+        assert (
+            completed[0]["question"]
+            == "What made you start exploring your next opportunity?"
+        )
         answer = completed[0]["answer"]
         assert "Java" in answer
         assert "Spring Boot" in answer
@@ -1948,18 +2377,31 @@ class TestPersistenceAccumulation:
 
     def test_unit_cumulative_notes_yield_2_turns(self):
         """Cumulative notes (Turn 1 + Turn 2) must yield exactly 2 completed turns."""
-        import sys, os
+        import os
+        import sys
+
         sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
         from server import _voice_intake_turn_pairs
 
         completed, _ = _voice_intake_turn_pairs(self.TURN1_AND_2_NOTES)
-        assert len(completed) == 2, f"Expected 2 turns, got {len(completed)}: {completed}"
-        assert completed[0]["question"] == "What made you start exploring your next opportunity?"
-        assert completed[1]["question"] == "What kind of role would you ideally like to move into next?"
+        assert len(completed) == 2, (
+            f"Expected 2 turns, got {len(completed)}: {completed}"
+        )
+        assert (
+            completed[0]["question"]
+            == "What made you start exploring your next opportunity?"
+        )
+        assert (
+            completed[1]["question"]
+            == "What kind of role would you ideally like to move into next?"
+        )
         assert "Java" in completed[0]["answer"]
         assert "Spring Boot" in completed[0]["answer"]
         assert "Kubernetes" in completed[0]["answer"]
-        assert "backend developer" in completed[1]["answer"] or "Java developer" in completed[1]["answer"]
+        assert (
+            "backend developer" in completed[1]["answer"]
+            or "Java developer" in completed[1]["answer"]
+        )
 
     def test_unit_merge_preserves_turn1_when_only_turn2_notes_given(self):
         """
@@ -1967,7 +2409,9 @@ class TestPersistenceAccumulation:
         new parse), but existing_resume already has Turn 1, the merge must produce
         both turns (progress=2).
         """
-        import sys, os
+        import os
+        import sys
+
         sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
         from server import _build_voice_intake_resume_from_notes
 
@@ -1988,38 +2432,64 @@ class TestPersistenceAccumulation:
 
         # Second call: only Turn 2 notes (incremental, not cumulative)
         turn2_only_notes = [
-            {"role": "assistant", "text": "What kind of role would you ideally like to move into next?", "final": True},
-            {"role": "user", "text": "As a backend developer, or Java developer.", "final": True},
+            {
+                "role": "assistant",
+                "text": "What kind of role would you ideally like to move into next?",
+                "final": True,
+            },
+            {
+                "role": "user",
+                "text": "As a backend developer, or Java developer.",
+                "final": True,
+            },
         ]
 
-        resume = _build_voice_intake_resume_from_notes(turn2_only_notes, "", existing_resume)
+        resume = _build_voice_intake_resume_from_notes(
+            turn2_only_notes, "", existing_resume
+        )
         assert resume["progress"] == 2, f"Expected progress=2, got {resume['progress']}"
         turns = resume.get("completed_turns") or []
-        assert len(turns) == 2, f"Expected 2 turns after merge, got {len(turns)}: {turns}"
-        assert turns[0]["question"] == "What made you start exploring your next opportunity?"
-        assert turns[1]["question"] == "What kind of role would you ideally like to move into next?"
+        assert len(turns) == 2, (
+            f"Expected 2 turns after merge, got {len(turns)}: {turns}"
+        )
+        assert (
+            turns[0]["question"]
+            == "What made you start exploring your next opportunity?"
+        )
+        assert (
+            turns[1]["question"]
+            == "What kind of role would you ideally like to move into next?"
+        )
         assert resume["status"] == "in_progress"
 
     def test_unit_idempotent_same_notes_no_duplicate(self):
         """
         Calling with the same cumulative notes twice must not duplicate turns.
         """
-        import sys, os
+        import os
+        import sys
+
         sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
         from server import _build_voice_intake_resume_from_notes
 
         resume1 = _build_voice_intake_resume_from_notes(self.TURN1_AND_2_NOTES, "")
         # Second call with same notes and resume1 as existing
-        resume2 = _build_voice_intake_resume_from_notes(self.TURN1_AND_2_NOTES, "", resume1)
+        resume2 = _build_voice_intake_resume_from_notes(
+            self.TURN1_AND_2_NOTES, "", resume1
+        )
         turns = resume2.get("completed_turns") or []
-        assert len(turns) == 2, f"Idempotency failed: expected 2 turns, got {len(turns)}: {turns}"
+        assert len(turns) == 2, (
+            f"Idempotency failed: expected 2 turns, got {len(turns)}: {turns}"
+        )
 
     def test_unit_llm_state_preserved_on_retry_with_empty_llm_response(self):
         """
         If the LLM returns empty on a retry, previously persisted next_question /
         missing_topics / known_topics must not be wiped.
         """
-        import sys, os
+        import os
+        import sys
+
         sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
         from server import _build_voice_intake_resume_from_notes
 
@@ -2027,7 +2497,10 @@ class TestPersistenceAccumulation:
             "status": "in_progress",
             "progress": 1,
             "completed_turns": [
-                {"question": "What made you start exploring your next opportunity?", "answer": "Java and Spring Boot."}
+                {
+                    "question": "What made you start exploring your next opportunity?",
+                    "answer": "Java and Spring Boot.",
+                }
             ],
             "next_question": "What kind of role would you ideally like to move into next?",
             "current_question": "What kind of role would you ideally like to move into next?",
@@ -2039,7 +2512,10 @@ class TestPersistenceAccumulation:
         resume = _build_voice_intake_resume_from_notes(
             self.TURN1_NOTES, "", existing_resume, llm_analysis={}
         )
-        assert resume.get("next_question") == "What kind of role would you ideally like to move into next?"
+        assert (
+            resume.get("next_question")
+            == "What kind of role would you ideally like to move into next?"
+        )
         assert resume.get("missing_topics") == ["target_role"]
         assert resume.get("known_topics") == ["background_experience"]
 
@@ -2053,19 +2529,30 @@ class TestPersistenceAccumulation:
         # First call: Turn 1 only
         r1 = requests.post(
             f"{API}/voice/candidate-intake/progress",
-            json={"transcript": "", "voice_notes": self.TURN1_NOTES, "candidate_id": cid},
+            json={
+                "transcript": "",
+                "voice_notes": self.TURN1_NOTES,
+                "candidate_id": cid,
+            },
             timeout=60,
         )
         assert r1.status_code == 200, r1.text
         resume1 = r1.json()["voice_intake_resume"]
         assert resume1["progress"] == 1
         assert len(resume1.get("completed_turns") or []) == 1
-        assert resume1["completed_turns"][0]["question"] == "What made you start exploring your next opportunity?"
+        assert (
+            resume1["completed_turns"][0]["question"]
+            == "What made you start exploring your next opportunity?"
+        )
 
         # Second call: cumulative Turn 1 + Turn 2
         r2 = requests.post(
             f"{API}/voice/candidate-intake/progress",
-            json={"transcript": "", "voice_notes": self.TURN1_AND_2_NOTES, "candidate_id": cid},
+            json={
+                "transcript": "",
+                "voice_notes": self.TURN1_AND_2_NOTES,
+                "candidate_id": cid,
+            },
             timeout=60,
         )
         assert r2.status_code == 200, r2.text
@@ -2074,12 +2561,21 @@ class TestPersistenceAccumulation:
         assert resume2["progress"] == 2
         turns = resume2.get("completed_turns") or []
         assert len(turns) == 2, f"Expected 2 turns, got {len(turns)}: {turns}"
-        assert turns[0]["question"] == "What made you start exploring your next opportunity?"
-        assert turns[1]["question"] == "What kind of role would you ideally like to move into next?"
+        assert (
+            turns[0]["question"]
+            == "What made you start exploring your next opportunity?"
+        )
+        assert (
+            turns[1]["question"]
+            == "What kind of role would you ideally like to move into next?"
+        )
         assert "Java" in turns[0]["answer"]
         assert "Spring Boot" in turns[0]["answer"]
         assert "Kubernetes" in turns[0]["answer"]
-        assert "backend developer" in turns[1]["answer"] or "Java developer" in turns[1]["answer"]
+        assert (
+            "backend developer" in turns[1]["answer"]
+            or "Java developer" in turns[1]["answer"]
+        )
         assert resume2.get("next_question") is not None
         answered_qs = {t["question"] for t in turns}
         assert resume2["next_question"] not in answered_qs
@@ -2093,20 +2589,30 @@ class TestPersistenceAccumulation:
 
         r1 = requests.post(
             f"{API}/voice/candidate-intake/progress",
-            json={"transcript": "", "voice_notes": self.TURN1_AND_2_NOTES, "candidate_id": cid},
+            json={
+                "transcript": "",
+                "voice_notes": self.TURN1_AND_2_NOTES,
+                "candidate_id": cid,
+            },
             timeout=60,
         )
         assert r1.status_code == 200, r1.text
 
         r2 = requests.post(
             f"{API}/voice/candidate-intake/progress",
-            json={"transcript": "", "voice_notes": self.TURN1_AND_2_NOTES, "candidate_id": cid},
+            json={
+                "transcript": "",
+                "voice_notes": self.TURN1_AND_2_NOTES,
+                "candidate_id": cid,
+            },
             timeout=60,
         )
         assert r2.status_code == 200, r2.text
         resume = r2.json()["voice_intake_resume"]
         turns = resume.get("completed_turns") or []
-        assert len(turns) == 2, f"Idempotency failed: expected 2 turns, got {len(turns)}: {turns}"
+        assert len(turns) == 2, (
+            f"Idempotency failed: expected 2 turns, got {len(turns)}: {turns}"
+        )
         assert resume["progress"] == 2
 
     def test_integration_exact_production_transcript_accumulates(self):
@@ -2120,7 +2626,11 @@ class TestPersistenceAccumulation:
 
         r1 = requests.post(
             f"{API}/voice/candidate-intake/progress",
-            json={"transcript": "", "voice_notes": self.TURN1_NOTES, "candidate_id": cid},
+            json={
+                "transcript": "",
+                "voice_notes": self.TURN1_NOTES,
+                "candidate_id": cid,
+            },
             timeout=60,
         )
         assert r1.status_code == 200, r1.text
@@ -2131,7 +2641,11 @@ class TestPersistenceAccumulation:
 
         r2 = requests.post(
             f"{API}/voice/candidate-intake/progress",
-            json={"transcript": "", "voice_notes": self.TURN1_AND_2_NOTES, "candidate_id": cid},
+            json={
+                "transcript": "",
+                "voice_notes": self.TURN1_AND_2_NOTES,
+                "candidate_id": cid,
+            },
             timeout=60,
         )
         assert r2.status_code == 200, r2.text
@@ -2140,8 +2654,14 @@ class TestPersistenceAccumulation:
         assert resume2["status"] == "in_progress"
         assert resume2["progress"] == 2
         assert len(turns) == 2, f"Expected 2 turns, got {len(turns)}: {turns}"
-        assert turns[0]["question"] == "What made you start exploring your next opportunity?"
-        assert turns[1]["question"] == "What kind of role would you ideally like to move into next?"
+        assert (
+            turns[0]["question"]
+            == "What made you start exploring your next opportunity?"
+        )
+        assert (
+            turns[1]["question"]
+            == "What kind of role would you ideally like to move into next?"
+        )
         assert "Java" in turns[0]["answer"]
         assert "Spring Boot" in turns[0]["answer"]
         assert "Kubernetes" in turns[0]["answer"]
@@ -2153,7 +2673,11 @@ class TestPersistenceAccumulation:
 
         r3 = requests.post(
             f"{API}/voice/candidate-intake/progress",
-            json={"transcript": "", "voice_notes": self.TURN1_AND_2_NOTES, "candidate_id": cid},
+            json={
+                "transcript": "",
+                "voice_notes": self.TURN1_AND_2_NOTES,
+                "candidate_id": cid,
+            },
             timeout=60,
         )
         assert r3.status_code == 200, r3.text
@@ -2168,6 +2692,7 @@ class TestPersistenceAccumulation:
 # 12. New architecture regression tests (A–J)
 # ─────────────────────────────────────────────
 
+
 class TestNewArchitectureRegressions:
     """
     Regression tests for the LLM-driven Voice Intake architecture.
@@ -2181,12 +2706,18 @@ class TestNewArchitectureRegressions:
         A. Candidate answers one question with 7+ transcript fragments.
         Expected: one completed answer, progress=1, status=in_progress.
         """
-        import sys, os
+        import os
+        import sys
+
         sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
         from server import _voice_intake_turn_pairs
 
         notes = [
-            {"role": "assistant", "text": "What made you start exploring your next opportunity?", "final": True},
+            {
+                "role": "assistant",
+                "text": "What made you start exploring your next opportunity?",
+                "final": True,
+            },
             {"role": "user", "text": "I worked as a Python developer.", "final": True},
             {"role": "user", "text": "Using FastAPI.", "final": True},
             {"role": "user", "text": "Postgres.", "final": True},
@@ -2197,7 +2728,10 @@ class TestNewArchitectureRegressions:
         ]
         completed, pending = _voice_intake_turn_pairs(notes)
         assert len(completed) == 1, f"Expected 1 completed turn, got {len(completed)}"
-        assert completed[0]["question"] == "What made you start exploring your next opportunity?"
+        assert (
+            completed[0]["question"]
+            == "What made you start exploring your next opportunity?"
+        )
         answer = completed[0]["answer"]
         assert "Python" in answer
         assert "FastAPI" in answer
@@ -2221,44 +2755,73 @@ class TestVoiceIntakeStatePersistenceFix:
     PRODUCTION_ID = "785790c6-b21e-486a-8e1f-f65936d7f621"
 
     ANSWERED_TECH_NOTES = [
-        {"role": "assistant", "text": "What made you start exploring your next opportunity?", "final": True},
-        {"role": "user", "text": "I was more interested on Java technology...", "final": True},
+        {
+            "role": "assistant",
+            "text": "What made you start exploring your next opportunity?",
+            "final": True,
+        },
+        {
+            "role": "user",
+            "text": "I was more interested on Java technology...",
+            "final": True,
+        },
         {"role": "user", "text": "Requires the technologies of.", "final": True},
         {"role": "user", "text": "Spring boot.", "final": True},
         {"role": "user", "text": "And Hibernate.", "final": True},
-        {"role": "assistant", "text": "Which Java technologies or frameworks do you enjoy working with the most?", "final": True},
+        {
+            "role": "assistant",
+            "text": "Which Java technologies or frameworks do you enjoy working with the most?",
+            "final": True,
+        },
         {"role": "user", "text": "Spring boot. And Hibernate.", "final": True},
     ]
 
     PROJECT_QUESTION_FRAGMENTS = [
-        {"role": "assistant", "text": "Nice choices. Um, what kind of projects have you worked on, uh.", "final": True},
+        {
+            "role": "assistant",
+            "text": "Nice choices. Um, what kind of projects have you worked on, uh.",
+            "final": True,
+        },
         {"role": "assistant", "text": "Using.", "final": True},
         {"role": "assistant", "text": "Spring Boot and Hibernate?", "final": True},
     ]
 
     def test_A_same_cumulative_voice_notes_twice_is_idempotent(self):
-        import sys, os
+        import os
+        import sys
+
         sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
         from server import _build_voice_intake_resume_from_notes
 
         first = _build_voice_intake_resume_from_notes(self.ANSWERED_TECH_NOTES, "")
-        second = _build_voice_intake_resume_from_notes(self.ANSWERED_TECH_NOTES, "", first)
+        second = _build_voice_intake_resume_from_notes(
+            self.ANSWERED_TECH_NOTES, "", first
+        )
 
         assert second["progress"] == first["progress"]
         assert second["completed_turns"] == first["completed_turns"]
-        assert len(second.get("completed_turns") or []) == len({t["question"] for t in second.get("completed_turns") or []})
+        assert len(second.get("completed_turns") or []) == len(
+            {t["question"] for t in second.get("completed_turns") or []}
+        )
 
     def test_B_multi_fragment_assistant_question_combines_into_one_question(self):
-        import sys, os
+        import os
+        import sys
+
         sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
         from server import _voice_intake_turn_pairs
 
         completed, pending = _voice_intake_turn_pairs(self.PROJECT_QUESTION_FRAGMENTS)
         assert completed == []
-        assert pending == "What kind of projects have you worked on using Spring Boot and Hibernate?"
+        assert (
+            pending
+            == "What kind of projects have you worked on using Spring Boot and Hibernate?"
+        )
 
     def test_C_answered_question_is_removed_from_current_question(self):
-        import sys, os
+        import os
+        import sys
+
         sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
         from server import _build_voice_intake_resume_from_notes
 
@@ -2286,12 +2849,20 @@ class TestVoiceIntakeStatePersistenceFix:
             "",
             existing_resume,
         )
-        assert resume["current_question"] == "What kind of projects have you worked on using Spring Boot and Hibernate?"
+        assert (
+            resume["current_question"]
+            == "What kind of projects have you worked on using Spring Boot and Hibernate?"
+        )
         assert resume.get("next_question") in (None, "")
-        assert resume["completed_turns"][-1]["question"] == "Which Java technologies or frameworks do you enjoy working with the most?"
+        assert (
+            resume["completed_turns"][-1]["question"]
+            == "Which Java technologies or frameworks do you enjoy working with the most?"
+        )
 
     def test_D_new_unanswered_question_becomes_current_question(self):
-        import sys, os
+        import os
+        import sys
+
         sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
         from server import _build_voice_intake_resume_from_notes
 
@@ -2320,11 +2891,16 @@ class TestVoiceIntakeStatePersistenceFix:
             existing_resume,
         )
         assert resume["status"] == "in_progress"
-        assert resume["current_question"] == "What kind of projects have you worked on using Spring Boot and Hibernate?"
+        assert (
+            resume["current_question"]
+            == "What kind of projects have you worked on using Spring Boot and Hibernate?"
+        )
         assert resume.get("has_open_question") is True
 
     def test_E_api_and_persisted_state_share_identical_question_state(self):
-        import sys, os
+        import os
+        import sys
+
         sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
         from server import _build_voice_intake_resume_from_notes
 
@@ -2357,7 +2933,9 @@ class TestVoiceIntakeStatePersistenceFix:
         assert persisted_state.get("next_question") == resume.get("next_question")
 
     def test_F_disconnect_after_project_question_resumes_with_same_question(self):
-        import sys, os
+        import os
+        import sys
+
         sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
         from server import _build_voice_intake_resume_from_notes
 
@@ -2382,7 +2960,10 @@ class TestVoiceIntakeStatePersistenceFix:
 
         resume = _build_voice_intake_resume_from_notes([], "", existing_resume)
         assert resume["status"] == "in_progress"
-        assert resume["current_question"] == "What kind of projects have you worked on using Spring Boot and Hibernate?"
+        assert (
+            resume["current_question"]
+            == "What kind of projects have you worked on using Spring Boot and Hibernate?"
+        )
         assert resume.get("next_question") in (None, "")
 
     # ── B: Multiple questions, no duplicates ───────────────────────────────
@@ -2392,16 +2973,34 @@ class TestVoiceIntakeStatePersistenceFix:
         B. Candidate answers multiple questions.
         Expected: each real information request represented once, no duplicates.
         """
-        import sys, os
+        import os
+        import sys
+
         sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
         from server import _voice_intake_turn_pairs
 
         notes = [
-            {"role": "assistant", "text": "Tell me about your background?", "final": True},
-            {"role": "user", "text": "I'm a Java backend developer with 5 years experience.", "final": True},
-            {"role": "assistant", "text": "What technologies do you use?", "final": True},
+            {
+                "role": "assistant",
+                "text": "Tell me about your background?",
+                "final": True,
+            },
+            {
+                "role": "user",
+                "text": "I'm a Java backend developer with 5 years experience.",
+                "final": True,
+            },
+            {
+                "role": "assistant",
+                "text": "What technologies do you use?",
+                "final": True,
+            },
             {"role": "user", "text": "Spring Boot, Hibernate, Kafka.", "final": True},
-            {"role": "assistant", "text": "What kind of role are you targeting?", "final": True},
+            {
+                "role": "assistant",
+                "text": "What kind of role are you targeting?",
+                "final": True,
+            },
             {"role": "user", "text": "Senior backend engineer roles.", "final": True},
         ]
         completed, _ = _voice_intake_turn_pairs(notes)
@@ -2416,12 +3015,18 @@ class TestVoiceIntakeStatePersistenceFix:
         C. Candidate says 'Can you repeat the question?'
         Expected: no progress increase.
         """
-        import sys, os
+        import os
+        import sys
+
         sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
         from server import _voice_intake_turn_pairs
 
         notes = [
-            {"role": "assistant", "text": "What kind of role are you targeting?", "final": True},
+            {
+                "role": "assistant",
+                "text": "What kind of role are you targeting?",
+                "final": True,
+            },
             {"role": "user", "text": "Can you repeat the question?", "final": True},
         ]
         completed, pending = _voice_intake_turn_pairs(notes)
@@ -2435,18 +3040,34 @@ class TestVoiceIntakeStatePersistenceFix:
         D. Eve rephrases the same question.
         Expected: same question/state, no duplicate progress.
         """
-        import sys, os
+        import os
+        import sys
+
         sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
         from server import _voice_intake_turn_pairs
 
         notes = [
-            {"role": "assistant", "text": "What made you start exploring your next opportunity?", "final": True},
+            {
+                "role": "assistant",
+                "text": "What made you start exploring your next opportunity?",
+                "final": True,
+            },
             {"role": "user", "text": "Can you repeat the question?", "final": True},
-            {"role": "assistant", "text": "Sure — what prompted you to start looking for a new opportunity?", "final": True},
-            {"role": "user", "text": "I wanted to move into Java backend development.", "final": True},
+            {
+                "role": "assistant",
+                "text": "Sure — what prompted you to start looking for a new opportunity?",
+                "final": True,
+            },
+            {
+                "role": "user",
+                "text": "I wanted to move into Java backend development.",
+                "final": True,
+            },
         ]
         completed, _ = _voice_intake_turn_pairs(notes)
-        assert len(completed) == 1, f"Expected 1 turn (rephrasing), got {len(completed)}"
+        assert len(completed) == 1, (
+            f"Expected 1 turn (rephrasing), got {len(completed)}"
+        )
         assert "Java" in completed[0]["answer"]
 
     # ── E: Disconnect during answer — partial answer persisted ─────────────
@@ -2456,13 +3077,23 @@ class TestVoiceIntakeStatePersistenceFix:
         E. Candidate disconnects during an answer.
         Expected: current question and partial answer persisted.
         """
-        import sys, os
+        import os
+        import sys
+
         sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
         from server import _voice_intake_turn_pairs
 
         notes = [
-            {"role": "assistant", "text": "What projects have you worked on recently?", "final": True},
-            {"role": "user", "text": "I worked on an AI automation project.", "final": True},
+            {
+                "role": "assistant",
+                "text": "What projects have you worked on recently?",
+                "final": True,
+            },
+            {
+                "role": "user",
+                "text": "I worked on an AI automation project.",
+                "final": True,
+            },
             {"role": "user", "text": "I used Python.", "final": True},
             # candidate disconnects here — no closing assistant turn
         ]
@@ -2479,7 +3110,9 @@ class TestVoiceIntakeStatePersistenceFix:
         F. Candidate returns after disconnect.
         Expected: resumes from the unfinished question, does not restart.
         """
-        import sys, os
+        import os
+        import sys
+
         sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
         from server import _build_voice_intake_resume_from_notes
 
@@ -2488,8 +3121,14 @@ class TestVoiceIntakeStatePersistenceFix:
             "status": "in_progress",
             "progress": 2,
             "completed_turns": [
-                {"question": "Tell me about your background?", "answer": "I'm a Python developer."},
-                {"question": "What are your key skills?", "answer": "Python, FastAPI, PostgreSQL."},
+                {
+                    "question": "Tell me about your background?",
+                    "answer": "I'm a Python developer.",
+                },
+                {
+                    "question": "What are your key skills?",
+                    "answer": "Python, FastAPI, PostgreSQL.",
+                },
             ],
             "current_question": "What projects have you worked on recently?",
             "next_question": "What projects have you worked on recently?",
@@ -2513,9 +3152,11 @@ class TestVoiceIntakeStatePersistenceFix:
         The VAPI context must include known profile data so VAPI/LLM can skip it.
         """
         # This is a structural test — verify the VAPI context builder includes profile data
-        import sys, os
+        import os
+        import sys
+
         sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
-        from server import VOICE_INTAKE_TOPICS, VOICE_INTAKE_ANALYZE_SYSTEM
+        from server import VOICE_INTAKE_ANALYZE_SYSTEM, VOICE_INTAKE_TOPICS
 
         # The system prompt must instruct LLM not to re-ask known info
         assert "already present in the candidate profile" in VOICE_INTAKE_ANALYZE_SYSTEM
@@ -2531,7 +3172,9 @@ class TestVoiceIntakeStatePersistenceFix:
         H. Candidate introduces new skills.
         Expected: skills merged into profile.
         """
-        import sys, os
+        import os
+        import sys
+
         sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
         from server import _merge_voice_into_profile
 
@@ -2555,7 +3198,9 @@ class TestVoiceIntakeStatePersistenceFix:
         I. Candidate says they want Java backend roles using Spring Boot/Hibernate.
         Expected: role preference stored in profile/bio, no company names as role preference.
         """
-        import sys, os
+        import os
+        import sys
+
         sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
         from server import _merge_voice_into_profile
 
@@ -2571,7 +3216,7 @@ class TestVoiceIntakeStatePersistenceFix:
         raw = merged.get("raw_data") or {}
         assert "Java Backend Developer" in (raw.get("preferred_roles") or [])
         # No company names in preferred_roles
-        for role in (raw.get("preferred_roles") or []):
+        for role in raw.get("preferred_roles") or []:
             assert role != "Google"
             assert role != "Amazon"
 
@@ -2583,18 +3228,40 @@ class TestVoiceIntakeStatePersistenceFix:
         Must recognize the candidate's substantive answer and associate it with
         the current/next intake information request.
         """
-        import sys, os
+        import os
+        import sys
+
         sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
         from server import _voice_intake_turn_pairs
 
         # The production transcript: VAPI asks a dynamic question, candidate gives
         # a multi-fragment substantive answer
         notes = [
-            {"role": "assistant", "text": "Tell me about your background.", "final": True},
-            {"role": "user", "text": "I have 2 years of experience as a software engineer at Viral Bug.", "final": True},
-            {"role": "user", "text": "I was working with Python, FastAPI, Postgres and REST APIs.", "final": True},
-            {"role": "user", "text": "I'm looking for new opportunities as a backend developer.", "final": True},
-            {"role": "user", "text": "Java, OOPS, Hibernate, Kubernetes and Spring Boot.", "final": True},
+            {
+                "role": "assistant",
+                "text": "Tell me about your background.",
+                "final": True,
+            },
+            {
+                "role": "user",
+                "text": "I have 2 years of experience as a software engineer at Viral Bug.",
+                "final": True,
+            },
+            {
+                "role": "user",
+                "text": "I was working with Python, FastAPI, Postgres and REST APIs.",
+                "final": True,
+            },
+            {
+                "role": "user",
+                "text": "I'm looking for new opportunities as a backend developer.",
+                "final": True,
+            },
+            {
+                "role": "user",
+                "text": "Java, OOPS, Hibernate, Kubernetes and Spring Boot.",
+                "final": True,
+            },
         ]
         completed, pending = _voice_intake_turn_pairs(notes)
 
@@ -2609,6 +3276,8 @@ class TestVoiceIntakeStatePersistenceFix:
         assert "backend developer" in answer
         assert "Java" in answer
         assert "Spring Boot" in answer
+
+
 class TestExactProductionCumulativeReconstruction:
     """
     Regression coverage for the exact production-style cumulative transcript
@@ -2626,14 +3295,26 @@ class TestExactProductionCumulativeReconstruction:
             "text": "Cool. Let's do it together. I can already see your recent experience as seeking a challenging career where I can utilize my potential and skills. What made you start exploring your next opportunity?",
             "final": True,
         },
-        {"role": "user", "text": "Currently I was working as a Python developer.", "final": True},
-        {"role": "user", "text": "I was looking for backend developer roles.", "final": True},
+        {
+            "role": "user",
+            "text": "Currently I was working as a Python developer.",
+            "final": True,
+        },
+        {
+            "role": "user",
+            "text": "I was looking for backend developer roles.",
+            "final": True,
+        },
         {
             "role": "assistant",
             "text": "What would make a backend developer role with Java really good fit for you compared to your current Python developer role?",
             "final": True,
         },
-        {"role": "user", "text": "See, I want to explore jobs related to Java.", "final": True},
+        {
+            "role": "user",
+            "text": "See, I want to explore jobs related to Java.",
+            "final": True,
+        },
         {
             "role": "assistant",
             "text": "I see are there specific kinds of projects or industries you'd like to work in with Java Backend development?",
@@ -2643,16 +3324,24 @@ class TestExactProductionCumulativeReconstruction:
     ]
 
     ANSWERED_NOTES = CUMULATIVE_NOTES + [
-        {"role": "user", "text": "I would like to work on Java backend projects in product companies.", "final": True},
+        {
+            "role": "user",
+            "text": "I would like to work on Java backend projects in product companies.",
+            "final": True,
+        },
         {"role": "assistant", "text": Q4, "final": True},
     ]
 
     def _build_resume(self, notes=None, existing_resume=None):
-        import sys, os
+        import os
+        import sys
+
         sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
         from server import _build_voice_intake_resume_from_notes
 
-        return _build_voice_intake_resume_from_notes(notes or self.CUMULATIVE_NOTES, "", existing_resume)
+        return _build_voice_intake_resume_from_notes(
+            notes or self.CUMULATIVE_NOTES, "", existing_resume
+        )
 
     def test_A_same_cumulative_voice_notes_twice_is_idempotent(self):
         first = self._build_resume()
@@ -2660,13 +3349,18 @@ class TestExactProductionCumulativeReconstruction:
 
         assert second["progress"] == first["progress"]
         assert second["completed_turns"] == first["completed_turns"]
-        assert len(second.get("completed_turns") or []) == len({t["question"] for t in second.get("completed_turns") or []})
+        assert len(second.get("completed_turns") or []) == len(
+            {t["question"] for t in second.get("completed_turns") or []}
+        )
 
     def test_B_q1_question_is_isolated_from_contextual_statement(self):
         resume = self._build_resume()
         turns = resume.get("completed_turns") or []
         assert turns[0]["question"] == self.Q1
-        assert "where i can utilize my potential and skills" not in turns[0]["question"].lower()
+        assert (
+            "where i can utilize my potential and skills"
+            not in turns[0]["question"].lower()
+        )
 
     def test_C_q1_answer_appears_exactly_once(self):
         first = self._build_resume()
@@ -2686,7 +3380,9 @@ class TestExactProductionCumulativeReconstruction:
     def test_E_current_unanswered_question_remains_current_question(self):
         resume = self._build_resume()
         assert resume["current_question"] == self.Q3
-        assert resume["current_question"] not in [turn["question"] for turn in resume.get("completed_turns") or []]
+        assert resume["current_question"] not in [
+            turn["question"] for turn in resume.get("completed_turns") or []
+        ]
 
     def test_F_answering_current_question_moves_to_next_question(self):
         resume = self._build_resume(self.ANSWERED_NOTES)
@@ -2705,7 +3401,9 @@ class TestExactProductionCumulativeReconstruction:
         assert resumed["status"] == "in_progress"
 
     def test_H_final_answer_completes_resume_and_clears_open_state(self):
-        import sys, os
+        import os
+        import sys
+
         sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
         from server import _build_voice_intake_resume_from_notes
 
@@ -2714,15 +3412,35 @@ class TestExactProductionCumulativeReconstruction:
             "status": "in_progress",
             "progress": 5,
             "completed_turns": [
-                {"question": self.Q1, "answer": "I was looking for a stronger backend role."},
-                {"question": self.Q2, "answer": "I wanted a backend developer role with Java."},
-                {"question": self.Q3, "answer": "I'd like to focus on backend projects."},
-                {"question": "What kind of team or work environment helps you do your best work in your next role?", "answer": "A collaborative product team."},
-                {"question": "What made you start exploring your next opportunity?", "answer": "I wanted more ownership."},
+                {
+                    "question": self.Q1,
+                    "answer": "I was looking for a stronger backend role.",
+                },
+                {
+                    "question": self.Q2,
+                    "answer": "I wanted a backend developer role with Java.",
+                },
+                {
+                    "question": self.Q3,
+                    "answer": "I'd like to focus on backend projects.",
+                },
+                {
+                    "question": "What kind of team or work environment helps you do your best work in your next role?",
+                    "answer": "A collaborative product team.",
+                },
+                {
+                    "question": "What made you start exploring your next opportunity?",
+                    "answer": "I wanted more ownership.",
+                },
             ],
             "current_question": final_question,
             "missing_topics": ["responsibilities_projects"],
-            "known_topics": ["background_experience", "target_role", "career_preferences", "availability_location"],
+            "known_topics": [
+                "background_experience",
+                "target_role",
+                "career_preferences",
+                "availability_location",
+            ],
         }
         notes = [
             {"role": "assistant", "text": final_question, "final": True},
@@ -2737,10 +3455,18 @@ class TestExactProductionCumulativeReconstruction:
             "current_question_answered": True,
             "next_question": None,
             "missing_topics": [],
-            "known_topics": ["background_experience", "target_role", "career_preferences", "availability_location", "responsibilities_projects"],
+            "known_topics": [
+                "background_experience",
+                "target_role",
+                "career_preferences",
+                "availability_location",
+                "responsibilities_projects",
+            ],
         }
 
-        resume = _build_voice_intake_resume_from_notes(notes, "", existing_resume, llm_analysis=llm_analysis)
+        resume = _build_voice_intake_resume_from_notes(
+            notes, "", existing_resume, llm_analysis=llm_analysis
+        )
 
         assert resume["status"] == "completed"
         assert resume["progress"] == 6
@@ -2763,21 +3489,43 @@ class TestExactProductionGreetingLeakRegression:
     Q3 = "Besides technology, are there particular responsibilities or work environments you prefer in your next role?"
 
     PRODUCTION_NOTES = [
-        {"role": "assistant", "text": "Hi Suram, I'm Eve. How are you doing today?", "final": True},
+        {
+            "role": "assistant",
+            "text": "Hi Suram, I'm Eve. How are you doing today?",
+            "final": True,
+        },
         {"role": "user", "text": "Doing good. What about you?", "final": True},
         {"role": "assistant", "text": "Great. Are you ready?", "final": True},
         {"role": "user", "text": "Yes, I'm ready.", "final": True},
         {"role": "assistant", "text": Q1, "final": True},
-        {"role": "user", "text": "I'm a Python backend developer with experience in Java and Spring Boot.", "final": True},
-        {"role": "user", "text": "I've worked with Hibernate and Kubernetes on backend services.", "final": True},
+        {
+            "role": "user",
+            "text": "I'm a Python backend developer with experience in Java and Spring Boot.",
+            "final": True,
+        },
+        {
+            "role": "user",
+            "text": "I've worked with Hibernate and Kubernetes on backend services.",
+            "final": True,
+        },
         {"role": "assistant", "text": Q2, "final": True},
-        {"role": "user", "text": "I want my next role to keep me growing in Java backend work.", "final": True},
-        {"role": "user", "text": "I am looking for a role where I can build useful backend systems.", "final": True},
+        {
+            "role": "user",
+            "text": "I want my next role to keep me growing in Java backend work.",
+            "final": True,
+        },
+        {
+            "role": "user",
+            "text": "I am looking for a role where I can build useful backend systems.",
+            "final": True,
+        },
         {"role": "assistant", "text": Q3, "final": True},
     ]
 
     def test_unit_progress_equals_2_and_setup_turn_is_excluded(self):
-        import sys, os
+        import os
+        import sys
+
         sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
         from server import _build_voice_intake_resume_from_notes
 
@@ -2809,8 +3557,12 @@ class TestExactProductionGreetingLeakRegression:
 
 
 class TestChatProfileUpdatePersistenceRegression:
-    def test_role_preference_and_skills_extract_and_persist_idempotently(self, monkeypatch):
-        import sys, os
+    def test_role_preference_and_skills_extract_and_persist_idempotently(
+        self, monkeypatch
+    ):
+        import os
+        import sys
+
         sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
         import server
 
@@ -2865,15 +3617,21 @@ class TestChatProfileUpdatePersistenceRegression:
                     if "skills" in params:
                         state["candidate"]["skills"] = json.loads(params["skills"])
                     if "work_experience" in params:
-                        state["candidate"]["work_experience"] = json.loads(params["work_experience"])
+                        state["candidate"]["work_experience"] = json.loads(
+                            params["work_experience"]
+                        )
                     if "education" in params:
-                        state["candidate"]["education"] = json.loads(params["education"])
+                        state["candidate"]["education"] = json.loads(
+                            params["education"]
+                        )
                     if "current_role" in params:
                         state["candidate"]["current_role"] = params["current_role"]
                     if "bio" in params:
                         state["candidate"]["summary"] = params["bio"]
                     if "experience_years" in params:
-                        state["candidate"]["experience_years"] = params["experience_years"]
+                        state["candidate"]["experience_years"] = params[
+                            "experience_years"
+                        ]
                     if "location" in params:
                         state["candidate"]["location"] = params["location"]
                     if "raw_data" in params:
@@ -2882,7 +3640,9 @@ class TestChatProfileUpdatePersistenceRegression:
                         state["candidate"]["raw_data"] = json.loads(params["rd"])
                     if "voice_intake" in params:
                         state["candidate"].setdefault("raw_data", {})
-                        state["candidate"]["raw_data"]["voice_intake"] = json.loads(params["voice_intake"])
+                        state["candidate"]["raw_data"]["voice_intake"] = json.loads(
+                            params["voice_intake"]
+                        )
                     return FakeResult()
                 if "INSERT INTO candidate_preferences" in sql:
                     state["prefs"] = {
@@ -2893,9 +3653,15 @@ class TestChatProfileUpdatePersistenceRegression:
                     return FakeResult()
                 if "UPDATE candidate_preferences SET" in sql:
                     if state["prefs"] is None:
-                        state["prefs"] = {"candidate_id": params["cid"], "preferred_roles": [], "notice_period": ""}
+                        state["prefs"] = {
+                            "candidate_id": params["cid"],
+                            "preferred_roles": [],
+                            "notice_period": "",
+                        }
                     if "preferred_roles" in params:
-                        state["prefs"]["preferred_roles"] = json.loads(params["preferred_roles"])
+                        state["prefs"]["preferred_roles"] = json.loads(
+                            params["preferred_roles"]
+                        )
                     if "notice_period" in params:
                         state["prefs"]["notice_period"] = params["notice_period"]
                     return FakeResult()
@@ -2913,7 +3679,10 @@ class TestChatProfileUpdatePersistenceRegression:
 
         assert clean == "Thanks for sharing that."
         assert updates is not None
-        assert updates["preferred_roles"] == ["Java Backend Developer", "Java Backend Engineer"]
+        assert updates["preferred_roles"] == [
+            "Java Backend Developer",
+            "Java Backend Engineer",
+        ]
         assert "Java" in updates["skills"]
         assert "Spring Boot" in updates["skills"]
         assert "Hibernate" in updates["skills"]
@@ -2923,19 +3692,31 @@ class TestChatProfileUpdatePersistenceRegression:
         asyncio.run(server._apply_profile_updates("candidate-1", updates))
 
         assert sum(1 for sql, _ in executed if "UPDATE candidates SET" in sql) == 1
-        assert sum(1 for sql, _ in executed if "INSERT INTO candidate_preferences" in sql) == 1
+        assert (
+            sum(1 for sql, _ in executed if "INSERT INTO candidate_preferences" in sql)
+            == 1
+        )
         assert state["candidate"]["raw_data"]["preferred_roles"] == [
             "Java Backend Developer",
             "Java Backend Engineer",
         ]
-        assert state["candidate"]["skills"][:4] == ["Java", "Spring Boot", "Hibernate", "REST APIs"]
+        assert state["candidate"]["skills"][:4] == [
+            "Java",
+            "Spring Boot",
+            "Hibernate",
+            "REST APIs",
+        ]
         assert state["prefs"]["preferred_roles"] == [
             "Java Backend Developer",
             "Java Backend Engineer",
         ]
 
-    def test_skill_merge_skips_existing_values_and_existing_certifications(self, monkeypatch):
-        import sys, os
+    def test_skill_merge_skips_existing_values_and_existing_certifications(
+        self, monkeypatch
+    ):
+        import os
+        import sys
+
         sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
         import server
 
@@ -3014,8 +3795,12 @@ class TestChatProfileUpdatePersistenceRegression:
             "AWS Certified Solutions Architect - Associate"
         ]
 
-    def test_target_role_statement_updates_preferred_roles_and_skills_but_not_current_role(self, monkeypatch):
-        import sys, os
+    def test_target_role_statement_updates_preferred_roles_and_skills_but_not_current_role(
+        self, monkeypatch
+    ):
+        import os
+        import sys
+
         sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
         import server
 
@@ -3083,9 +3868,15 @@ class TestChatProfileUpdatePersistenceRegression:
                     return FakeResult()
                 if "UPDATE candidate_preferences SET" in sql:
                     if state["prefs"] is None:
-                        state["prefs"] = {"candidate_id": params["cid"], "preferred_roles": [], "notice_period": ""}
+                        state["prefs"] = {
+                            "candidate_id": params["cid"],
+                            "preferred_roles": [],
+                            "notice_period": "",
+                        }
                     if "preferred_roles" in params:
-                        state["prefs"]["preferred_roles"] = json.loads(params["preferred_roles"])
+                        state["prefs"]["preferred_roles"] = json.loads(
+                            params["preferred_roles"]
+                        )
                     if "notice_period" in params:
                         state["prefs"]["notice_period"] = params["notice_period"]
                     return FakeResult()
@@ -3103,7 +3894,10 @@ class TestChatProfileUpdatePersistenceRegression:
 
         assert clean == "Thanks for sharing that."
         assert updates is not None
-        assert updates["preferred_roles"] == ["Java Backend Developer", "Java Backend Engineer"]
+        assert updates["preferred_roles"] == [
+            "Java Backend Developer",
+            "Java Backend Engineer",
+        ]
         assert "Java" in updates["skills"]
         assert "Spring Boot" in updates["skills"]
         assert "current_role" not in updates
@@ -3122,10 +3916,15 @@ class TestChatProfileUpdatePersistenceRegression:
             "Java Backend Engineer",
         ]
         assert sum(1 for sql, _ in executed if "UPDATE candidates SET" in sql) == 1
-        assert sum(1 for sql, _ in executed if "INSERT INTO candidate_preferences" in sql) == 1
+        assert (
+            sum(1 for sql, _ in executed if "INSERT INTO candidate_preferences" in sql)
+            == 1
+        )
 
     def test_explicit_current_role_statement_updates_current_role(self, monkeypatch):
-        import sys, os
+        import os
+        import sys
+
         sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
         import server
 
@@ -3194,7 +3993,9 @@ class TestChatProfileUpdatePersistenceRegression:
         assert state["candidate"]["current_role"] == "Python Backend Developer"
 
     def test_availability_immediately_persists_to_notice_period(self, monkeypatch):
-        import sys, os
+        import os
+        import sys
+
         sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
         import server
 
@@ -3256,9 +4057,15 @@ class TestChatProfileUpdatePersistenceRegression:
                     return FakeResult()
                 if "UPDATE candidate_preferences SET" in sql:
                     if state["prefs"] is None:
-                        state["prefs"] = {"candidate_id": params["cid"], "preferred_roles": [], "notice_period": ""}
+                        state["prefs"] = {
+                            "candidate_id": params["cid"],
+                            "preferred_roles": [],
+                            "notice_period": "",
+                        }
                     if "preferred_roles" in params:
-                        state["prefs"]["preferred_roles"] = json.loads(params["preferred_roles"])
+                        state["prefs"]["preferred_roles"] = json.loads(
+                            params["preferred_roles"]
+                        )
                     if "notice_period" in params:
                         state["prefs"]["notice_period"] = params["notice_period"]
                     return FakeResult()
@@ -3285,7 +4092,9 @@ class TestChatProfileUpdatePersistenceRegression:
         assert "immed" in (state["prefs"]["notice_period"] or "").lower()
 
     def test_conversational_reply_without_profile_data_produces_no_fake_updates(self):
-        import sys, os
+        import os
+        import sys
+
         sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
         from server import _extract_profile_updates
 
@@ -3299,13 +4108,14 @@ class TestChatProfileUpdatePersistenceRegression:
 
 
 class TestChatVoiceIntakeStateAdvance:
-    CURRENT_QUESTION = (
-        "What would make your next backend developer role a really good fit for you beyond the technologies?"
-    )
+    CURRENT_QUESTION = "What would make your next backend developer role a really good fit for you beyond the technologies?"
     NEXT_QUESTION = "What is your availability and preferred location for the role?"
 
-    def _setup_chat_mocks(self, monkeypatch, state, clean_reply, profile_updates, llm_analysis):
-        import sys, os
+    def _setup_chat_mocks(
+        self, monkeypatch, state, clean_reply, profile_updates, llm_analysis
+    ):
+        import os
+        import sys
         from types import SimpleNamespace
 
         sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
@@ -3345,15 +4155,21 @@ class TestChatVoiceIntakeStateAdvance:
                     if "skills" in params:
                         state["candidate"]["skills"] = json.loads(params["skills"])
                     if "work_experience" in params:
-                        state["candidate"]["work_experience"] = json.loads(params["work_experience"])
+                        state["candidate"]["work_experience"] = json.loads(
+                            params["work_experience"]
+                        )
                     if "education" in params:
-                        state["candidate"]["education"] = json.loads(params["education"])
+                        state["candidate"]["education"] = json.loads(
+                            params["education"]
+                        )
                     if "current_role" in params:
                         state["candidate"]["current_role"] = params["current_role"]
                     if "bio" in params:
                         state["candidate"]["summary"] = params["bio"]
                     if "experience_years" in params:
-                        state["candidate"]["experience_years"] = params["experience_years"]
+                        state["candidate"]["experience_years"] = params[
+                            "experience_years"
+                        ]
                     if "location" in params:
                         state["candidate"]["location"] = params["location"]
                     if "raw_data" in params:
@@ -3362,7 +4178,9 @@ class TestChatVoiceIntakeStateAdvance:
                         state["candidate"]["raw_data"] = json.loads(params["rd"])
                     if "voice_intake" in params:
                         state["candidate"].setdefault("raw_data", {})
-                        state["candidate"]["raw_data"]["voice_intake"] = json.loads(params["voice_intake"])
+                        state["candidate"]["raw_data"]["voice_intake"] = json.loads(
+                            params["voice_intake"]
+                        )
                     return FakeResult()
                 if "INSERT INTO candidate_preferences" in sql:
                     state["prefs"] = {
@@ -3373,9 +4191,15 @@ class TestChatVoiceIntakeStateAdvance:
                     return FakeResult()
                 if "UPDATE candidate_preferences SET" in sql:
                     if state["prefs"] is None:
-                        state["prefs"] = {"candidate_id": params["cid"], "preferred_roles": [], "notice_period": ""}
+                        state["prefs"] = {
+                            "candidate_id": params["cid"],
+                            "preferred_roles": [],
+                            "notice_period": "",
+                        }
                     if "preferred_roles" in params:
-                        state["prefs"]["preferred_roles"] = json.loads(params["preferred_roles"])
+                        state["prefs"]["preferred_roles"] = json.loads(
+                            params["preferred_roles"]
+                        )
                     if "notice_period" in params:
                         state["prefs"]["notice_period"] = params["notice_period"]
                     return FakeResult()
@@ -3390,7 +4214,11 @@ class TestChatVoiceIntakeStateAdvance:
         class FakeCompletions:
             async def create(self, *args, **kwargs):
                 return SimpleNamespace(
-                    choices=[SimpleNamespace(message=SimpleNamespace(content="Thanks for sharing."))]
+                    choices=[
+                        SimpleNamespace(
+                            message=SimpleNamespace(content="Thanks for sharing.")
+                        )
+                    ]
                 )
 
         async def _fake_llm_analyze_intake(*args, **kwargs):
@@ -3407,7 +4235,11 @@ class TestChatVoiceIntakeStateAdvance:
             "_extract_profile_updates",
             lambda raw_reply, candidate_message="": (clean_reply, profile_updates),
         )
-        monkeypatch.setattr(server, "openai_client", SimpleNamespace(chat=SimpleNamespace(completions=FakeCompletions())))
+        monkeypatch.setattr(
+            server,
+            "openai_client",
+            SimpleNamespace(chat=SimpleNamespace(completions=FakeCompletions())),
+        )
         return server
 
     def _base_state(self):
@@ -3423,7 +4255,10 @@ class TestChatVoiceIntakeStateAdvance:
                         "progress": 3,
                         "current_question": self.CURRENT_QUESTION,
                         "has_open_question": True,
-                        "missing_topics": ["career_preferences", "availability_location"],
+                        "missing_topics": [
+                            "career_preferences",
+                            "availability_location",
+                        ],
                         "known_topics": ["background_experience", "target_role"],
                         "completed_turns": [
                             {
@@ -3453,15 +4288,17 @@ class TestChatVoiceIntakeStateAdvance:
             "prefs": None,
         }
 
-    def test_chat_answer_advances_voice_intake_and_persists_completed_turn(self, monkeypatch):
-        import sys, os
-        from types import SimpleNamespace
+    def test_chat_answer_advances_voice_intake_and_persists_completed_turn(
+        self, monkeypatch
+    ):
+        import os
+        import sys
 
         sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
         import server
 
         state = self._base_state()
-        server = self._setup_chat_mocks(
+        server = self._setup_chat_mocks(  # noqa: F811 - configured module alias is intentional
             monkeypatch,
             state,
             clean_reply="Thanks for sharing.",
@@ -3470,7 +4307,11 @@ class TestChatVoiceIntakeStateAdvance:
                 "availability": "30 days",
             },
             llm_analysis={
-                "known_topics": ["background_experience", "target_role", "career_preferences"],
+                "known_topics": [
+                    "background_experience",
+                    "target_role",
+                    "career_preferences",
+                ],
                 "missing_topics": ["availability_location"],
                 "current_question_answered": True,
                 "next_question": self.NEXT_QUESTION,
@@ -3508,20 +4349,27 @@ class TestChatVoiceIntakeStateAdvance:
         assert voice_intake["progress"] == 4
         assert voice_intake["status"] == "in_progress"
 
-    def test_chat_duplicate_submission_does_not_duplicate_or_advance_twice(self, monkeypatch):
-        import sys, os
+    def test_chat_duplicate_submission_does_not_duplicate_or_advance_twice(
+        self, monkeypatch
+    ):
+        import os
+        import sys
 
         sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
         import server
 
         state = self._base_state()
-        server = self._setup_chat_mocks(
+        server = self._setup_chat_mocks(  # noqa: F811 - configured module alias is intentional
             monkeypatch,
             state,
             clean_reply="Thanks for sharing.",
             profile_updates=None,
             llm_analysis={
-                "known_topics": ["background_experience", "target_role", "career_preferences"],
+                "known_topics": [
+                    "background_experience",
+                    "target_role",
+                    "career_preferences",
+                ],
                 "missing_topics": ["availability_location"],
                 "current_question_answered": True,
                 "next_question": self.NEXT_QUESTION,
@@ -3530,27 +4378,38 @@ class TestChatVoiceIntakeStateAdvance:
         )
 
         request = server.ChatRequest(
-            messages=[server.ChatMessageIn(role="user", content="I can start in 30 days from Bangalore.")],
+            messages=[
+                server.ChatMessageIn(
+                    role="user", content="I can start in 30 days from Bangalore."
+                )
+            ],
             session_id="session-chat-duplicate",
             candidate_id="candidate-chat-voice",
         )
 
         first = asyncio.run(server.chat(request))
         assert first.reply == "Thanks for sharing."
-        first_voice_intake = json.loads(json.dumps(state["candidate"]["raw_data"]["voice_intake"]))
+        first_voice_intake = json.loads(
+            json.dumps(state["candidate"]["raw_data"]["voice_intake"])
+        )
 
         second = asyncio.run(server.chat(request))
         assert second.reply == "Thanks for sharing."
         second_voice_intake = state["candidate"]["raw_data"]["voice_intake"]
 
-        assert second_voice_intake["completed_turns"] == first_voice_intake["completed_turns"]
+        assert (
+            second_voice_intake["completed_turns"]
+            == first_voice_intake["completed_turns"]
+        )
         assert len(second_voice_intake.get("completed_turns") or []) == 4
         assert second_voice_intake["current_question"] == self.NEXT_QUESTION
         assert second_voice_intake["progress"] == 4
 
-    def test_chat_updates_existing_experience_start_date_without_creating_duplicate(self, monkeypatch):
-        import sys, os
-        from types import SimpleNamespace
+    def test_chat_updates_existing_experience_start_date_without_creating_duplicate(
+        self, monkeypatch
+    ):
+        import os
+        import sys
 
         sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
         import server
@@ -3568,7 +4427,12 @@ class TestChatVoiceIntakeStateAdvance:
                         "current_question": "",
                         "has_open_question": False,
                         "missing_topics": [],
-                        "known_topics": ["background_experience", "target_role", "career_preferences", "availability_location"],
+                        "known_topics": [
+                            "background_experience",
+                            "target_role",
+                            "career_preferences",
+                            "availability_location",
+                        ],
                         "completed_turns": [],
                     }
                 },
@@ -3591,7 +4455,7 @@ class TestChatVoiceIntakeStateAdvance:
             "prefs": None,
         }
 
-        server = self._setup_chat_mocks(
+        server = self._setup_chat_mocks(  # noqa: F811 - configured module alias is intentional
             monkeypatch,
             state,
             clean_reply="Profile updated.",
@@ -3606,7 +4470,12 @@ class TestChatVoiceIntakeStateAdvance:
                 ]
             },
             llm_analysis={
-                "known_topics": ["background_experience", "target_role", "career_preferences", "availability_location"],
+                "known_topics": [
+                    "background_experience",
+                    "target_role",
+                    "career_preferences",
+                    "availability_location",
+                ],
                 "missing_topics": [],
                 "current_question_answered": True,
                 "next_question": "",
@@ -3616,7 +4485,10 @@ class TestChatVoiceIntakeStateAdvance:
 
         request = server.ChatRequest(
             messages=[
-                server.ChatMessageIn(role="user", content="I was working from January 2026 to present at Viral Bug as a Python developer."),
+                server.ChatMessageIn(
+                    role="user",
+                    content="I was working from January 2026 to present at Viral Bug as a Python developer.",
+                ),
             ],
             session_id="session-chat-experience",
             candidate_id="candidate-chat-experience",
@@ -3637,8 +4509,11 @@ class TestChatVoiceIntakeStateAdvance:
         assert "January 2026" in frontend_profile["experience"][0]["dates"]
         assert "Present" in frontend_profile["experience"][0]["dates"]
 
-    def test_chat_certification_update_dedupes_against_existing_resume_certification(self, monkeypatch):
-        import sys, os
+    def test_chat_certification_update_dedupes_against_existing_resume_certification(
+        self, monkeypatch
+    ):
+        import os
+        import sys
 
         sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
         import server
@@ -3647,7 +4522,7 @@ class TestChatVoiceIntakeStateAdvance:
         state["candidate"]["raw_data"]["certifications"] = [
             "AWS Certified Solutions Architect - Associate"
         ]
-        server = self._setup_chat_mocks(
+        server = self._setup_chat_mocks(  # noqa: F811 - configured module alias is intentional
             monkeypatch,
             state,
             clean_reply="Thanks for sharing.",
@@ -3655,7 +4530,11 @@ class TestChatVoiceIntakeStateAdvance:
                 "certifications": [" aws certified solutions architect associate "],
             },
             llm_analysis={
-                "known_topics": ["background_experience", "target_role", "career_preferences"],
+                "known_topics": [
+                    "background_experience",
+                    "target_role",
+                    "career_preferences",
+                ],
                 "missing_topics": ["availability_location"],
                 "current_question_answered": True,
                 "next_question": self.NEXT_QUESTION,
@@ -3685,14 +4564,15 @@ class TestChatVoiceIntakeStateAdvance:
         ]
 
     def test_chat_ordinary_message_does_not_modify_voice_intake(self, monkeypatch):
-        import sys, os
+        import os
+        import sys
 
         sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
         import server
 
         state = self._base_state()
         before = json.loads(json.dumps(state["candidate"]["raw_data"]["voice_intake"]))
-        server = self._setup_chat_mocks(
+        server = self._setup_chat_mocks(  # noqa: F811 - configured module alias is intentional
             monkeypatch,
             state,
             clean_reply="Thanks, let's keep going.",
@@ -3707,7 +4587,12 @@ class TestChatVoiceIntakeStateAdvance:
         )
 
         request = server.ChatRequest(
-            messages=[server.ChatMessageIn(role="user", content="Thanks, let's talk about the team culture next.")],
+            messages=[
+                server.ChatMessageIn(
+                    role="user",
+                    content="Thanks, let's talk about the team culture next.",
+                )
+            ],
             session_id="session-chat-ordinary",
             candidate_id="candidate-chat-voice",
         )
@@ -3717,7 +4602,8 @@ class TestChatVoiceIntakeStateAdvance:
         assert state["candidate"]["raw_data"]["voice_intake"] == before
 
     def test_chat_final_answer_completes_voice_intake_state(self, monkeypatch):
-        import sys, os
+        import os
+        import sys
 
         sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
         import server
@@ -3736,7 +4622,12 @@ class TestChatVoiceIntakeStateAdvance:
                         "current_question": final_question,
                         "has_open_question": True,
                         "missing_topics": ["responsibilities_projects"],
-                        "known_topics": ["background_experience", "target_role", "career_preferences", "availability_location"],
+                        "known_topics": [
+                            "background_experience",
+                            "target_role",
+                            "career_preferences",
+                            "availability_location",
+                        ],
                         "completed_turns": [
                             {
                                 "question": "What made you start exploring your next opportunity?",
@@ -3773,7 +4664,7 @@ class TestChatVoiceIntakeStateAdvance:
             "prefs": None,
         }
 
-        server = self._setup_chat_mocks(
+        server = self._setup_chat_mocks(  # noqa: F811 - configured module alias is intentional
             monkeypatch,
             state,
             clean_reply="Thanks for sharing.",
@@ -3794,7 +4685,12 @@ class TestChatVoiceIntakeStateAdvance:
         )
 
         request = server.ChatRequest(
-            messages=[server.ChatMessageIn(role="user", content="I recently built a backend service for order processing and handled API design, database work, and deployment.")],
+            messages=[
+                server.ChatMessageIn(
+                    role="user",
+                    content="I recently built a backend service for order processing and handled API design, database work, and deployment.",
+                )
+            ],
             session_id="session-chat-final",
             candidate_id="candidate-chat-final",
         )
@@ -3813,7 +4709,8 @@ class TestChatVoiceIntakeStateAdvance:
         assert turns[-1]["question"] == final_question
 
     def test_chat_stale_final_state_is_persisted_as_completed(self, monkeypatch):
-        import sys, os
+        import os
+        import sys
 
         sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
         import server
@@ -3881,7 +4778,7 @@ class TestChatVoiceIntakeStateAdvance:
             "prefs": None,
         }
 
-        server = self._setup_chat_mocks(
+        server = self._setup_chat_mocks(  # noqa: F811 - configured module alias is intentional
             monkeypatch,
             state,
             clean_reply="Thanks for sharing.",
@@ -3904,7 +4801,12 @@ class TestChatVoiceIntakeStateAdvance:
         )
 
         request = server.ChatRequest(
-            messages=[server.ChatMessageIn(role="user", content="I recently built a backend service for order processing and handled API design, database work, and deployment.")],
+            messages=[
+                server.ChatMessageIn(
+                    role="user",
+                    content="I recently built a backend service for order processing and handled API design, database work, and deployment.",
+                )
+            ],
             session_id="session-chat-final-stale",
             candidate_id="candidate-chat-final-stale",
         )
@@ -3934,7 +4836,9 @@ class TestChatVoiceIntakeStateAdvance:
 
 class TestEmploymentGapHandling:
     def test_detects_meaningful_gap_and_skips_overlap(self):
-        import sys, os
+        import os
+        import sys
+
         sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
         from server import _detect_employment_gap
 
@@ -3983,7 +4887,9 @@ class TestEmploymentGapHandling:
         assert _detect_employment_gap(overlapping_profile) is None
 
     def test_answered_gap_is_not_requested_again(self):
-        import sys, os
+        import os
+        import sys
+
         sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
         from server import _detect_employment_gap
 
@@ -4026,7 +4932,9 @@ class TestEmploymentGapHandling:
         assert _detect_employment_gap(answered_profile) is None
 
     def test_gap_answer_is_preserved_in_voice_intake_resume(self):
-        import sys, os
+        import os
+        import sys
+
         sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
         from server import _build_voice_intake_resume_from_notes, _detect_employment_gap
 
@@ -4068,12 +4976,21 @@ class TestEmploymentGapHandling:
         }
         notes = [
             {"role": "assistant", "text": gap["question"], "final": True},
-            {"role": "user", "text": "I took a planned break to care for family.", "final": True},
+            {
+                "role": "user",
+                "text": "I took a planned break to care for family.",
+                "final": True,
+            },
         ]
 
-        resume = _build_voice_intake_resume_from_notes(notes, "", existing_resume, candidate_profile=profile)
+        resume = _build_voice_intake_resume_from_notes(
+            notes, "", existing_resume, candidate_profile=profile
+        )
         assert resume.get("employment_gaps")
-        assert resume["employment_gaps"][0]["answer"] == "I took a planned break to care for family."
+        assert (
+            resume["employment_gaps"][0]["answer"]
+            == "I took a planned break to care for family."
+        )
 
 
 class TestDetectEmploymentGapNameError:
@@ -4086,7 +5003,9 @@ class TestDetectEmploymentGapNameError:
 
     def test_detect_employment_gap_does_not_raise_name_error(self):
         """_detect_employment_gap must not raise NameError on any profile shape."""
-        import sys, os
+        import os
+        import sys
+
         sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
         from server import _detect_employment_gap
 
@@ -4114,7 +5033,9 @@ class TestDetectEmploymentGapNameError:
 
     def test_detect_employment_gap_deduplicates_identical_entries(self):
         """Duplicate experience entries must not produce a false gap."""
-        import sys, os
+        import os
+        import sys
+
         sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
         from server import _detect_employment_gap
 
@@ -4144,7 +5065,9 @@ class TestDetectEmploymentGapNameError:
         """
         Voice Intake experience merging must not produce 'Present — Present' dates.
         """
-        import sys, os
+        import os
+        import sys
+
         sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
         from server import _merge_work_experience
 
@@ -4167,12 +5090,15 @@ class TestDetectEmploymentGapNameError:
         merged = _merge_work_experience(existing, new_items)
         assert len(merged) == 1
         dates = merged[0].get("dates") or ""
-        assert dates.count("Present") <= 1, f"'Present — Present' found in dates: {dates!r}"
+        assert dates.count("Present") <= 1, (
+            f"'Present — Present' found in dates: {dates!r}"
+        )
 
 
 # ─────────────────────────────────────────────
 # Career-gap mandatory questioning tests
 # ─────────────────────────────────────────────
+
 
 class TestCareerGapMandatory:
     """
@@ -4204,9 +5130,12 @@ class TestCareerGapMandatory:
     }
 
     def _gap(self):
-        import sys, os
+        import os
+        import sys
+
         sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
         from server import _detect_employment_gap
+
         return _detect_employment_gap(self.GAP_PROFILE)
 
     # ── 1. Gap detection ────────────────────────────────────────────────────
@@ -4229,28 +5158,52 @@ class TestCareerGapMandatory:
 
     def test_no_gap_when_roles_overlap(self):
         """No gap detected when roles overlap."""
-        import sys, os
+        import os
+        import sys
+
         sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
         from server import _detect_employment_gap
 
         profile = {
             "experience": [
-                {"title": "Eng", "company": "A", "start_date": "2022-01-01", "end_date": "2023-06-30"},
-                {"title": "Sr Eng", "company": "B", "start_date": "2023-05-01", "end_date": ""},
+                {
+                    "title": "Eng",
+                    "company": "A",
+                    "start_date": "2022-01-01",
+                    "end_date": "2023-06-30",
+                },
+                {
+                    "title": "Sr Eng",
+                    "company": "B",
+                    "start_date": "2023-05-01",
+                    "end_date": "",
+                },
             ]
         }
         assert _detect_employment_gap(profile) is None
 
     def test_no_gap_for_short_break_under_30_days(self):
         """Gaps shorter than 30 days are not flagged."""
-        import sys, os
+        import os
+        import sys
+
         sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
         from server import _detect_employment_gap
 
         profile = {
             "experience": [
-                {"title": "Eng", "company": "A", "start_date": "2022-01-01", "end_date": "2023-06-30"},
-                {"title": "Sr Eng", "company": "B", "start_date": "2023-07-15", "end_date": ""},
+                {
+                    "title": "Eng",
+                    "company": "A",
+                    "start_date": "2022-01-01",
+                    "end_date": "2023-06-30",
+                },
+                {
+                    "title": "Sr Eng",
+                    "company": "B",
+                    "start_date": "2023-07-15",
+                    "end_date": "",
+                },
             ]
         }
         assert _detect_employment_gap(profile) is None
@@ -4262,7 +5215,9 @@ class TestCareerGapMandatory:
         Gap question must become current_question even when other intake questions
         are already pending — it is mandatory and takes priority.
         """
-        import sys, os
+        import os
+        import sys
+
         sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
         from server import _build_voice_intake_resume_from_notes, _detect_employment_gap
 
@@ -4274,7 +5229,10 @@ class TestCareerGapMandatory:
             "status": "in_progress",
             "progress": 1,
             "completed_turns": [
-                {"question": "Tell me about your background.", "answer": "I am a backend engineer."},
+                {
+                    "question": "Tell me about your background.",
+                    "answer": "I am a backend engineer.",
+                },
             ],
             "current_question": "What are your key skills?",
             "next_question": "What kind of role are you targeting?",
@@ -4296,7 +5254,9 @@ class TestCareerGapMandatory:
         When a gap is detected and no answer exists, it must be persisted
         with status='unanswered' in employment_gaps.
         """
-        import sys, os
+        import os
+        import sys
+
         sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
         from server import _build_voice_intake_resume_from_notes, _detect_employment_gap
 
@@ -4318,9 +5278,15 @@ class TestCareerGapMandatory:
         Gap question must be injected regardless of profile completeness.
         A fully-answered intake that still has an unanswered gap must surface it.
         """
-        import sys, os
+        import os
+        import sys
+
         sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
-        from server import _build_voice_intake_resume_from_notes, _detect_employment_gap, VOICE_INTAKE_TOPICS
+        from server import (
+            VOICE_INTAKE_TOPICS,
+            _build_voice_intake_resume_from_notes,
+            _detect_employment_gap,
+        )
 
         gap = _detect_employment_gap(self.GAP_PROFILE)
         assert gap is not None
@@ -4355,7 +5321,9 @@ class TestCareerGapMandatory:
         If candidate disconnects before answering the gap question,
         the gap must remain with status='unanswered'.
         """
-        import sys, os
+        import os
+        import sys
+
         sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
         from server import _build_voice_intake_resume_from_notes, _detect_employment_gap
 
@@ -4401,7 +5369,9 @@ class TestCareerGapMandatory:
         When candidate returns (new session, empty voice_notes),
         Voice Intake must resume from the unanswered gap question.
         """
-        import sys, os
+        import os
+        import sys
+
         sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
         from server import _build_voice_intake_resume_from_notes, _detect_employment_gap
 
@@ -4412,7 +5382,10 @@ class TestCareerGapMandatory:
             "status": "in_progress",
             "progress": 2,
             "completed_turns": [
-                {"question": "Tell me about your background.", "answer": "I am a backend engineer."},
+                {
+                    "question": "Tell me about your background.",
+                    "answer": "I am a backend engineer.",
+                },
                 {"question": "What are your key skills?", "answer": "Python, FastAPI."},
             ],
             "current_question": gap["question"],
@@ -4450,7 +5423,9 @@ class TestCareerGapMandatory:
         When the candidate answers the gap question, the gap must be marked
         'explained' and Voice Intake must continue with the normal flow.
         """
-        import sys, os
+        import os
+        import sys
+
         sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
         from server import _build_voice_intake_resume_from_notes, _detect_employment_gap
 
@@ -4459,7 +5434,11 @@ class TestCareerGapMandatory:
 
         notes = [
             {"role": "assistant", "text": gap["question"], "final": True},
-            {"role": "user", "text": "I took a planned break to care for family.", "final": True},
+            {
+                "role": "user",
+                "text": "I took a planned break to care for family.",
+                "final": True,
+            },
         ]
         existing_resume = {
             "status": "in_progress",
@@ -4495,7 +5474,9 @@ class TestCareerGapMandatory:
 
     def test_explained_gap_not_re_asked(self):
         """Once a gap is explained, _detect_employment_gap returns None for that profile."""
-        import sys, os
+        import os
+        import sys
+
         sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
         from server import _detect_employment_gap
 
@@ -4523,7 +5504,9 @@ class TestCareerGapMandatory:
 
     def test_gap_record_contains_required_fields(self):
         """Each gap record must contain dates, question, explanation, and status."""
-        import sys, os
+        import os
+        import sys
+
         sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
         from server import _build_voice_intake_resume_from_notes, _detect_employment_gap
 
@@ -4551,7 +5534,10 @@ class TestCareerGapMandatory:
         _seed_employment_gaps_after_parse must write an unanswered gap record
         into raw_data.voice_intake.employment_gaps when a gap is detected.
         """
-        import sys, os, asyncio
+        import asyncio
+        import os
+        import sys
+
         sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
         import server
 
@@ -4560,12 +5546,17 @@ class TestCareerGapMandatory:
         class FakeResult:
             def __init__(self, row=None):
                 self._row = row
+
             def fetchone(self):
                 return self._row
 
         class FakeSession:
-            async def __aenter__(self): return self
-            async def __aexit__(self, *a): return False
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *a):
+                return False
+
             async def execute(self_inner, statement, params=None):
                 sql = str(statement)
                 if "SELECT raw_data" in sql:
@@ -4574,14 +5565,26 @@ class TestCareerGapMandatory:
                     state["raw_data"] = json.loads(params["rd"])
                     return FakeResult()
                 return FakeResult()
-            async def commit(self): return None
+
+            async def commit(self):
+                return None
 
         monkeypatch.setattr(server, "SessionLocal", lambda: FakeSession())
 
         parsed = {
             "work_experience": [
-                {"title": "Backend Engineer", "company": "Alpha", "start_date": "2022-01-01", "end_date": "2023-06-30"},
-                {"title": "Senior Engineer", "company": "Beta", "start_date": "2024-01-01", "end_date": ""},
+                {
+                    "title": "Backend Engineer",
+                    "company": "Alpha",
+                    "start_date": "2022-01-01",
+                    "end_date": "2023-06-30",
+                },
+                {
+                    "title": "Senior Engineer",
+                    "company": "Beta",
+                    "start_date": "2024-01-01",
+                    "end_date": "",
+                },
             ]
         }
 
@@ -4595,7 +5598,10 @@ class TestCareerGapMandatory:
 
     def test_seed_employment_gaps_idempotent(self, monkeypatch):
         """Calling _seed_employment_gaps_after_parse twice must not duplicate gaps."""
-        import sys, os, asyncio
+        import asyncio
+        import os
+        import sys
+
         sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
         import server
 
@@ -4604,12 +5610,17 @@ class TestCareerGapMandatory:
         class FakeResult:
             def __init__(self, row=None):
                 self._row = row
+
             def fetchone(self):
                 return self._row
 
         class FakeSession:
-            async def __aenter__(self): return self
-            async def __aexit__(self, *a): return False
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *a):
+                return False
+
             async def execute(self_inner, statement, params=None):
                 sql = str(statement)
                 if "SELECT raw_data" in sql:
@@ -4618,14 +5629,26 @@ class TestCareerGapMandatory:
                     state["raw_data"] = json.loads(params["rd"])
                     return FakeResult()
                 return FakeResult()
-            async def commit(self): return None
+
+            async def commit(self):
+                return None
 
         monkeypatch.setattr(server, "SessionLocal", lambda: FakeSession())
 
         parsed = {
             "work_experience": [
-                {"title": "Backend Engineer", "company": "Alpha", "start_date": "2022-01-01", "end_date": "2023-06-30"},
-                {"title": "Senior Engineer", "company": "Beta", "start_date": "2024-01-01", "end_date": ""},
+                {
+                    "title": "Backend Engineer",
+                    "company": "Alpha",
+                    "start_date": "2022-01-01",
+                    "end_date": "2023-06-30",
+                },
+                {
+                    "title": "Senior Engineer",
+                    "company": "Beta",
+                    "start_date": "2024-01-01",
+                    "end_date": "",
+                },
             ]
         }
 
@@ -4640,6 +5663,7 @@ class TestCareerGapMandatory:
 # ─────────────────────────────────────────────
 # Career-gap VAPI variable injection tests
 # ─────────────────────────────────────────────
+
 
 class TestCareerGapVapiVariables:
     """
@@ -4690,7 +5714,9 @@ class TestCareerGapVapiVariables:
     }
 
     def test_gap_detected_true_for_meaningful_gap(self):
-        import sys, os
+        import os
+        import sys
+
         sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
         from server import _build_career_gap_vapi_vars
 
@@ -4698,7 +5724,9 @@ class TestCareerGapVapiVariables:
         assert result["career_gap_detected"] is True
 
     def test_gap_start_is_human_readable_month_year(self):
-        import sys, os
+        import os
+        import sys
+
         sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
         from server import _build_career_gap_vapi_vars
 
@@ -4708,7 +5736,9 @@ class TestCareerGapVapiVariables:
         assert result["career_gap_start"] != ""
 
     def test_gap_end_is_human_readable_month_year(self):
-        import sys, os
+        import os
+        import sys
+
         sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
         from server import _build_career_gap_vapi_vars
 
@@ -4718,7 +5748,9 @@ class TestCareerGapVapiVariables:
         assert result["career_gap_end"] != ""
 
     def test_gap_context_is_descriptive_string(self):
-        import sys, os
+        import os
+        import sys
+
         sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
         from server import _build_career_gap_vapi_vars
 
@@ -4729,7 +5761,9 @@ class TestCareerGapVapiVariables:
         assert "Beta Ltd" in ctx or "Senior Engineer" in ctx
 
     def test_no_gap_returns_false_and_empty_strings(self):
-        import sys, os
+        import os
+        import sys
+
         sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
         from server import _build_career_gap_vapi_vars
 
@@ -4740,7 +5774,9 @@ class TestCareerGapVapiVariables:
         assert result["career_gap_context"] == ""
 
     def test_empty_experience_returns_no_gap(self):
-        import sys, os
+        import os
+        import sys
+
         sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
         from server import _build_career_gap_vapi_vars
 
@@ -4749,7 +5785,9 @@ class TestCareerGapVapiVariables:
 
     def test_explained_gap_returns_no_gap(self):
         """Once a gap is answered in voice_intake, career_gap_detected must be False."""
-        import sys, os
+        import os
+        import sys
+
         sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
         from server import _build_career_gap_vapi_vars, _detect_employment_gap
 
@@ -4774,14 +5812,26 @@ class TestCareerGapVapiVariables:
         assert result["career_gap_detected"] is False
 
     def test_short_gap_under_30_days_not_detected(self):
-        import sys, os
+        import os
+        import sys
+
         sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
         from server import _build_career_gap_vapi_vars
 
         profile = {
             "experience": [
-                {"title": "Eng", "company": "A", "start_date": "2022-01-01", "end_date": "2023-06-30"},
-                {"title": "Sr Eng", "company": "B", "start_date": "2023-07-15", "end_date": ""},
+                {
+                    "title": "Eng",
+                    "company": "A",
+                    "start_date": "2022-01-01",
+                    "end_date": "2023-06-30",
+                },
+                {
+                    "title": "Sr Eng",
+                    "company": "B",
+                    "start_date": "2023-07-15",
+                    "end_date": "",
+                },
             ]
         }
         result = _build_career_gap_vapi_vars(profile)
@@ -4789,7 +5839,9 @@ class TestCareerGapVapiVariables:
 
     def test_normalize_for_frontend_includes_all_four_gap_vars(self):
         """_normalize_for_frontend must include all 4 career gap VAPI variables."""
-        import sys, os
+        import os
+        import sys
+
         sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
         from server import _normalize_for_frontend
 
@@ -4826,7 +5878,9 @@ class TestCareerGapVapiVariables:
 
     def test_normalize_for_frontend_no_gap_profile(self):
         """Profile with no gap must have career_gap_detected=False in frontend shape."""
-        import sys, os
+        import os
+        import sys
+
         sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
         from server import _normalize_for_frontend
 
@@ -4834,8 +5888,18 @@ class TestCareerGapVapiVariables:
             "id": "test-no-gap",
             "name": "No Gap Candidate",
             "work_experience": [
-                {"title": "Eng", "company": "A", "start_date": "2022-01-01", "end_date": "2023-06-30"},
-                {"title": "Sr Eng", "company": "B", "start_date": "2023-06-01", "end_date": ""},
+                {
+                    "title": "Eng",
+                    "company": "A",
+                    "start_date": "2022-01-01",
+                    "end_date": "2023-06-30",
+                },
+                {
+                    "title": "Sr Eng",
+                    "company": "B",
+                    "start_date": "2023-06-01",
+                    "end_date": "",
+                },
             ],
             "skills": [],
             "education": [],
@@ -4852,20 +5916,42 @@ class TestCareerGapVapiVariables:
         career_gap_* variables must differ between two candidates with different gaps.
         Ensures no hardcoded candidate data.
         """
-        import sys, os
+        import os
+        import sys
+
         sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
         from server import _build_career_gap_vapi_vars
 
         profile_a = {
             "experience": [
-                {"title": "Dev", "company": "X", "start_date": "2020-01-01", "end_date": "2021-06-30"},
-                {"title": "Sr Dev", "company": "Y", "start_date": "2022-06-01", "end_date": ""},
+                {
+                    "title": "Dev",
+                    "company": "X",
+                    "start_date": "2020-01-01",
+                    "end_date": "2021-06-30",
+                },
+                {
+                    "title": "Sr Dev",
+                    "company": "Y",
+                    "start_date": "2022-06-01",
+                    "end_date": "",
+                },
             ]
         }
         profile_b = {
             "experience": [
-                {"title": "Analyst", "company": "P", "start_date": "2019-01-01", "end_date": "2020-03-31"},
-                {"title": "Sr Analyst", "company": "Q", "start_date": "2021-01-01", "end_date": ""},
+                {
+                    "title": "Analyst",
+                    "company": "P",
+                    "start_date": "2019-01-01",
+                    "end_date": "2020-03-31",
+                },
+                {
+                    "title": "Sr Analyst",
+                    "company": "Q",
+                    "start_date": "2021-01-01",
+                    "end_date": "",
+                },
             ]
         }
         result_a = _build_career_gap_vapi_vars(profile_a)

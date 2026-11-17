@@ -1,7 +1,7 @@
-import os
 import logging
-from typing import List, Tuple
-from qdrant_client.models import Filter, FieldCondition, MatchValue
+import os
+
+from qdrant_client.models import FieldCondition, Filter, MatchValue
 
 logger = logging.getLogger(__name__)
 
@@ -16,6 +16,7 @@ def _get_client():
     global _client
     if _client is None:
         from qdrant_client import QdrantClient
+
         if not QDRANT_URL:
             raise RuntimeError("QDRANT_URL environment variable is not set")
         kwargs = {"url": QDRANT_URL}
@@ -26,7 +27,9 @@ def _get_client():
     return _client
 
 
-def search_job_chunks(query_vector: List[float], limit: int = 50, country_code: str | None = None) -> List[Tuple[str, float]]:
+def search_job_chunks(
+    query_vector: list[float], limit: int = 50, country_code: str | None = None
+) -> list[tuple[str, float]]:
     """
     Search the job_chunks Qdrant collection using COSINE similarity.
     Returns a list of (jobId, score) tuples, deduplicated by jobId (best score kept).
@@ -40,7 +43,15 @@ def search_job_chunks(query_vector: List[float], limit: int = 50, country_code: 
             query=query_vector,
             limit=limit,
             with_payload=True,
-            query_filter=Filter(must=[FieldCondition(key="country_code", match=MatchValue(value=country_code))]) if country_code else None,
+            query_filter=Filter(
+                must=[
+                    FieldCondition(
+                        key="country_code", match=MatchValue(value=country_code)
+                    )
+                ]
+            )
+            if country_code
+            else None,
         )
         results = response.points
     else:
@@ -49,7 +60,15 @@ def search_job_chunks(query_vector: List[float], limit: int = 50, country_code: 
             query_vector=query_vector,
             limit=limit,
             with_payload=True,
-            query_filter=Filter(must=[FieldCondition(key="country_code", match=MatchValue(value=country_code))]) if country_code else None,
+            query_filter=Filter(
+                must=[
+                    FieldCondition(
+                        key="country_code", match=MatchValue(value=country_code)
+                    )
+                ]
+            )
+            if country_code
+            else None,
         )
     logger.info("[matching] Qdrant raw hits=%d requested_limit=%d", len(results), limit)
 
@@ -64,5 +83,7 @@ def search_job_chunks(query_vector: List[float], limit: int = 50, country_code: 
             seen[job_id] = score
 
     deduplicated = sorted(seen.items(), key=lambda x: x[1], reverse=True)
-    logger.info("[matching] Qdrant unique job IDs after deduplication=%d", len(deduplicated))
+    logger.info(
+        "[matching] Qdrant unique job IDs after deduplication=%d", len(deduplicated)
+    )
     return deduplicated

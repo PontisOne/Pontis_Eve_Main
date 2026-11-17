@@ -19,6 +19,7 @@ Covers:
 
 import asyncio
 import os
+import sys
 import time
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -26,15 +27,19 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from openai import RateLimitError as OpenAIRateLimitError
 
-import sys
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-from groq_client import AllKeysRateLimitedError, GroqClientPool, _call_metadata, _load_api_keys
-
+from groq_client import (
+    AllKeysRateLimitedError,
+    GroqClientPool,
+    _call_metadata,
+    _load_api_keys,
+)
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
 
 def _make_rate_limit_error() -> OpenAIRateLimitError:
     fake_response = MagicMock()
@@ -60,7 +65,7 @@ def _make_success_response(content: str = "ok") -> SimpleNamespace:
 
 def _pool_with_keys(*keys: str) -> GroqClientPool:
     """Build a GroqClientPool with the given keys, bypassing env-var loading."""
-    env = {f"GROQ_API_KEY_{i+1}": key for i, key in enumerate(keys)}
+    env = {f"GROQ_API_KEY_{i + 1}": key for i, key in enumerate(keys)}
     with patch.dict(os.environ, env, clear=False):
         # Clear any existing numbered keys beyond what we set
         for i in range(len(keys) + 1, 8):
@@ -72,6 +77,7 @@ def _pool_with_keys(*keys: str) -> GroqClientPool:
 # ---------------------------------------------------------------------------
 # 1. Key loading
 # ---------------------------------------------------------------------------
+
 
 class TestKeyLoading:
     def test_single_numbered_key_loaded(self):
@@ -98,7 +104,7 @@ class TestKeyLoading:
     def test_empty_keys_ignored(self):
         env = {
             "GROQ_API_KEY_1": "key-1",
-            "GROQ_API_KEY_2": "",          # empty — must be skipped
+            "GROQ_API_KEY_2": "",  # empty — must be skipped
             "GROQ_API_KEY_3": "key-3",
         }
         with patch.dict(os.environ, env, clear=False):
@@ -153,16 +159,32 @@ def test_explicit_telemetry_keeps_actual_request_model():
         "_telemetry": {"workflow": "chat_generation", "candidate_id": "candidate-1"},
     }
     assert _call_metadata(kwargs) == {
-        "workflow": "chat_generation", "candidate_id": "candidate-1", "model": "actual-groq-model",
+        "workflow": "chat_generation",
+        "candidate_id": "candidate-1",
+        "model": "actual-groq-model",
     }
     assert "_telemetry" not in kwargs
 
 
 def test_provider_event_retains_candidate_and_correlations():
     event = GroqClientPool._event(
-        {"model": "m", "workflow": "voice_info_extraction", "candidate_id": "candidate-1",
-         "endpoint": "/api/voice/candidate-intake", "session_id": "session-1", "vapi_call_id": "call-1"},
-        "request-1", 2, 1, 429, False, time.monotonic(), None, None, None,
+        {
+            "model": "m",
+            "workflow": "voice_info_extraction",
+            "candidate_id": "candidate-1",
+            "endpoint": "/api/voice/candidate-intake",
+            "session_id": "session-1",
+            "vapi_call_id": "call-1",
+        },
+        "request-1",
+        2,
+        1,
+        429,
+        False,
+        time.monotonic(),
+        None,
+        None,
+        None,
     )
     assert event["candidate_id"] == "candidate-1"
     assert event["model"] == "m"
@@ -177,8 +199,12 @@ def test_provider_event_retains_candidate_and_correlations():
 def test_unknown_candidate_and_fallback_remain_distinct_provider_attempts():
     base = {"model": "m", "workflow": "resume_parsing", "is_fallback": False}
     fallback = {"model": "m", "workflow": "resume_parsing", "is_fallback": True}
-    first = GroqClientPool._event(base, "logical-request-1", 1, 1, 400, False, time.monotonic(), None, None, None)
-    second = GroqClientPool._event(fallback, "logical-request-1", 1, 1, 200, True, time.monotonic(), 3, 2, 5)
+    first = GroqClientPool._event(
+        base, "logical-request-1", 1, 1, 400, False, time.monotonic(), None, None, None
+    )
+    second = GroqClientPool._event(
+        fallback, "logical-request-1", 1, 1, 200, True, time.monotonic(), 3, 2, 5
+    )
     assert first["candidate_id"] is None
     assert first["total_tokens"] is None  # unknown, not zero
     assert second["is_fallback"] is True
@@ -189,13 +215,18 @@ def test_telemetry_submit_failure_never_raises(monkeypatch):
     import llm_telemetry
 
     monkeypatch.delenv("PYTEST_CURRENT_TEST", raising=False)
-    monkeypatch.setattr(llm_telemetry.asyncio, "create_task", lambda _coro: (_ for _ in ()).throw(RuntimeError("no loop")))
+    monkeypatch.setattr(
+        llm_telemetry.asyncio,
+        "create_task",
+        lambda _coro: (_ for _ in ()).throw(RuntimeError("no loop")),
+    )
     llm_telemetry.submit([{"request_id": "request-1"}])
 
 
 # ---------------------------------------------------------------------------
 # 2. Successful requests — no rotation
 # ---------------------------------------------------------------------------
+
 
 class TestSuccessNoRotation:
     def test_first_key_succeeds_no_rotation(self):
@@ -230,6 +261,7 @@ class TestSuccessNoRotation:
 # ---------------------------------------------------------------------------
 # 3. Rate-limit rotation
 # ---------------------------------------------------------------------------
+
 
 class TestRateLimitRotation:
     def test_first_key_429_uses_second_key(self):
@@ -316,6 +348,7 @@ class TestRateLimitRotation:
 # 4. Non-429 errors do NOT cause rotation
 # ---------------------------------------------------------------------------
 
+
 class TestNonRateLimitErrors:
     def test_auth_error_not_rotated(self):
         pool = _pool_with_keys("k1", "k2")
@@ -331,7 +364,9 @@ class TestNonRateLimitErrors:
             completions=SimpleNamespace(create=AsyncMock(side_effect=fake_create))
         )
         pool._clients[1].chat = SimpleNamespace(
-            completions=SimpleNamespace(create=AsyncMock(return_value=_make_success_response()))
+            completions=SimpleNamespace(
+                create=AsyncMock(return_value=_make_success_response())
+            )
         )
 
         with pytest.raises(Exception, match="Invalid API key"):
@@ -349,7 +384,9 @@ class TestNonRateLimitErrors:
             completions=SimpleNamespace(create=AsyncMock(side_effect=json_error))
         )
         pool._clients[1].chat = SimpleNamespace(
-            completions=SimpleNamespace(create=AsyncMock(return_value=_make_success_response()))
+            completions=SimpleNamespace(
+                create=AsyncMock(return_value=_make_success_response())
+            )
         )
 
         with pytest.raises(ValueError, match="JSON decode error"):
@@ -365,7 +402,9 @@ class TestNonRateLimitErrors:
             completions=SimpleNamespace(create=AsyncMock(side_effect=net_error))
         )
         pool._clients[1].chat = SimpleNamespace(
-            completions=SimpleNamespace(create=AsyncMock(return_value=_make_success_response()))
+            completions=SimpleNamespace(
+                create=AsyncMock(return_value=_make_success_response())
+            )
         )
 
         with pytest.raises(ConnectionError):
@@ -377,6 +416,7 @@ class TestNonRateLimitErrors:
 # ---------------------------------------------------------------------------
 # 5. Cooldown / key recovery
 # ---------------------------------------------------------------------------
+
 
 class TestCooldownRecovery:
     def test_rate_limited_key_becomes_available_after_cooldown(self):
@@ -433,7 +473,9 @@ class TestCooldownRecovery:
 
         # Second call: key 0 is available again and should be tried first
         pool._clients[0].chat = SimpleNamespace(
-            completions=SimpleNamespace(create=AsyncMock(return_value=_make_success_response("key-0-again")))
+            completions=SimpleNamespace(
+                create=AsyncMock(return_value=_make_success_response("key-0-again"))
+            )
         )
         result = asyncio.run(pool.chat_completions_create(model="m", messages=[]))
         assert result.choices[0].message.content == "key-0-again"
@@ -443,12 +485,13 @@ class TestCooldownRecovery:
 # 6. Logging safety — keys never logged
 # ---------------------------------------------------------------------------
 
+
 class TestLoggingSafety:
     def test_key_not_in_warning_log(self, caplog):
         import logging
+
         pool = _pool_with_keys("VERY_SECRET_KEY_12345")
         rate_err = _make_rate_limit_error()
-        success = _make_success_response()
 
         pool._clients[0].chat = SimpleNamespace(
             completions=SimpleNamespace(create=AsyncMock(side_effect=rate_err))
@@ -480,6 +523,7 @@ class TestLoggingSafety:
 # 7. Concurrency safety
 # ---------------------------------------------------------------------------
 
+
 class TestConcurrencySafety:
     def test_concurrent_requests_do_not_corrupt_key_state(self):
         """Multiple concurrent requests must not cause race conditions."""
@@ -493,8 +537,7 @@ class TestConcurrencySafety:
 
         async def run_many():
             tasks = [
-                pool.chat_completions_create(model="m", messages=[])
-                for _ in range(20)
+                pool.chat_completions_create(model="m", messages=[]) for _ in range(20)
             ]
             results = await asyncio.gather(*tasks)
             return results
@@ -518,8 +561,7 @@ class TestConcurrencySafety:
 
         async def run_concurrent():
             tasks = [
-                pool.chat_completions_create(model="m", messages=[])
-                for _ in range(5)
+                pool.chat_completions_create(model="m", messages=[]) for _ in range(5)
             ]
             return await asyncio.gather(*tasks)
 
@@ -533,11 +575,13 @@ class TestConcurrencySafety:
 # 8. server.py integration — _parse_resume_with_llm
 # ---------------------------------------------------------------------------
 
+
 class TestServerIntegration:
     def test_parse_resume_returns_429_when_all_keys_exhausted(self):
         """_parse_resume_with_llm must raise HTTPException(429) on AllKeysRateLimitedError."""
-        import server
         from fastapi import HTTPException
+
+        import server
 
         all_keys_err = AllKeysRateLimitedError("all keys rate limited")
 
@@ -550,19 +594,24 @@ class TestServerIntegration:
                 asyncio.run(server._parse_resume_with_llm("some resume text"))
 
         assert exc_info.value.status_code == 429
-        assert "temporarily unavailable" in exc_info.value.detail.lower() or \
-               "rate" in exc_info.value.detail.lower()
+        assert (
+            "temporarily unavailable" in exc_info.value.detail.lower()
+            or "rate" in exc_info.value.detail.lower()
+        )
 
     def test_parse_resume_returns_429_on_single_key_rate_limit(self):
         """Existing behaviour: OpenAIRateLimitError still raises HTTPException(429)."""
-        import server
         from fastapi import HTTPException
+
+        import server
 
         fake_response = MagicMock()
         fake_response.status_code = 429
         fake_response.headers = {}
         fake_response.text = "rate limited"
-        rate_err = OpenAIRateLimitError("rate limited", response=fake_response, body=None)
+        rate_err = OpenAIRateLimitError(
+            "rate limited", response=fake_response, body=None
+        )
 
         with patch.object(
             server.openai_client,
@@ -577,12 +626,14 @@ class TestServerIntegration:
     def test_server_uses_groq_client_pool(self):
         """server.openai_client must be a GroqClientPool instance."""
         import server
+
         assert isinstance(server.openai_client, GroqClientPool)
 
     def test_api_key_not_exposed_in_parse_resume_error(self):
         """The 429 error detail must not contain any API key value."""
-        import server
         from fastapi import HTTPException
+
+        import server
 
         all_keys_err = AllKeysRateLimitedError("all keys rate limited")
 

@@ -5,6 +5,7 @@ import pytest
 
 from app.job_ingestion.scheduler import IST, _ats_sync_trigger, _fantastic_sync_trigger
 from app.job_ingestion import scheduler
+from app.job_ingestion.scheduler import IST, _ats_sync_trigger, _fantastic_sync_trigger
 
 
 def _next_run(startup_time: datetime) -> datetime:

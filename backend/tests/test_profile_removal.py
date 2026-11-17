@@ -16,6 +16,7 @@ Covers all requirements:
 - Removal through Voice Intake (same detection path)
 - All natural-language removal phrasings
 """
+
 import asyncio
 import json
 import os
@@ -25,10 +26,10 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 import server
 
-
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
 
 def _make_candidate(**overrides):
     base = {
@@ -43,8 +44,16 @@ def _make_candidate(**overrides):
         "experience_years": 5.0,
         "skills": ["Python", "FastAPI", "Docker", "PostgreSQL"],
         "work_experience": [
-            {"title": "Backend Developer", "company": "Deepija Telecom", "description": "Built APIs"},
-            {"title": "Software Engineer", "company": "Acme Corp", "description": "Led team"},
+            {
+                "title": "Backend Developer",
+                "company": "Deepija Telecom",
+                "description": "Built APIs",
+            },
+            {
+                "title": "Software Engineer",
+                "company": "Acme Corp",
+                "description": "Led team",
+            },
         ],
         "education": [
             {"degree": "B.Tech Computer Science", "institution": "JNTU"},
@@ -98,13 +107,18 @@ def _run_apply(candidate_state, updates):
                 if "skills" in params:
                     candidate_state["skills"] = json.loads(params["skills"])
                 if "work_experience" in params:
-                    candidate_state["work_experience"] = json.loads(params["work_experience"])
+                    candidate_state["work_experience"] = json.loads(
+                        params["work_experience"]
+                    )
                 if "education" in params:
                     candidate_state["education"] = json.loads(params["education"])
                 if "raw_data" in params:
                     candidate_state["raw_data"] = json.loads(params["raw_data"])
                 return FakeResult()
-            if "INSERT INTO candidate_preferences" in sql or "UPDATE candidate_preferences" in sql:
+            if (
+                "INSERT INTO candidate_preferences" in sql
+                or "UPDATE candidate_preferences" in sql
+            ):
                 return FakeResult()
             return FakeResult()
 
@@ -112,6 +126,7 @@ def _run_apply(candidate_state, updates):
             return None
 
     import unittest.mock as mock
+
     with mock.patch.object(server, "SessionLocal", lambda: FakeSession()):
         asyncio.run(server._apply_profile_updates("cand-remove-test", updates))
 
@@ -121,6 +136,7 @@ def _run_apply(candidate_state, updates):
 # ---------------------------------------------------------------------------
 # 1. Removing a skill
 # ---------------------------------------------------------------------------
+
 
 class TestRemoveSkill:
     def test_remove_skill_via_natural_language(self):
@@ -168,6 +184,7 @@ class TestRemoveSkill:
 # 2. Removing a certification
 # ---------------------------------------------------------------------------
 
+
 class TestRemoveCertification:
     def test_remove_cert_via_natural_language(self):
         _, updates = server._extract_profile_updates(
@@ -189,14 +206,22 @@ class TestRemoveCertification:
 
     def test_remove_cert_persists_to_db(self):
         state = _make_candidate()
-        updates = {"profile_deletions": {"certifications": ["AWS Certified Solutions Architect"]}}
+        updates = {
+            "profile_deletions": {
+                "certifications": ["AWS Certified Solutions Architect"]
+            }
+        }
         _run_apply(state, updates)
         certs = state["raw_data"].get("certifications", [])
         assert not any("aws" in c.lower() for c in certs)
 
     def test_remove_cert_preserves_other_certs(self):
         state = _make_candidate()
-        updates = {"profile_deletions": {"certifications": ["AWS Certified Solutions Architect"]}}
+        updates = {
+            "profile_deletions": {
+                "certifications": ["AWS Certified Solutions Architect"]
+            }
+        }
         _run_apply(state, updates)
         certs = state["raw_data"].get("certifications", [])
         assert "PMP" in certs
@@ -205,6 +230,7 @@ class TestRemoveCertification:
 # ---------------------------------------------------------------------------
 # 3. Removing a work experience entry
 # ---------------------------------------------------------------------------
+
 
 class TestRemoveWorkExperience:
     def test_remove_experience_by_company(self):
@@ -244,6 +270,7 @@ class TestRemoveWorkExperience:
 # 4. Removing an education entry
 # ---------------------------------------------------------------------------
 
+
 class TestRemoveEducation:
     def test_remove_education_by_degree(self):
         _, updates = server._extract_profile_updates(
@@ -275,12 +302,15 @@ class TestRemoveEducation:
         updates = {"profile_deletions": {"education": ["Master of Science"]}}
         _run_apply(state, updates)
         degrees = [e.get("degree", "") for e in state["education"]]
-        assert any("b.tech" in d.lower() or "computer science" in d.lower() for d in degrees)
+        assert any(
+            "b.tech" in d.lower() or "computer science" in d.lower() for d in degrees
+        )
 
 
 # ---------------------------------------------------------------------------
 # 5. Removing a project
 # ---------------------------------------------------------------------------
+
 
 class TestRemoveProject:
     def test_remove_project_via_natural_language(self):
@@ -320,6 +350,7 @@ class TestRemoveProject:
 # 6. Removing a preferred location / role
 # ---------------------------------------------------------------------------
 
+
 class TestRemovePreferredLocationAndRole:
     def test_remove_preferred_location_no_longer_want(self):
         result = server._detect_deletion_intent(
@@ -342,14 +373,18 @@ class TestRemovePreferredLocationAndRole:
         state = _make_candidate()
         updates = {"profile_deletions": {"preferred_locations": ["Hyderabad"]}}
         _run_apply(state, updates)
-        locs = state["raw_data"].get("preferred_locations", []) or state["raw_data"].get("location_preferences", [])
+        locs = state["raw_data"].get("preferred_locations", []) or state[
+            "raw_data"
+        ].get("location_preferences", [])
         assert "Hyderabad" not in locs
 
     def test_remove_preferred_location_preserves_other_locations(self):
         state = _make_candidate()
         updates = {"profile_deletions": {"preferred_locations": ["Hyderabad"]}}
         _run_apply(state, updates)
-        locs = state["raw_data"].get("preferred_locations", []) or state["raw_data"].get("location_preferences", [])
+        locs = state["raw_data"].get("preferred_locations", []) or state[
+            "raw_data"
+        ].get("location_preferences", [])
         assert "Bangalore" in locs
 
     def test_remove_preferred_role(self):
@@ -380,6 +415,7 @@ class TestRemovePreferredLocationAndRole:
 # 7. Requested item does not exist — no-op, no add
 # ---------------------------------------------------------------------------
 
+
 class TestRemoveNonExistentItem:
     def test_nonexistent_skill_is_noop(self):
         state = _make_candidate()
@@ -391,7 +427,9 @@ class TestRemoveNonExistentItem:
     def test_nonexistent_cert_is_noop(self):
         state = _make_candidate()
         original_certs = list(state["raw_data"]["certifications"])
-        updates = {"profile_deletions": {"certifications": ["Google Cloud Professional"]}}
+        updates = {
+            "profile_deletions": {"certifications": ["Google Cloud Professional"]}
+        }
         _run_apply(state, updates)
         assert state["raw_data"]["certifications"] == original_certs
 
@@ -419,15 +457,18 @@ class TestRemoveNonExistentItem:
 # Additional Information removals stay scoped to raw_data
 # ---------------------------------------------------------------------------
 
+
 class TestRemoveAdditionalInformation:
     def test_multiple_phrases_are_removed_only_from_additional_information(self):
         state = _make_candidate()
-        state["raw_data"].update({
-            "additional_information": (
-                "Java Full-Stack; AWS Certificate; Open-source contributor"
-            ),
-            "unrelated_metadata": {"source": "resume"},
-        })
+        state["raw_data"].update(
+            {
+                "additional_information": (
+                    "Java Full-Stack; AWS Certificate; Open-source contributor"
+                ),
+                "unrelated_metadata": {"source": "resume"},
+            }
+        )
         original_certifications = list(state["raw_data"]["certifications"])
 
         _, updates = server._extract_profile_updates(
@@ -451,12 +492,14 @@ class TestRemoveAdditionalInformation:
         assert state["raw_data"]["certifications"] == original_certifications
         assert state["raw_data"]["unrelated_metadata"] == {"source": "resume"}
 
-    def test_explicit_additional_information_target_overrides_llm_certification_guess(self):
+    def test_explicit_additional_information_target_overrides_llm_certification_guess(
+        self,
+    ):
         _, updates = server._extract_profile_updates(
-            '''Removed.
+            """Removed.
 <<<PROFILE_UPDATES>>>
 {"profile_updates": {"profile_deletions": {"certifications": ["AWS certificate"]}}}
-<<<END_UPDATES>>>''',
+<<<END_UPDATES>>>""",
             candidate_message="Remove AWS certificate from Additional Information",
         )
 
@@ -469,6 +512,7 @@ class TestRemoveAdditionalInformation:
 # ---------------------------------------------------------------------------
 # 8. Ambiguous removal request — clarification, not deletion
 # ---------------------------------------------------------------------------
+
 
 class TestAmbiguousRemoval:
     def test_ambiguous_no_section_returns_unknown_field(self):
@@ -492,6 +536,7 @@ class TestAmbiguousRemoval:
 # ---------------------------------------------------------------------------
 # 9. Removing one item preserves all other items
 # ---------------------------------------------------------------------------
+
 
 class TestPreservationOnRemoval:
     def test_remove_skill_does_not_touch_certifications(self):
@@ -530,7 +575,9 @@ class TestPreservationOnRemoval:
             {"title": "Lead", "company": "Beta"},
             {"title": "Architect", "company": "Gamma"},
         ]
-        new_exp, found = server._remove_item_from_dict_list(exp, "Beta", ["title", "company"])
+        new_exp, found = server._remove_item_from_dict_list(
+            exp, "Beta", ["title", "company"]
+        )
         assert found is True
         assert len(new_exp) == 2
         companies = [e["company"] for e in new_exp]
@@ -542,6 +589,7 @@ class TestPreservationOnRemoval:
 # ---------------------------------------------------------------------------
 # 10. Removed information does not come back after profile refresh
 # ---------------------------------------------------------------------------
+
 
 class TestNoReAddAfterRefresh:
     def test_merge_skills_does_not_readd_deleted_skill(self):
@@ -567,6 +615,7 @@ class TestNoReAddAfterRefresh:
         This is a structural test — verify the function exists and is used correctly.
         """
         from frontend_normalization_check import refresh_uses_normalize
+
         assert refresh_uses_normalize()
 
     def test_deletion_dict_not_propagated_by_merge_profile_updates(self):
@@ -581,6 +630,7 @@ class TestNoReAddAfterRefresh:
 # ---------------------------------------------------------------------------
 # 11. Removal through Chat with Eve
 # ---------------------------------------------------------------------------
+
 
 class TestRemovalThroughChat:
     def test_chat_remove_skill_detected_from_candidate_message(self):
@@ -636,6 +686,7 @@ class TestRemovalThroughChat:
 # 12. Removal through Voice Intake
 # ---------------------------------------------------------------------------
 
+
 class TestRemovalThroughVoiceIntake:
     """
     Voice Intake itself is a data-collection flow (not a profile-editing flow).
@@ -676,6 +727,7 @@ class TestRemovalThroughVoiceIntake:
 # ---------------------------------------------------------------------------
 # 13. Natural-language phrasing variants
 # ---------------------------------------------------------------------------
+
 
 class TestNaturalLanguagePhrasings:
     def test_take_out_phrase(self):
@@ -729,8 +781,10 @@ class TestNaturalLanguagePhrasings:
 
 # This module is imported by test_no_readd_after_refresh above.
 # We create it inline so the test is self-contained.
-import types as _types
+import types as _types  # noqa: E402
+
 _mod = _types.ModuleType("frontend_normalization_check")
+
 
 def _refresh_uses_normalize():
     """
@@ -739,17 +793,27 @@ def _refresh_uses_normalize():
     re-add deleted items from stale in-memory state).
     """
     import pathlib
-    dashboard_path = pathlib.Path(__file__).parent.parent.parent / "frontend" / "src" / "pages" / "Dashboard.jsx"
+
+    dashboard_path = (
+        pathlib.Path(__file__).parent.parent.parent
+        / "frontend"
+        / "src"
+        / "pages"
+        / "Dashboard.jsx"
+    )
     if not dashboard_path.exists():
         return True  # can't check — assume correct
     content = dashboard_path.read_text(encoding="utf-8")
     # refreshProfile must call normalizeProfileForDisplay, not mergeProfilesForDisplay
-    assert "normalizeProfileForDisplay" in content, "refreshProfile must use normalizeProfileForDisplay"
+    assert "normalizeProfileForDisplay" in content, (
+        "refreshProfile must use normalizeProfileForDisplay"
+    )
     # Verify the refreshProfile function uses normalizeProfileForDisplay on the backend data
-    refresh_section = content[content.find("const refreshProfile"):]
-    refresh_section = refresh_section[:refresh_section.find("}, [candidateId])")]
+    refresh_section = content[content.find("const refreshProfile") :]
+    refresh_section = refresh_section[: refresh_section.find("}, [candidateId])")]
     assert "normalizeProfileForDisplay" in refresh_section
     return True
+
 
 _mod.refresh_uses_normalize = _refresh_uses_normalize
 sys.modules["frontend_normalization_check"] = _mod

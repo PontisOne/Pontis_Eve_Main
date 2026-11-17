@@ -1,4 +1,3 @@
-import json
 import sys
 from pathlib import Path
 
@@ -21,12 +20,16 @@ async def test_cache_round_trip(monkeypatch):
     class FakeRedis:
         def __init__(self):
             self.data = {}
+
         async def ping(self):
             return True
+
         async def get(self, key):
             return self.data.get(key)
+
         async def set(self, key, value, ex):
             self.data[key] = value
+
         async def delete(self, key):
             self.data.pop(key, None)
 

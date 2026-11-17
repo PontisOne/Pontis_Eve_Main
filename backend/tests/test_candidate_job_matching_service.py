@@ -1,7 +1,7 @@
 import asyncio
 import os
 import sys
-from datetime import datetime, timezone
+from datetime import UTC, datetime, timezone
 
 import pytest
 
@@ -42,7 +42,11 @@ def test_required_skill_extraction_reads_inline_competencies_list():
     jd = "About the role.\nCompetencies: Python, Django, ETL, GCP and Kubernetes"
 
     assert matcher._extract_job_required_skills(jd) == [
-        "Python", "Django", "ETL", "GCP", "Kubernetes"
+        "Python",
+        "Django",
+        "ETL",
+        "GCP",
+        "Kubernetes",
     ]
 
 
@@ -64,17 +68,29 @@ def test_hybrid_match_increases_when_displayed_inline_jd_skill_is_added():
     job_description = "About the role.\nCompetencies: Python, Django, ETL"
     intelligence = {"evidence": {"skills": {"evidence_level": 2}}}
     before_signals = {
-        "target_roles": [], "skills": ["Python"], "past_roles": [],
+        "target_roles": [],
+        "skills": ["Python"],
+        "past_roles": [],
         "total_experience_years": 0,
     }
     after_signals = {**before_signals, "skills": ["Python", "Django"]}
 
     before, _ = matcher._hybrid_score(
-        before_signals, "Backend Engineer", job_description, "", [], 0.5,
+        before_signals,
+        "Backend Engineer",
+        job_description,
+        "",
+        [],
+        0.5,
         intelligence=intelligence,
     )
     after, _ = matcher._hybrid_score(
-        after_signals, "Backend Engineer", job_description, "", [], 0.5,
+        after_signals,
+        "Backend Engineer",
+        job_description,
+        "",
+        [],
+        0.5,
         intelligence=intelligence,
     )
 
@@ -127,23 +143,27 @@ def test_single_job_refresh_reuses_full_job_metadata_and_semantic_score(monkeypa
             pass
 
     def score(signals, title, description, requirements, skills, semantic, **kwargs):
-        captured.update({
-            "requirements": requirements,
-            "skills": skills,
-            "semantic": semantic,
-            "job_metadata": kwargs["job_metadata"],
-        })
+        captured.update(
+            {
+                "requirements": requirements,
+                "skills": skills,
+                "semantic": semantic,
+                "job_metadata": kwargs["job_metadata"],
+            }
+        )
         return 0.64, {"final_score": 0.64, "semantic_score": semantic}
 
     monkeypatch.setattr(matcher, "_hybrid_score", score)
     monkeypatch.setattr(matcher, "_get_candidate_intelligence", lambda candidate: {})
 
-    asyncio.run(matcher.refresh_candidate_job_match(
-        "candidate-1",
-        "rec-1",
-        {"skills": ["Python", "Docker"], "experience_years": 4, "raw_data": {}},
-        lambda: Session(),
-    ))
+    asyncio.run(
+        matcher.refresh_candidate_job_match(
+            "candidate-1",
+            "rec-1",
+            {"skills": ["Python", "Docker"], "experience_years": 4, "raw_data": {}},
+            lambda: Session(),
+        )
+    )
 
     assert captured["semantic"] == 0.48
     assert captured["skills"] == ["Python", "Docker"]
@@ -155,13 +175,13 @@ def test_single_job_refresh_reuses_full_job_metadata_and_semantic_score(monkeypa
 class FixedDateTime(datetime):
     @classmethod
     def now(cls, tz=None):
-        return cls(2024, 1, 1, tzinfo=tz or timezone.utc)
+        return cls(2024, 1, 1, tzinfo=tz or UTC)
 
 
 class FixedDateTime2026(datetime):
     @classmethod
     def now(cls, tz=None):
-        return cls(2026, 8, 25, tzinfo=tz or timezone.utc)
+        return cls(2026, 8, 25, tzinfo=tz or UTC)
 
 
 class FakeResult:
@@ -206,12 +226,20 @@ class FakeSession:
                             job["description"],
                             job.get("requirements", ""),
                             job.get("skills", []),
-                            job.get("company_name", ""), job.get("department", ""),
-                            job.get("location", ""), job.get("employment_type", ""),
-                            job.get("experience_required", ""), job.get("salary_range", ""),
-                            job.get("city", ""), job.get("state", ""), job.get("country", ""),
-                            job.get("remote"), job.get("industry", ""), job.get("skills_required", []),
-                            job.get("structured_data", {}), job.get("remote_policy", ""),
+                            job.get("company_name", ""),
+                            job.get("department", ""),
+                            job.get("location", ""),
+                            job.get("employment_type", ""),
+                            job.get("experience_required", ""),
+                            job.get("salary_range", ""),
+                            job.get("city", ""),
+                            job.get("state", ""),
+                            job.get("country", ""),
+                            job.get("remote"),
+                            job.get("industry", ""),
+                            job.get("skills_required", []),
+                            job.get("structured_data", {}),
+                            job.get("remote_policy", ""),
                         )
                     )
             return FakeResult(rows)
@@ -221,10 +249,15 @@ class FakeSession:
             return FakeResult(rows)
 
         if "SET hidden_at" in query:
-            self.state.setdefault("hidden_updates", []).append(list(params.get("job_ids") or []))
+            self.state.setdefault("hidden_updates", []).append(
+                list(params.get("job_ids") or [])
+            )
             return FakeResult([])
 
-        if "UPDATE candidate_job_recommendations" in query and "SET match_score" in query:
+        if (
+            "UPDATE candidate_job_recommendations" in query
+            and "SET match_score" in query
+        ):
             self.state.setdefault("updated", []).append(params["rid"])
             self.state.setdefault("upserted", []).append(params["rid"])
             return FakeResult([])
@@ -232,7 +265,9 @@ class FakeSession:
         if "INSERT INTO candidate_job_recommendations" in query:
             self.state.setdefault("inserted", []).append(params["jid"])
             self.state.setdefault("match_scores", {})[params["jid"]] = params["score"]
-            self.state.setdefault("match_reasons", {})[params["jid"]] = params["match_reason"]
+            self.state.setdefault("match_reasons", {})[params["jid"]] = params[
+                "match_reason"
+            ]
             return FakeResult([])
 
         raise AssertionError(f"Unexpected query: {query}")
@@ -275,7 +310,9 @@ def test_candidate_total_experience_years_merges_overlaps_and_counts_present():
     assert years == pytest.approx(4.0, rel=0.01)
 
 
-def test_candidate_total_experience_years_handles_historical_and_present_month_ranges(monkeypatch):
+def test_candidate_total_experience_years_handles_historical_and_present_month_ranges(
+    monkeypatch,
+):
     monkeypatch.setattr(matcher, "datetime", FixedDateTime2026)
     monkeypatch.setattr(matcher, "timezone", timezone)
 
@@ -285,12 +322,12 @@ def test_candidate_total_experience_years_handles_historical_and_present_month_r
             {
                 "company": "Deepija Telecom",
                 "title": "Engineer",
-                "dates": "01-11-2023 â€” 09-10-2024",
+                "dates": "01-11-2023 — 09-10-2024",
             },
             {
                 "company": "Viral Bug",
                 "title": "Engineer",
-                "dates": "Aug 2025 â€” Present",
+                "dates": "Aug 2025 — Present",
             },
         ],
     }
@@ -334,7 +371,9 @@ def test_candidate_total_experience_years_does_not_double_count_overlaps(monkeyp
     assert years == pytest.approx(3.0, rel=0.01)
 
 
-def test_candidate_total_experience_years_counts_open_ended_employment_to_today(monkeypatch):
+def test_candidate_total_experience_years_counts_open_ended_employment_to_today(
+    monkeypatch,
+):
     monkeypatch.setattr(matcher, "datetime", FixedDateTime2026)
     monkeypatch.setattr(matcher, "timezone", timezone)
 
@@ -400,64 +439,79 @@ def test_job_eligibility_filters_experience_and_requires_relevance():
     )
 
 
-def test_explicit_preferred_roles_prioritize_a_transition_over_current_role(monkeypatch):
+def test_explicit_preferred_roles_prioritize_a_transition_over_current_role(
+    monkeypatch,
+):
     """A Python developer seeking Java must receive Java roles, not Python roles.
 
     This mirrors candidate f5f8859b-575e-4a68-8b80-100881011bbe: a broad
     Backend Developer preference accompanies the more specific Java target.
     """
-    state = {"jobs": {
-        "python-job": {
-            "title": "Python Developer",
-            "description": "Build Python APIs with Django.",
-            "skills": ["Python", "Django"],
-        },
-        "java-job": {
-            "title": "Java Backend Developer",
-            "description": "Build backend APIs with Java and Spring Boot.",
-            "skills": ["Java", "Spring Boot"],
-        },
-    }}
-    monkeypatch.setattr(matcher, "build_candidate_text", lambda candidate: "Java Backend Developer")
+    state = {
+        "jobs": {
+            "python-job": {
+                "title": "Python Developer",
+                "description": "Build Python APIs with Django.",
+                "skills": ["Python", "Django"],
+            },
+            "java-job": {
+                "title": "Java Backend Developer",
+                "description": "Build backend APIs with Java and Spring Boot.",
+                "skills": ["Java", "Spring Boot"],
+            },
+        }
+    }
+    monkeypatch.setattr(
+        matcher, "build_candidate_text", lambda candidate: "Java Backend Developer"
+    )
     monkeypatch.setattr(matcher, "generate_embedding", lambda text: [0.1])
     monkeypatch.setattr(
-        matcher, "search_job_chunks", lambda vector, limit, country_code=None: [("python-job", 0.99), ("java-job", 0.70)]
+        matcher,
+        "search_job_chunks",
+        lambda vector, limit, country_code=None: [
+            ("python-job", 0.99),
+            ("java-job", 0.70),
+        ],
     )
     monkeypatch.setattr(matcher, "_get_candidate_intelligence", lambda candidate: {})
 
-    asyncio.run(matcher.refresh_candidate_job_matches(
-        "candidate",
-        {
-            "current_role": "Python Developer",
-            "skills": ["Python", "Django", "Java", "Spring Boot"],
-            "raw_data": {
-                "preferred_roles": [
-                    "Java Developer",
-                    "Java Backend Developer",
-                    "Backend Developer",
-                ]
+    asyncio.run(
+        matcher.refresh_candidate_job_matches(
+            "candidate",
+            {
+                "current_role": "Python Developer",
+                "skills": ["Python", "Django", "Java", "Spring Boot"],
+                "raw_data": {
+                    "preferred_roles": [
+                        "Java Developer",
+                        "Java Backend Developer",
+                        "Backend Developer",
+                    ]
+                },
             },
-        },
-        FakeSessionFactory(state),
-    ))
+            FakeSessionFactory(state),
+        )
+    )
 
     assert state["inserted"] == ["java-job"]
 
 
 def test_preferred_role_retrieval_adds_java_job_for_python_candidate(monkeypatch):
     """Preferred-role retrieval must reach ranking even when profile search is Python-heavy."""
-    state = {"jobs": {
-        "python-job": {
-            "title": "Python Developer",
-            "description": "Build Python APIs with Django.",
-            "skills": ["Python", "Django"],
-        },
-        "java-job": {
-            "title": "Java Backend Developer",
-            "description": "Build backend APIs with Java and Spring Boot.",
-            "skills": ["Java", "Spring Boot"],
-        },
-    }}
+    state = {
+        "jobs": {
+            "python-job": {
+                "title": "Python Developer",
+                "description": "Build Python APIs with Django.",
+                "skills": ["Python", "Django"],
+            },
+            "java-job": {
+                "title": "Java Backend Developer",
+                "description": "Build backend APIs with Java and Spring Boot.",
+                "skills": ["Java", "Spring Boot"],
+            },
+        }
+    }
     embedded_texts = []
 
     def fake_embedding(text):
@@ -468,20 +522,26 @@ def test_preferred_role_retrieval_adds_java_job_for_python_candidate(monkeypatch
         assert limit == matcher.QDRANT_TOP_K
         return [("java-job", 0.80)] if vector == [0.2] else [("python-job", 0.99)]
 
-    monkeypatch.setattr(matcher, "build_candidate_text", lambda candidate: "Python Developer Python Django")
+    monkeypatch.setattr(
+        matcher,
+        "build_candidate_text",
+        lambda candidate: "Python Developer Python Django",
+    )
     monkeypatch.setattr(matcher, "generate_embedding", fake_embedding)
     monkeypatch.setattr(matcher, "search_job_chunks", fake_search)
     monkeypatch.setattr(matcher, "_get_candidate_intelligence", lambda candidate: {})
 
-    asyncio.run(matcher.refresh_candidate_job_matches(
-        "candidate",
-        {
-            "current_role": "Python Developer",
-            "skills": ["Python", "Django", "Java", "Spring Boot"],
-            "raw_data": {"preferred_roles": ["Java Backend Developer"]},
-        },
-        FakeSessionFactory(state),
-    ))
+    asyncio.run(
+        matcher.refresh_candidate_job_matches(
+            "candidate",
+            {
+                "current_role": "Python Developer",
+                "skills": ["Python", "Django", "Java", "Spring Boot"],
+                "raw_data": {"preferred_roles": ["Java Backend Developer"]},
+            },
+            FakeSessionFactory(state),
+        )
+    )
 
     assert embedded_texts == [
         "Python Developer Python Django",
@@ -492,45 +552,73 @@ def test_preferred_role_retrieval_adds_java_job_for_python_candidate(monkeypatch
 
 def test_explicit_target_role_priority_beats_higher_python_match_score(monkeypatch):
     """Selection prioritizes target-role score without changing displayed match scores."""
-    state = {"jobs": {
-        "python-job": {
-            "title": "Python Developer",
-            "description": "Build Python and Django services with team collaboration.",
-            "skills": ["Python", "Django"],
-        },
-        "java-job": {
-            "title": "Java Backend Developer",
-            "description": "Build backend APIs with Java.",
-            "skills": ["Java"],
-        },
-    }}
+    state = {
+        "jobs": {
+            "python-job": {
+                "title": "Python Developer",
+                "description": "Build Python and Django services with team collaboration.",
+                "skills": ["Python", "Django"],
+            },
+            "java-job": {
+                "title": "Java Backend Developer",
+                "description": "Build backend APIs with Java.",
+                "skills": ["Java"],
+            },
+        }
+    }
     candidate = {
         "current_role": "Python Developer",
         "skills": ["Python", "Django"],
         # Team Lead intentionally causes a weak incidental role score for the
         # Python description, mirroring generic job-description wording.
-        "raw_data": {"preferred_roles": ["Java Backend Developer", "Team Lead", "relocate"]},
+        "raw_data": {
+            "preferred_roles": ["Java Backend Developer", "Team Lead", "relocate"]
+        },
     }
-    monkeypatch.setattr(matcher, "build_candidate_text", lambda candidate: "Python Developer Python Django")
-    monkeypatch.setattr(matcher, "generate_embedding", lambda text: [0.2] if text.startswith("Target job roles:") else [0.1])
+    monkeypatch.setattr(
+        matcher,
+        "build_candidate_text",
+        lambda candidate: "Python Developer Python Django",
+    )
+    monkeypatch.setattr(
+        matcher,
+        "generate_embedding",
+        lambda text: [0.2] if text.startswith("Target job roles:") else [0.1],
+    )
     monkeypatch.setattr(
         matcher,
         "search_job_chunks",
-            lambda vector, limit, country_code=None: [("java-job", 0.80)] if vector == [0.2] else [("python-job", 0.99), ("java-job", 0.80)],
+        lambda vector, limit, country_code=None: [("java-job", 0.80)]
+        if vector == [0.2]
+        else [("python-job", 0.99), ("java-job", 0.80)],
     )
     monkeypatch.setattr(matcher, "_get_candidate_intelligence", lambda candidate: {})
 
     signals = matcher._build_candidate_signals(candidate)
     assert signals["target_roles"] == ["Java Backend Developer", "Team Lead"]
     python_score, _ = matcher._hybrid_score(
-        signals, "Python Developer", "Build Python and Django services with team collaboration.", "", ["Python", "Django"], .99,
+        signals,
+        "Python Developer",
+        "Build Python and Django services with team collaboration.",
+        "",
+        ["Python", "Django"],
+        0.99,
     )
     java_score, _ = matcher._hybrid_score(
-        signals, "Java Backend Developer", "Build backend APIs with Java.", "", ["Java"], .80,
+        signals,
+        "Java Backend Developer",
+        "Build backend APIs with Java.",
+        "",
+        ["Java"],
+        0.80,
     )
     assert python_score > java_score
 
-    asyncio.run(matcher.refresh_candidate_job_matches("candidate", candidate, FakeSessionFactory(state)))
+    asyncio.run(
+        matcher.refresh_candidate_job_matches(
+            "candidate", candidate, FakeSessionFactory(state)
+        )
+    )
 
     # Java is selected first based on its stronger existing target-role score,
     # while each persisted/displayed match score remains the formula output.
@@ -538,55 +626,95 @@ def test_explicit_target_role_priority_beats_higher_python_match_score(monkeypat
     assert state["match_scores"] == {"java-job": java_score, "python-job": python_score}
 
 
-def test_specific_java_target_outranks_python_backend_without_changing_final_scores(monkeypatch):
+def test_specific_java_target_outranks_python_backend_without_changing_final_scores(
+    monkeypatch,
+):
     """Technology-specific intent breaks the broad-role tie only at selection time."""
-    state = {"jobs": {
-        "java-job": {
-            "title": "Java Developer",
-            "description": "Build services using Java.",
-            "skills": ["Java"],
-        },
-        "python-job": {
-            "title": "Python Backend Developer",
-            "description": "Build backend services using Python and Django.",
-            "skills": ["Python", "Django"],
-        },
-    }}
+    state = {
+        "jobs": {
+            "java-job": {
+                "title": "Java Developer",
+                "description": "Build services using Java.",
+                "skills": ["Java"],
+            },
+            "python-job": {
+                "title": "Python Backend Developer",
+                "description": "Build backend services using Python and Django.",
+                "skills": ["Python", "Django"],
+            },
+        }
+    }
     candidate = {
         "skills": ["Java", "Python", "Django"],
         "raw_data": {"preferred_roles": ["Java Backend Developer"]},
     }
-    monkeypatch.setattr(matcher, "build_candidate_text", lambda candidate: "Java Backend Developer")
+    monkeypatch.setattr(
+        matcher, "build_candidate_text", lambda candidate: "Java Backend Developer"
+    )
     monkeypatch.setattr(matcher, "generate_embedding", lambda text: [0.1])
     monkeypatch.setattr(
-        matcher, "search_job_chunks", lambda vector, limit, country_code=None: [("python-job", .99), ("java-job", .80)],
+        matcher,
+        "search_job_chunks",
+        lambda vector, limit, country_code=None: [
+            ("python-job", 0.99),
+            ("java-job", 0.80),
+        ],
     )
     monkeypatch.setattr(matcher, "_get_candidate_intelligence", lambda candidate: {})
 
     signals = matcher._build_candidate_signals(candidate)
     java_score, java_components = matcher._hybrid_score(
-        signals, "Java Developer", "Build services using Java.", "", ["Java"], .80,
+        signals,
+        "Java Developer",
+        "Build services using Java.",
+        "",
+        ["Java"],
+        0.80,
     )
     python_score, python_components = matcher._hybrid_score(
-        signals, "Python Backend Developer", "Build backend services using Python and Django.", "", ["Python", "Django"], .99,
+        signals,
+        "Python Backend Developer",
+        "Build backend services using Python and Django.",
+        "",
+        ["Python", "Django"],
+        0.99,
     )
 
     # The existing hybrid formula and displayed values are deliberately intact:
     # both jobs retain the old 0.5 target-role score and Python's higher final.
-    assert java_components["target_role_score"] == python_components["target_role_score"] == .5
+    assert (
+        java_components["target_role_score"]
+        == python_components["target_role_score"]
+        == 0.5
+    )
     assert python_score > java_score
     assert java_components["final_score"] == round(java_score, 4)
     assert python_components["final_score"] == round(python_score, 4)
 
     # Specific technology > broad role > explicitly different technology.
-    assert matcher._target_role_specificity(signals["target_roles"], "Java Developer") == 2
-    assert matcher._target_role_specificity(signals["target_roles"], "Backend Developer") == 1
-    assert matcher._target_role_specificity(signals["target_roles"], "Python Backend Developer") == 0
+    assert (
+        matcher._target_role_specificity(signals["target_roles"], "Java Developer") == 2
+    )
+    assert (
+        matcher._target_role_specificity(signals["target_roles"], "Backend Developer")
+        == 1
+    )
+    assert (
+        matcher._target_role_specificity(
+            signals["target_roles"], "Python Backend Developer"
+        )
+        == 0
+    )
 
-    asyncio.run(matcher.refresh_candidate_job_matches("candidate", candidate, FakeSessionFactory(state)))
+    asyncio.run(
+        matcher.refresh_candidate_job_matches(
+            "candidate", candidate, FakeSessionFactory(state)
+        )
+    )
 
     assert state["inserted"] == ["java-job", "python-job"]
     assert state["match_scores"] == {"java-job": java_score, "python-job": python_score}
+
 
 def test_refresh_never_marks_previously_generated_recommendations_hidden(monkeypatch):
     """A refresh result is not a candidate's explicit Not-for-me action."""
@@ -602,107 +730,188 @@ def test_refresh_never_marks_previously_generated_recommendations_hidden(monkeyp
         # This existing recommendation is absent from the current retrieval result.
         "existing": [("previous-job", "previous-rec", None, None)],
     }
-    monkeypatch.setattr(matcher, "build_candidate_text", lambda candidate: "Java backend engineer")
+    monkeypatch.setattr(
+        matcher, "build_candidate_text", lambda candidate: "Java backend engineer"
+    )
     monkeypatch.setattr(matcher, "generate_embedding", lambda text: [0.1])
-    monkeypatch.setattr(matcher, "search_job_chunks", lambda vector, limit, country_code=None: [("new-job", 0.9)])
+    monkeypatch.setattr(
+        matcher,
+        "search_job_chunks",
+        lambda vector, limit, country_code=None: [("new-job", 0.9)],
+    )
     monkeypatch.setattr(matcher, "_get_candidate_intelligence", lambda candidate: {})
 
-    asyncio.run(matcher.refresh_candidate_job_matches(
-        "candidate",
-        {"skills": ["Java", "Spring Boot"], "current_role": "Java Backend Engineer"},
-        FakeSessionFactory(state),
-    ))
+    asyncio.run(
+        matcher.refresh_candidate_job_matches(
+            "candidate",
+            {
+                "skills": ["Java", "Spring Boot"],
+                "current_role": "Java Backend Engineer",
+            },
+            FakeSessionFactory(state),
+        )
+    )
 
     assert state["inserted"] == ["new-job"]
     assert "hidden_updates" not in state
 
 
 def test_refresh_can_recommend_more_than_two_distinct_active_eligible_jobs(monkeypatch):
-    state = {"jobs": {
-        f"job-{i}": {
-            "title": "Java Backend Engineer",
-            "description": "Build APIs using Java and Spring Boot.",
-            "requirements": "",
-            "skills": ["Java", "Spring Boot"],
-        } for i in range(4)
-    }}
-    monkeypatch.setattr(matcher, "build_candidate_text", lambda candidate: "Java backend engineer")
+    state = {
+        "jobs": {
+            f"job-{i}": {
+                "title": "Java Backend Engineer",
+                "description": "Build APIs using Java and Spring Boot.",
+                "requirements": "",
+                "skills": ["Java", "Spring Boot"],
+            }
+            for i in range(4)
+        }
+    }
+    monkeypatch.setattr(
+        matcher, "build_candidate_text", lambda candidate: "Java backend engineer"
+    )
     monkeypatch.setattr(matcher, "generate_embedding", lambda text: [0.1])
-    monkeypatch.setattr(matcher, "search_job_chunks", lambda vector, limit, country_code=None: [(f"job-{i}", 0.9 - i / 100) for i in range(4)])
+    monkeypatch.setattr(
+        matcher,
+        "search_job_chunks",
+        lambda vector, limit, country_code=None: [
+            (f"job-{i}", 0.9 - i / 100) for i in range(4)
+        ],
+    )
     monkeypatch.setattr(matcher, "_get_candidate_intelligence", lambda candidate: {})
 
-    asyncio.run(matcher.refresh_candidate_job_matches(
-        "candidate", {"skills": ["Java"], "current_role": "Java Backend Engineer"}, FakeSessionFactory(state),
-    ))
+    asyncio.run(
+        matcher.refresh_candidate_job_matches(
+            "candidate",
+            {"skills": ["Java"], "current_role": "Java Backend Engineer"},
+            FakeSessionFactory(state),
+        )
+    )
 
     assert state["inserted"] == ["job-0", "job-1", "job-2", "job-3"]
 
 
 def test_refresh_preserves_active_database_filtering(monkeypatch):
-    state = {"jobs": {
-        "active": {"title": "Java Engineer", "description": "Java APIs", "skills": ["Java"]},
-        "inactive": {"title": "Java Engineer", "description": "Java APIs", "skills": ["Java"], "visible": False},
-    }}
-    monkeypatch.setattr(matcher, "build_candidate_text", lambda candidate: "Java engineer")
+    state = {
+        "jobs": {
+            "active": {
+                "title": "Java Engineer",
+                "description": "Java APIs",
+                "skills": ["Java"],
+            },
+            "inactive": {
+                "title": "Java Engineer",
+                "description": "Java APIs",
+                "skills": ["Java"],
+                "visible": False,
+            },
+        }
+    }
+    monkeypatch.setattr(
+        matcher, "build_candidate_text", lambda candidate: "Java engineer"
+    )
     monkeypatch.setattr(matcher, "generate_embedding", lambda text: [0.1])
-    monkeypatch.setattr(matcher, "search_job_chunks", lambda vector, limit, country_code=None: [("active", .9), ("inactive", .8)])
+    monkeypatch.setattr(
+        matcher,
+        "search_job_chunks",
+        lambda vector, limit, country_code=None: [("active", 0.9), ("inactive", 0.8)],
+    )
     monkeypatch.setattr(matcher, "_get_candidate_intelligence", lambda candidate: {})
 
-    asyncio.run(matcher.refresh_candidate_job_matches(
-        "candidate", {"skills": ["Java"], "current_role": "Java Engineer"}, FakeSessionFactory(state),
-    ))
+    asyncio.run(
+        matcher.refresh_candidate_job_matches(
+            "candidate",
+            {"skills": ["Java"], "current_role": "Java Engineer"},
+            FakeSessionFactory(state),
+        )
+    )
 
     assert state["inserted"] == ["active"]
 
 
 def test_refresh_skips_resume_only_candidate_until_voice_intake_completes(monkeypatch):
-    state = {"jobs": {"java-job": {
-        "title": "Java Backend Developer",
-        "description": "Build Java APIs.",
-        "skills": ["Java"],
-    }}}
+    state = {
+        "jobs": {
+            "java-job": {
+                "title": "Java Backend Developer",
+                "description": "Build Java APIs.",
+                "skills": ["Java"],
+            }
+        }
+    }
     monkeypatch.setattr(matcher, "voice_intake_completed", lambda candidate: False)
-    monkeypatch.setattr(matcher, "build_candidate_text", lambda candidate: "Java Backend Developer")
-    monkeypatch.setattr(matcher, "generate_embedding", lambda text: pytest.fail("matching must not embed resume-only profiles"))
+    monkeypatch.setattr(
+        matcher, "build_candidate_text", lambda candidate: "Java Backend Developer"
+    )
+    monkeypatch.setattr(
+        matcher,
+        "generate_embedding",
+        lambda text: pytest.fail("matching must not embed resume-only profiles"),
+    )
 
-    asyncio.run(matcher.refresh_candidate_job_matches(
-        "candidate", {"skills": ["Java"]}, FakeSessionFactory(state),
-    ))
+    asyncio.run(
+        matcher.refresh_candidate_job_matches(
+            "candidate",
+            {"skills": ["Java"]},
+            FakeSessionFactory(state),
+        )
+    )
 
     assert "inserted" not in state
 
     monkeypatch.setattr(matcher, "voice_intake_completed", VOICE_INTAKE_COMPLETED)
     monkeypatch.setattr(matcher, "generate_embedding", lambda text: [0.1])
-    monkeypatch.setattr(matcher, "search_job_chunks", lambda vector, limit, country_code=None: [("java-job", .9)])
+    monkeypatch.setattr(
+        matcher,
+        "search_job_chunks",
+        lambda vector, limit, country_code=None: [("java-job", 0.9)],
+    )
     monkeypatch.setattr(matcher, "_get_candidate_intelligence", lambda candidate: {})
-    asyncio.run(matcher.refresh_candidate_job_matches(
-        "candidate",
-        {"skills": ["Java"], "raw_data": {"voice_intake": {"status": "completed"}}},
-        FakeSessionFactory(state),
-    ))
+    asyncio.run(
+        matcher.refresh_candidate_job_matches(
+            "candidate",
+            {"skills": ["Java"], "raw_data": {"voice_intake": {"status": "completed"}}},
+            FakeSessionFactory(state),
+        )
+    )
 
     assert state["inserted"] == ["java-job"]
 
 
 def test_voice_intake_completed_reads_existing_persisted_status():
-    assert VOICE_INTAKE_COMPLETED({"raw_data": {"voice_intake": {"status": "completed"}}})
-    assert not VOICE_INTAKE_COMPLETED({"raw_data": {"voice_intake": {"status": "in_progress"}}})
+    assert VOICE_INTAKE_COMPLETED(
+        {"raw_data": {"voice_intake": {"status": "completed"}}}
+    )
+    assert not VOICE_INTAKE_COMPLETED(
+        {"raw_data": {"voice_intake": {"status": "in_progress"}}}
+    )
     assert not VOICE_INTAKE_COMPLETED({"raw_data": {}})
 
 
 def _candidate_preferences(**overrides):
     candidate = {
-        "experience_years": 2, "current_role": "Java Backend Developer",
+        "experience_years": 2,
+        "current_role": "Java Backend Developer",
         "skills": ["Java", "Spring Boot"],
-        "raw_data": {"preferred_roles": ["Java Backend Developer"], "country": "India", "country_code": "IN"},
+        "raw_data": {
+            "preferred_roles": ["Java Backend Developer"],
+            "country": "India",
+            "country_code": "IN",
+        },
     }
     candidate["raw_data"].update(overrides)
     return matcher._build_candidate_signals(candidate)
 
 
 def _job(**overrides):
-    job = {"title": "Java Backend Developer", "description": "Java Spring Boot APIs", "requirements": "",
-           "skills": ["Java", "Spring Boot"], "country": "India"}
+    job = {
+        "title": "Java Backend Developer",
+        "description": "Java Spring Boot APIs",
+        "requirements": "",
+        "skills": ["Java", "Spring Boot"],
+        "country": "India",
+    }
     job.update(overrides)
     return job
 
@@ -713,7 +922,16 @@ def test_candidate_first_experience_fit_prefers_1_to_3_over_8_to_10():
     senior = _job(requirements="8-10 years of experience")
     assert matcher._preference_eligibility(signals, near, 2)[0]
     assert not matcher._preference_eligibility(signals, senior, 2)[0]
-    near_score, near_parts = matcher._hybrid_score(signals, near["title"], near["description"], near["requirements"], near["skills"], .5, job_metadata=near, candidate_years=2)
+    near_score, near_parts = matcher._hybrid_score(
+        signals,
+        near["title"],
+        near["description"],
+        near["requirements"],
+        near["skills"],
+        0.5,
+        job_metadata=near,
+        candidate_years=2,
+    )
     assert near_parts["experience_fit_score"] == 1
     assert near_score > 0
 
@@ -721,26 +939,74 @@ def test_candidate_first_experience_fit_prefers_1_to_3_over_8_to_10():
 def test_target_role_and_skill_signals_beat_unrelated_role():
     signals = _candidate_preferences()
     matching = _job()
-    unrelated = _job(title="Content Writer", description="Write editorial copy", skills=["Writing"])
-    a, _ = matcher._hybrid_score(signals, matching["title"], matching["description"], matching["requirements"], matching["skills"], .4, job_metadata=matching, candidate_years=2)
-    b, _ = matcher._hybrid_score(signals, unrelated["title"], unrelated["description"], unrelated["requirements"], unrelated["skills"], .9, job_metadata=unrelated, candidate_years=2)
+    unrelated = _job(
+        title="Content Writer", description="Write editorial copy", skills=["Writing"]
+    )
+    a, _ = matcher._hybrid_score(
+        signals,
+        matching["title"],
+        matching["description"],
+        matching["requirements"],
+        matching["skills"],
+        0.4,
+        job_metadata=matching,
+        candidate_years=2,
+    )
+    b, _ = matcher._hybrid_score(
+        signals,
+        unrelated["title"],
+        unrelated["description"],
+        unrelated["requirements"],
+        unrelated["skills"],
+        0.9,
+        job_metadata=unrelated,
+        candidate_years=2,
+    )
     assert a > b
 
 
 def test_explicit_preferences_company_location_salary_and_missing_metadata_are_neutral():
-    signals = _candidate_preferences(company_type_preference=["startup"], preferred_locations=["Hyderabad"], expected_salary="12 LPA")
-    startup = _job(location="Hyderabad", salary_range="15 LPA", structured_data={"company_type": "startup"}, description="Startup: Java Spring Boot APIs")
-    enterprise = _job(location="Pune", salary_range="8 LPA", structured_data={"company_type": "enterprise"}, description="Enterprise Java Spring Boot APIs")
+    signals = _candidate_preferences(
+        company_type_preference=["startup"],
+        preferred_locations=["Hyderabad"],
+        expected_salary="12 LPA",
+    )
+    startup = _job(
+        location="Hyderabad",
+        salary_range="15 LPA",
+        structured_data={"company_type": "startup"},
+        description="Startup: Java Spring Boot APIs",
+    )
+    enterprise = _job(
+        location="Pune",
+        salary_range="8 LPA",
+        structured_data={"company_type": "enterprise"},
+        description="Enterprise Java Spring Boot APIs",
+    )
     startup_pref, _ = matcher._preference_score(signals, startup)
     enterprise_pref, _ = matcher._preference_score(signals, enterprise)
     assert startup_pref > enterprise_pref
-    assert not matcher._preference_eligibility(signals, enterprise, 2)[0]  # explicit location
+    assert not matcher._preference_eligibility(signals, enterprise, 2)[
+        0
+    ]  # explicit location
     neutral, components = matcher._preference_score(_candidate_preferences(), _job())
-    assert neutral == .5 and components == {"country_location": .5}
+    assert neutral == 0.5 and components == {"country_location": 0.5}
 
 
 def test_remote_only_and_employment_type_are_explicit_eligibility_constraints():
-    signals = _candidate_preferences(remote_preference="remote only", employment_types=["full-time"])
-    assert not matcher._preference_eligibility(signals, _job(remote_policy="Onsite", employment_type="full-time"), 2)[0]
-    assert not matcher._preference_eligibility(signals, _job(remote=True, remote_policy="Remote", employment_type="contract"), 2)[0]
-    assert matcher._preference_eligibility(signals, _job(remote=True, remote_policy="Remote", employment_type="full-time"), 2)[0]
+    signals = _candidate_preferences(
+        remote_preference="remote only", employment_types=["full-time"]
+    )
+    assert not matcher._preference_eligibility(
+        signals, _job(remote_policy="Onsite", employment_type="full-time"), 2
+    )[0]
+    assert not matcher._preference_eligibility(
+        signals,
+        _job(remote=True, remote_policy="Remote", employment_type="contract"),
+        2,
+    )[0]
+    assert matcher._preference_eligibility(
+        signals,
+        _job(remote=True, remote_policy="Remote", employment_type="full-time"),
+        2,
+    )[0]

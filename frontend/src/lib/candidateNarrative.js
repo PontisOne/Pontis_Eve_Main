@@ -1,4 +1,4 @@
-import { formatExperienceYears, normalizeProfileForDisplay } from "./profileNormalization";
+import { formatExperienceDuration, normalizeProfileForDisplay } from "./profileNormalization";
 
 function sentence(value) {
   const text = String(value || "").replace(/\s+/g, " ").trim().replace(/[.!?]+$/, "");
@@ -6,9 +6,7 @@ function sentence(value) {
 }
 
 function readableYears(value) {
-  const normalized = formatExperienceYears(value);
-  if (!normalized || Number(normalized) <= 0) return "";
-  return `${normalized} year${Number(normalized) === 1 ? "" : "s"}`;
+  return formatExperienceDuration(value);
 }
 
 function articleFor(value) {

@@ -2,6 +2,7 @@
 Integration test: fetch one job from PostgreSQL → embed → upsert to Qdrant → verify.
 Run from backend/: python test_job_qdrant.py
 """
+
 import asyncio
 import sys
 from pathlib import Path
@@ -13,18 +14,17 @@ load_dotenv(Path(__file__).parent / ".env")
 sys.path.insert(0, str(Path(__file__).parent))
 sys.path.insert(0, str(Path(__file__).parent / "app" / "job_ingestion"))
 
-from sqlalchemy import text
+import uuid  # noqa: E402
 
-from server import SessionLocal
-from app.job_ingestion.embedding_service import generate_job_embedding
-from app.job_ingestion.qdrant_service import (
+from sqlalchemy import text  # noqa: E402
+
+from app.job_ingestion.qdrant_service import (  # noqa: E402
     COLLECTION_NAME,
+    _client,
     ensure_collection,
     upsert_job_embedding,
-    _client,
 )
-
-import uuid
+from server import SessionLocal  # noqa: E402
 
 
 async def fetch_one_job() -> dict:
@@ -47,22 +47,26 @@ async def fetch_one_job() -> dict:
 
 
 def main():
+    from app.job_ingestion.embedding_service import generate_job_embedding
+
     row = asyncio.run(fetch_one_job())
 
     job_id = str(row["id"])
     job = {
-        "ats_job_id":      row["ats_job_id"],
-        "title":           row["title"],
-        "company_name":    row["company_name"],
-        "ats_type":        row["ats_type"],
-        "department":      row["department"],
-        "location":        row["location"],
+        "ats_job_id": row["ats_job_id"],
+        "title": row["title"],
+        "company_name": row["company_name"],
+        "ats_type": row["ats_type"],
+        "department": row["department"],
+        "location": row["location"],
         "employment_type": row["employment_type"],
-        "salary_range":    row["salary_range"],
-        "description":     row["description"],
+        "salary_range": row["salary_range"],
+        "description": row["description"],
     }
 
-    print(f"Fetched job: id={job_id}  title={job['title']!r}  ats_type={job['ats_type']}")
+    print(
+        f"Fetched job: id={job_id}  title={job['title']!r}  ats_type={job['ats_type']}"
+    )
 
     embedding = generate_job_embedding(job)
     print(f"Embedding generated: size={len(embedding)}")
@@ -73,7 +77,7 @@ def main():
     upsert_job_embedding(job_id, embedding, job)
     print("Upserted embedding to Qdrant")
 
-    point_id = uuid.UUID(job_id).int % (2 ** 63)
+    point_id = uuid.UUID(job_id).int % (2**63)
     results = _client.retrieve(
         collection_name=COLLECTION_NAME,
         ids=[point_id],

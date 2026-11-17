@@ -2,15 +2,15 @@
 Unit tests for voice intake pure functions.
 No network / DB required.
 """
-import sys
+
 import os
-import json
 import re
-import pytest
+import sys
 
 # Allow importing server module directly
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
+from location_matching import country_code, country_eligible
 from server import (
     _merge_certifications,
     _merge_list,
@@ -19,7 +19,6 @@ from server import (
     _merge_voice_into_profile,
     _normalize_certifications,
 )
-from location_matching import country_code, country_eligible
 
 
 def test_explicit_country_is_persisted_without_city_inference():
@@ -45,9 +44,14 @@ def test_city_only_does_not_infer_country():
 def test_country_code_answers_use_matching_boundary():
     assert country_code("India") == "IN"
     assert country_code("USA") == "US"
-    candidate = {"location": "Hyderabad", "raw_data": {"country": "India", "country_code": "IN"}}
+    candidate = {
+        "location": "Hyderabad",
+        "raw_data": {"country": "India", "country_code": "IN"},
+    }
     assert country_eligible(candidate, {"country": "India", "location": "Hyderabad"})
-    assert not country_eligible(candidate, {"country": "United States", "location": "New York", "remote": True})
+    assert not country_eligible(
+        candidate, {"country": "United States", "location": "New York", "remote": True}
+    )
 
 
 class TestMergeList:
@@ -73,18 +77,26 @@ class TestMergeList:
 class TestProjectNormalization:
     def test_preserves_only_explicit_projects_and_merges_duplicate_titles(self):
         projects = _merge_projects(
-            [{"title": "AI job aggregation", "description": "Aggregated jobs", "technologies": ["Python"]}],
+            [
+                {
+                    "title": "AI job aggregation",
+                    "description": "Aggregated jobs",
+                    "technologies": ["Python"],
+                }
+            ],
             [
                 {"name": "AI Job Aggregation", "technologies": ["FastAPI", "Python"]},
                 {"description": "Built backend APIs without naming a project"},
             ],
         )
 
-        assert projects == [{
-            "title": "AI job aggregation",
-            "description": "Aggregated jobs",
-            "technologies": ["Python", "FastAPI"],
-        }]
+        assert projects == [
+            {
+                "title": "AI job aggregation",
+                "description": "Aggregated jobs",
+                "technologies": ["Python", "FastAPI"],
+            }
+        ]
 
 
 class TestMergeVoiceIntoProfile:
@@ -99,7 +111,9 @@ class TestMergeVoiceIntoProfile:
             "location": "New York",
             "experience_years": 5.0,
             "skills": ["Python", "Django"],
-            "work_experience": [{"title": "Engineer", "company": "Acme", "description": "Built APIs"}],
+            "work_experience": [
+                {"title": "Engineer", "company": "Acme", "description": "Built APIs"}
+            ],
             "education": [{"degree": "B.Sc CS", "institution": "MIT"}],
         }
 
@@ -150,21 +164,25 @@ class TestMergeVoiceIntoProfile:
     def test_explicit_voice_projects_are_persisted_in_raw_data_idempotently(self):
         profile = self._base_profile()
         voice = {
-            "projects": [{
-                "title": "ATS API integration",
-                "description": "Integrated the ATS API for job matching.",
-                "technologies": ["FastAPI", "REST API"],
-            }]
+            "projects": [
+                {
+                    "title": "ATS API integration",
+                    "description": "Integrated the ATS API for job matching.",
+                    "technologies": ["FastAPI", "REST API"],
+                }
+            ]
         }
 
         once = _merge_voice_into_profile(profile, voice)
         twice = _merge_voice_into_profile(once, voice)
 
-        assert twice["raw_data"]["projects"] == [{
-            "title": "ATS API integration",
-            "description": "Integrated the ATS API for job matching.",
-            "technologies": ["FastAPI", "REST API"],
-        }]
+        assert twice["raw_data"]["projects"] == [
+            {
+                "title": "ATS API integration",
+                "description": "Integrated the ATS API for job matching.",
+                "technologies": ["FastAPI", "REST API"],
+            }
+        ]
 
     def test_missing_summary_filled_from_voice(self):
         profile = self._base_profile()
@@ -204,7 +222,9 @@ class TestMergeVoiceIntoProfile:
         }
         merged = _merge_voice_into_profile(profile, voice)
         summary = merged["summary"]
-        sentence_count = len([part for part in re.split(r"[.!?]+", summary) if part.strip()])
+        sentence_count = len(
+            [part for part in re.split(r"[.!?]+", summary) if part.strip()]
+        )
         assert 2 <= sentence_count <= 4
         assert "Software Engineer" in summary
         assert "Python" in summary
@@ -276,7 +296,9 @@ class TestMergeVoiceIntoProfile:
         merged = _merge_voice_into_profile(profile, voice)
         assert merged["experience_years"] == 7.0
 
-    def test_certifications_are_kept_out_of_skills_when_they_are_clearly_certifications(self):
+    def test_certifications_are_kept_out_of_skills_when_they_are_clearly_certifications(
+        self,
+    ):
         profile = self._base_profile()
         voice = {
             "skills": ["AWS Certified Solutions Architect - Associate", "Python"],
@@ -294,17 +316,22 @@ class TestMergeVoiceIntoProfile:
         ]
 
     def test_normalize_certifications_collapses_near_duplicates(self):
-        result = _normalize_certifications([
-            "AWS Certified Solutions Architect - Associate",
-            "aws certified solutions architect associate",
-            "AWS Solutions Architect Associate",
-        ])
+        result = _normalize_certifications(
+            [
+                "AWS Certified Solutions Architect - Associate",
+                "aws certified solutions architect associate",
+                "AWS Solutions Architect Associate",
+            ]
+        )
         assert result == ["AWS Certified Solutions Architect - Associate"]
 
     def test_merge_certifications_deduplicates_existing_and_new_values(self):
         result = _merge_certifications(
             ["AWS Certified Solutions Architect - Associate"],
-            [" aws certified solutions architect associate ", "AWS Solutions Architect Associate"],
+            [
+                " aws certified solutions architect associate ",
+                "AWS Solutions Architect Associate",
+            ],
         )
         assert result == ["AWS Certified Solutions Architect - Associate"]
 
@@ -320,7 +347,11 @@ class TestMergeVoiceIntoProfile:
 
     def test_work_experience_appended(self):
         profile = self._base_profile()
-        voice = {"work_experience": [{"title": "Lead", "company": "NewCo", "description": "Led team"}]}
+        voice = {
+            "work_experience": [
+                {"title": "Lead", "company": "NewCo", "description": "Led team"}
+            ]
+        }
         merged = _merge_voice_into_profile(profile, voice)
         assert len(merged["work_experience"]) == 2
 
@@ -377,7 +408,10 @@ class TestMergeVoiceIntoProfile:
         assert merged_twice["work_experience"] == merged_once["work_experience"]
         assert merged_twice["education"] == merged_once["education"]
         assert merged_twice["skills"] == merged_once["skills"]
-        assert merged_twice["raw_data"]["certifications"] == merged_once["raw_data"]["certifications"]
+        assert (
+            merged_twice["raw_data"]["certifications"]
+            == merged_once["raw_data"]["certifications"]
+        )
 
     def test_real_start_dates_are_preserved_and_present_is_not_doubled(self):
         profile = self._base_profile()
@@ -428,13 +462,18 @@ class TestMergeVoiceIntoProfile:
         merged = _merge_voice_into_profile(profile, voice)
         exp = merged["work_experience"][0]
         assert exp["end_date"] == "Present"
-        assert exp.get("dates", "") not in {"Present â€” Present", "Present - Present"}
-        assert not exp.get("dates", "").startswith("Present â€” Present")
+        assert exp.get("dates", "") not in {"Present — Present", "Present - Present"}
+        assert not exp.get("dates", "").startswith("Present — Present")
 
     def test_education_is_preserved_and_merged_without_duplicates(self):
         profile = self._base_profile()
         profile["education"] = [
-            {"degree": "B.Sc CS", "institution": "MIT", "start_date": "2012", "end_date": "2016"}
+            {
+                "degree": "B.Sc CS",
+                "institution": "MIT",
+                "start_date": "2012",
+                "end_date": "2016",
+            }
         ]
         voice = {
             "education": [
@@ -454,8 +493,13 @@ class TestMergeVoiceIntoProfile:
     def test_voice_intake_month_year_start_date_preserved(self):
         """Regression: 'January 2025' start date from voice intake must not become 'Present'."""
         from server import _merge_work_experience
+
         existing = [
-            {"title": "Backend Developer", "company": "Viralbug", "description": "Built services."}
+            {
+                "title": "Backend Developer",
+                "company": "Viralbug",
+                "description": "Built services.",
+            }
         ]
         voice_item = [
             {
@@ -519,7 +563,9 @@ class TestRegressionEducationAndNewJob:
         entry = merged[0]
         assert entry["start_date"] == "2015", "start_date must not be cleared"
         assert entry["end_date"] == "2019", "end_date must not be cleared"
-        assert entry["location"] == "Cambridge, MA", "new field from voice should be added"
+        assert entry["location"] == "Cambridge, MA", (
+            "new field from voice should be added"
+        )
 
     def test_education_dates_not_overwritten_by_voice_dates(self):
         """
@@ -540,7 +586,7 @@ class TestRegressionEducationAndNewJob:
             {
                 "degree": "M.Sc Data Science",
                 "institution": "Stanford",
-                "start_date": "",   # voice provides empty — must not overwrite
+                "start_date": "",  # voice provides empty — must not overwrite
                 "end_date": "",
             }
         ]
@@ -583,8 +629,12 @@ class TestRegressionEducationAndNewJob:
             f"Expected 2 separate work-experience records, got {len(merged)}: {merged}"
         )
 
-        viral_bug = next((e for e in merged if "Viral Bug" in (e.get("company") or "")), None)
-        newcorp = next((e for e in merged if "NewCorp" in (e.get("company") or "")), None)
+        viral_bug = next(
+            (e for e in merged if "Viral Bug" in (e.get("company") or "")), None
+        )
+        newcorp = next(
+            (e for e in merged if "NewCorp" in (e.get("company") or "")), None
+        )
 
         assert viral_bug is not None, "Viral Bug entry must be preserved"
         assert newcorp is not None, "NewCorp entry must be created"
@@ -643,24 +693,31 @@ class TestRegressionEducationAndNewJob:
             "experience_years": 2,
             "skills": ["Python"],
             "education": [{"degree": "B.Sc", "institution": "University"}],
-            "raw_data": {"availability": "30 days", "preferred_roles": ["Backend Engineer"]},
-            "work_experience": [{
-                "title": "Software Engineer",
-                "company": "Deepija Telecom",
-                "start_date": "2023",
-                "end_date": "2024",
-                "description": "Built telecom platform APIs.",
-            }],
+            "raw_data": {
+                "availability": "30 days",
+                "preferred_roles": ["Backend Engineer"],
+            },
+            "work_experience": [
+                {
+                    "title": "Software Engineer",
+                    "company": "Deepija Telecom",
+                    "start_date": "2023",
+                    "end_date": "2024",
+                    "description": "Built telecom platform APIs.",
+                }
+            ],
         }
         voice = {
             "current_role": "Python Developer",
             "current_company": "Viral Bug",
-            "work_experience": [{
-                "title": "Python Developer",
-                "company": "Viral Bug",
-                "end_date": "Present",
-                "description": "Developing Python services.",
-            }],
+            "work_experience": [
+                {
+                    "title": "Python Developer",
+                    "company": "Viral Bug",
+                    "end_date": "Present",
+                    "description": "Developing Python services.",
+                }
+            ],
         }
 
         merged = _merge_voice_into_profile(profile, voice)
@@ -668,8 +725,14 @@ class TestRegressionEducationAndNewJob:
         assert merged["current_role"] == "Python Developer"
         assert merged["current_company"] == "Viral Bug"
         assert len(merged["work_experience"]) == 2
-        deepija = next(item for item in merged["work_experience"] if item["company"] == "Deepija Telecom")
-        viral_bug = next(item for item in merged["work_experience"] if item["company"] == "Viral Bug")
+        deepija = next(
+            item
+            for item in merged["work_experience"]
+            if item["company"] == "Deepija Telecom"
+        )
+        viral_bug = next(
+            item for item in merged["work_experience"] if item["company"] == "Viral Bug"
+        )
         assert deepija["description"] == "Built telecom platform APIs."
         assert deepija["start_date"] == "2023"
         assert deepija["end_date"] == "2024"
@@ -689,18 +752,22 @@ class TestRegressionEducationAndNewJob:
         """The same role and employer is enriched rather than appended."""
         from server import _merge_work_experience
 
-        existing = [{
-            "title": "Python Developer",
-            "company": "Viral Bug",
-            "start_date": "2025",
-            "description": "Built internal automation.",
-        }]
-        voice = [{
-            "title": "Python Developer",
-            "company": "Viral Bug",
-            "end_date": "Present",
-            "description": "Maintains production Python services.",
-        }]
+        existing = [
+            {
+                "title": "Python Developer",
+                "company": "Viral Bug",
+                "start_date": "2025",
+                "description": "Built internal automation.",
+            }
+        ]
+        voice = [
+            {
+                "title": "Python Developer",
+                "company": "Viral Bug",
+                "end_date": "Present",
+                "description": "Maintains production Python services.",
+            }
+        ]
 
         merged = _merge_work_experience(existing, voice)
 
@@ -714,9 +781,23 @@ class TestRegressionEducationAndNewJob:
     def test_repeated_work_description_fragments_are_removed_idempotently(self):
         from server import _merge_work_experience
 
-        description = "Built a SaaS product using Python, FastAPI, REST API, and PostgreSQL."
-        existing = [{"title": "Python Developer", "company": "Viral Bug", "description": f"{description} {description}"}]
-        incoming = [{"title": "Python Developer", "company": "Viral Bug", "description": description}]
+        description = (
+            "Built a SaaS product using Python, FastAPI, REST API, and PostgreSQL."
+        )
+        existing = [
+            {
+                "title": "Python Developer",
+                "company": "Viral Bug",
+                "description": f"{description} {description}",
+            }
+        ]
+        incoming = [
+            {
+                "title": "Python Developer",
+                "company": "Viral Bug",
+                "description": description,
+            }
+        ]
 
         merged_once = _merge_work_experience(existing, incoming)
         merged_twice = _merge_work_experience(merged_once, incoming)
@@ -752,11 +833,13 @@ class TestRegressionEducationAndNewJob:
                 "description": "Built APIs.",
             },
         ]
-        incoming = [{
-            "title": "Backend Engineer",
-            "company": "Acme",
-            "description": "Built APIs. Improved observability.",
-        }]
+        incoming = [
+            {
+                "title": "Backend Engineer",
+                "company": "Acme",
+                "description": "Built APIs. Improved observability.",
+            }
+        ]
 
         merged_once = _merge_work_experience(persisted, incoming)
         merged_twice = _merge_work_experience(merged_once, incoming)
@@ -766,5 +849,8 @@ class TestRegressionEducationAndNewJob:
         assert acme["title"] == "Backend Engineer"
         assert acme["start_date"] == "2022"
         assert acme["end_date"] == "2024"
-        assert acme["description"] == "Built APIs. Owned deployments. Improved observability;"
+        assert (
+            acme["description"]
+            == "Built APIs. Owned deployments. Improved observability;"
+        )
         assert merged_twice == merged_once

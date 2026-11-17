@@ -148,9 +148,15 @@ export default function Sidebar({
                 : "Complete your profile"}
             </p>
             <p className="mt-1 text-[12.5px] text-[#4A4A48]">
-              {profileGuidance
-                ? `${profileGuidance.current_percent}% complete · ${profileGuidance.remaining_percent_to_90}% to go`
-                : `${guidanceItems.length} missing detail${guidanceItems.length === 1 ? "" : "s"}`}
+              {profileGuidance ? (
+                `${profileGuidance.current_percent}% complete${
+                  profileGuidance.current_percent < 90
+                    ? ` · ${profileGuidance.remaining_percent_to_90}% to go`
+                    : ""
+                }`
+              ) : (
+                `${guidanceItems.length} missing detail${guidanceItems.length === 1 ? "" : "s"}`
+              )}
             </p>
             {guidanceItems.length > 0 && (
               <ul className="mt-3 space-y-2">

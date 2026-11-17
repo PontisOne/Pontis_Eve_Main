@@ -77,6 +77,19 @@ FRONTEND_URL=http://localhost:5173
 CORS_ORIGINS=http://localhost:5173
 ```
 
+## Real-LLM integration tests
+
+The real-provider suite is opt-in and never runs in the ordinary test suite. It uses the same Groq-compatible client, model, prompt, Pydantic schemas, normalization, and extraction cache as the application. It performs no database writes.
+
+From `backend/` in PowerShell:
+
+```powershell
+$env:EVE_INTEGRATION_TESTS = "1"
+pytest -n 0 -m real_llm tests/integration/test_eve_real_llm_chat.py -s
+```
+
+The command requires a non-placeholder `GROQ_API_KEY_1` (or `GROQ_API_KEY`). Missing credentials or the opt-in flag causes the suite to skip; it never silently substitutes mocks. Real PostgreSQL chat/persistence verification is intentionally not enabled until a separately verified test database and isolated Redis instance are supplied.
+
 The application loads `backend/.env` and requires `DATABASE_URL` during import. The Groq client pool accepts `GROQ_API_KEY_1` through `GROQ_API_KEY_7`; the legacy `GROQ_API_KEY` is accepted if no numbered keys are set. The candidate session secret must be non-placeholder and at least 32 characters.
 
 Start the API:

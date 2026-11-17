@@ -9,7 +9,7 @@ from __future__ import annotations
 import json
 import logging
 import os
-from typing import Any, Optional
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
@@ -34,9 +34,10 @@ async def _client():
         return None
     try:
         from redis.asyncio import Redis
-        _redis_client = Redis.from_url(url, decode_responses=True,
-                                       socket_connect_timeout=1,
-                                       socket_timeout=1)
+
+        _redis_client = Redis.from_url(
+            url, decode_responses=True, socket_connect_timeout=1, socket_timeout=1
+        )
         await _redis_client.ping()
         logger.info("[profile-cache] Redis connection established")
         return _redis_client
@@ -46,7 +47,7 @@ async def _client():
         return None
 
 
-async def get(candidate_id: str) -> Optional[dict[str, Any]]:
+async def get(candidate_id: str) -> dict[str, Any] | None:
     try:
         client = await _client()
         if not client:
@@ -59,7 +60,9 @@ async def get(candidate_id: str) -> Optional[dict[str, Any]]:
         if isinstance(data, dict):
             logger.info("[profile-cache] HIT candidate=%s", candidate_id)
             return data
-        logger.warning("[profile-cache] INVALID candidate=%s; treating as miss", candidate_id)
+        logger.warning(
+            "[profile-cache] INVALID candidate=%s; treating as miss", candidate_id
+        )
         return None
     except Exception as exc:
         logger.warning("[profile-cache] read failed for %s: %s", candidate_id, exc)
@@ -70,8 +73,12 @@ async def set(candidate_id: str, profile: dict[str, Any]) -> None:
     try:
         client = await _client()
         if client:
-            await client.set(_key(candidate_id), json.dumps(profile, default=str), ex=_CACHE_TTL)
-            logger.info("[profile-cache] SET candidate=%s ttl=%ss", candidate_id, _CACHE_TTL)
+            await client.set(
+                _key(candidate_id), json.dumps(profile, default=str), ex=_CACHE_TTL
+            )
+            logger.info(
+                "[profile-cache] SET candidate=%s ttl=%ss", candidate_id, _CACHE_TTL
+            )
     except Exception as exc:
         logger.warning("[profile-cache] write failed for %s: %s", candidate_id, exc)
 
@@ -83,5 +90,6 @@ async def invalidate(candidate_id: str) -> None:
             await client.delete(_key(candidate_id))
             logger.info("[profile-cache] INVALIDATE candidate=%s", candidate_id)
     except Exception as exc:
-        logger.warning("[profile-cache] invalidation failed for %s: %s", candidate_id, exc)
-
+        logger.warning(
+            "[profile-cache] invalidation failed for %s: %s", candidate_id, exc
+        )

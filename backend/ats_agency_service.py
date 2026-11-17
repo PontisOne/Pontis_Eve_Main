@@ -1,6 +1,5 @@
 from sqlalchemy import text
 
-
 ATS_AGENCY_DEFAULTS = {
     "greenhouse": {
         "name": "Greenhouse",
@@ -29,9 +28,7 @@ async def get_or_create_ats_agency(db, ats_type: str):
     ats_type = ats_type.strip().lower()
 
     if ats_type not in ATS_AGENCY_DEFAULTS:
-        raise ValueError(
-            f"Unsupported ATS type: {ats_type}"
-        )
+        raise ValueError(f"Unsupported ATS type: {ats_type}")
 
     defaults = ATS_AGENCY_DEFAULTS[ats_type]
 

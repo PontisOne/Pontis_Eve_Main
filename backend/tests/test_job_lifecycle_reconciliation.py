@@ -1,6 +1,9 @@
 import pytest
 
-from app.job_ingestion.scheduler import _complete_board_payload, reconcile_missing_ats_jobs
+from app.job_ingestion.scheduler import (
+    _complete_board_payload,
+    reconcile_missing_ats_jobs,
+)
 
 
 class Result:

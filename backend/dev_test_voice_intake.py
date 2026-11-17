@@ -7,16 +7,17 @@ Steps:
   2. POST /api/voice/candidate-intake with the test transcript
   3. Verify updated_by_source = 'eve_voice' in PostgreSQL
 """
-import io
-import sys
-import requests
-from reportlab.pdfgen import canvas as rl_canvas
+
 import asyncio
-from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker
-from sqlalchemy import text
-from dotenv import load_dotenv
-from pathlib import Path
+import io
 import os
+from pathlib import Path
+
+import requests
+from dotenv import load_dotenv
+from reportlab.pdfgen import canvas as rl_canvas
+from sqlalchemy import text
+from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 load_dotenv(Path(__file__).parent / ".env")
 
@@ -77,7 +78,9 @@ async def verify_db(cid: str):
     engine = create_async_engine(DATABASE_URL, pool_pre_ping=True)
     async with async_sessionmaker(bind=engine, expire_on_commit=False)() as db:
         row = await db.execute(
-            text("SELECT updated_by_source, skills, experience_years, raw_data FROM candidates WHERE id = :cid"),
+            text(
+                "SELECT updated_by_source, skills, experience_years, raw_data FROM candidates WHERE id = :cid"
+            ),
             {"cid": cid},
         )
         result = row.fetchone()
@@ -100,6 +103,8 @@ async def verify_db(cid: str):
 if __name__ == "__main__":
     cid = create_candidate()
     result = run_voice_intake(cid)
-    assert result["status"] in ("in_progress", "completed"), f"Unexpected voice intake status: {result}"
+    assert result["status"] in ("in_progress", "completed"), (
+        f"Unexpected voice intake status: {result}"
+    )
     asyncio.run(verify_db(cid))
     print(f"\nAll checks passed for candidate {cid}")

@@ -9,6 +9,7 @@ Covers:
 - Attempting to delete a non-existent item
 - Ensuring unrelated profile data remains unchanged
 """
+
 import os
 import sys
 
@@ -20,7 +21,10 @@ import server
 class TestProfileStrengthGuidanceAnswers:
     def test_short_industry_answer_uses_the_preceding_guidance_question(self):
         history = [
-            {"role": "assistant", "content": "Which industries are you most interested in working in?"},
+            {
+                "role": "assistant",
+                "content": "Which industries are you most interested in working in?",
+            },
             {"role": "user", "content": "software industry"},
         ]
 
@@ -33,7 +37,10 @@ class TestProfileStrengthGuidanceAnswers:
 
     def test_short_employment_type_answer_uses_the_preceding_guidance_question(self):
         history = [
-            {"role": "assistant", "content": "Are you looking for full-time, part-time, contract, or freelance work?"},
+            {
+                "role": "assistant",
+                "content": "Are you looking for full-time, part-time, contract, or freelance work?",
+            },
             {"role": "user", "content": "full time"},
         ]
 
@@ -45,7 +52,10 @@ class TestProfileStrengthGuidanceAnswers:
 
     def test_short_remote_answer_uses_the_preceding_guidance_question(self):
         history = [
-            {"role": "assistant", "content": "Do you prefer remote, hybrid, or on-site work?"},
+            {
+                "role": "assistant",
+                "content": "Do you prefer remote, hybrid, or on-site work?",
+            },
             {"role": "user", "content": "remote"},
         ]
 
@@ -67,14 +77,16 @@ class TestImmediateExplicitProfileUpdates:
 
     def test_prose_around_fenced_profile_updates_is_preserved(self):
         reply = (
-            'Here are the updates I made.\n```\n'
+            "Here are the updates I made.\n```\n"
             '{"profile_updates":{"employment_types":["Full-time"]}}\n'
-            '```\nYour preferences are now saved.'
+            "```\nYour preferences are now saved."
         )
 
         clean, updates = server._extract_profile_updates(reply)
 
-        assert clean == "Here are the updates I made.\n\nYour preferences are now saved."
+        assert (
+            clean == "Here are the updates I made.\n\nYour preferences are now saved."
+        )
         assert updates == {"employment_types": ["Full-time"]}
 
     def test_unrelated_fenced_json_remains_visible(self):
@@ -138,9 +150,7 @@ class TestImmediateExplicitProfileUpdates:
             message, {"work_experience": []}, [{"role": "user", "content": message}]
         )
 
-        assert result["updates"] == {
-            "projects": [{"title": "Inventory Platform"}]
-        }
+        assert result["updates"] == {"projects": [{"title": "Inventory Platform"}]}
 
     def test_candidate_scalar_update_is_merged_when_llm_omits_it(self):
         reply = (
@@ -161,7 +171,9 @@ class TestImmediateExplicitProfileUpdates:
 class TestChatExperienceCompletion:
     def test_project_at_company_with_dates_asks_for_role_before_saving(self):
         message = "Worked on AWS services and VPC creations at Infoz IT from Feb 2024 to Sept 2024"
-        result = server._chat_profile_preflight(message, {"work_experience": []}, [{"role": "user", "content": message}])
+        result = server._chat_profile_preflight(
+            message, {"work_experience": []}, [{"role": "user", "content": message}]
+        )
 
         assert result["updates"] is None
         assert "job title or role" in result["reply"]
@@ -173,7 +185,9 @@ class TestChatExperienceCompletion:
             {"role": "assistant", "content": "What was your job title or role?"},
             {"role": "user", "content": "AWS Engineer"},
         ]
-        result = server._chat_profile_preflight("AWS Engineer", {"work_experience": []}, history)
+        result = server._chat_profile_preflight(
+            "AWS Engineer", {"work_experience": []}, history
+        )
         entry = result["updates"]["work_experience"][0]
 
         assert entry == {
@@ -185,27 +199,36 @@ class TestChatExperienceCompletion:
         }
 
     def test_missing_end_date_is_not_rendered_as_present(self):
-        profile = server._normalize_for_frontend({
-            "work_experience": [{
-                "title": "AWS Engineer",
-                "company": "Infoz IT",
-                "start_date": "Feb 2024",
-                "description": "Worked on VPC creations",
-            }],
-            "raw_data": {},
-        })
+        profile = server._normalize_for_frontend(
+            {
+                "work_experience": [
+                    {
+                        "title": "AWS Engineer",
+                        "company": "Infoz IT",
+                        "start_date": "Feb 2024",
+                        "description": "Worked on VPC creations",
+                    }
+                ],
+                "raw_data": {},
+            }
+        )
 
         assert profile["experience"][0]["dates"] == "Feb 2024"
         assert "Present" not in profile["experience"][0]["dates"]
 
     def test_new_incomplete_chat_experience_is_blocked(self):
-        missing = server._incomplete_new_chat_experience({
-            "work_experience": [{
-                "title": "AWS Engineer",
-                "company": "Infoz IT",
-                "description": "Worked on VPC creations",
-            }],
-        }, {"work_experience": []})
+        missing = server._incomplete_new_chat_experience(
+            {
+                "work_experience": [
+                    {
+                        "title": "AWS Engineer",
+                        "company": "Infoz IT",
+                        "description": "Worked on VPC creations",
+                    }
+                ],
+            },
+            {"work_experience": []},
+        )
 
         assert "start month/year" in missing
         assert "end month/year or confirmation that it is current" in missing
@@ -215,19 +238,23 @@ class TestProfileScalarFieldMapping:
     """Regression coverage for role/location values emitted by extractors."""
 
     def test_skill_cannot_be_persisted_as_current_role(self):
-        result = server._sanitize_profile_field_mapping({
-            "current_role": "postgres",
-            "skills": ["Python"],
-        })
+        result = server._sanitize_profile_field_mapping(
+            {
+                "current_role": "postgres",
+                "skills": ["Python"],
+            }
+        )
 
         assert "current_role" not in result
         assert result["skills"] == ["Python", "postgres"]
 
     def test_education_or_work_timeline_cannot_be_persisted_as_location(self):
-        result = server._sanitize_profile_field_mapping({
-            "current_role": "Python Developer",
-            "location": "2023-2025",
-        })
+        result = server._sanitize_profile_field_mapping(
+            {
+                "current_role": "Python Developer",
+                "location": "2023-2025",
+            }
+        )
 
         assert result["current_role"] == "Python Developer"
         assert "location" not in result
@@ -255,8 +282,18 @@ class TestProfileScalarFieldMapping:
 
     def test_resume_merge_does_not_write_misclassified_scalars(self):
         merged = server._merge_resume_into_existing_profile(
-            {"current_role": "", "location": "", "skills": [], "work_experience": [], "education": []},
-            {"current_role": "PostgreSQL", "location": "2023-2025", "skills": ["Python"]},
+            {
+                "current_role": "",
+                "location": "",
+                "skills": [],
+                "work_experience": [],
+                "education": [],
+            },
+            {
+                "current_role": "PostgreSQL",
+                "location": "2023-2025",
+                "skills": ["Python"],
+            },
         )
 
         assert merged["current_role"] == ""
@@ -268,10 +305,15 @@ class TestProfileScalarFieldMapping:
 # _sanitize_structured_list_items
 # ---------------------------------------------------------------------------
 
+
 class TestSanitizeStructuredListItems:
     def test_keeps_clean_skill_names(self):
         items = ["Python", "Docker", "Redis"]
-        assert server._sanitize_structured_list_items(items) == ["Python", "Docker", "Redis"]
+        assert server._sanitize_structured_list_items(items) == [
+            "Python",
+            "Docker",
+            "Redis",
+        ]
 
     def test_removes_these_are_my_skills_phrase(self):
         items = ["These are my skills", "Python", "Docker"]
@@ -327,6 +369,7 @@ class TestSanitizeStructuredListItems:
 # _sanitize_profile_updates
 # ---------------------------------------------------------------------------
 
+
 class TestSanitizeProfileUpdates:
     def test_clean_skills_pass_through(self):
         updates = {"skills": ["Python", "Docker", "Redis"]}
@@ -345,20 +388,32 @@ class TestSanitizeProfileUpdates:
         assert "skills" not in result
 
     def test_certifications_noise_removed(self):
-        updates = {"certifications": ["These are my certifications", "AWS Certified Developer"]}
+        updates = {
+            "certifications": ["These are my certifications", "AWS Certified Developer"]
+        }
         result = server._sanitize_profile_updates(updates)
         assert "These are my certifications" not in result.get("certifications", [])
         assert "AWS Certified Developer" in result["certifications"]
 
     def test_preferred_roles_noise_removed(self):
-        updates = {"preferred_roles": ["My preferred roles are", "Backend Engineer", "Data Engineer"]}
+        updates = {
+            "preferred_roles": [
+                "My preferred roles are",
+                "Backend Engineer",
+                "Data Engineer",
+            ]
+        }
         result = server._sanitize_profile_updates(updates)
         roles = result.get("preferred_roles", [])
         assert not any("preferred roles are" in r.lower() for r in roles)
         assert "Backend Engineer" in roles
 
     def test_work_experience_valid_entry_kept(self):
-        updates = {"work_experience": [{"title": "Engineer", "company": "Acme", "description": "Built APIs"}]}
+        updates = {
+            "work_experience": [
+                {"title": "Engineer", "company": "Acme", "description": "Built APIs"}
+            ]
+        }
         result = server._sanitize_profile_updates(updates)
         assert len(result["work_experience"]) == 1
 
@@ -414,12 +469,13 @@ class TestSanitizeProfileUpdates:
 # _extract_profile_updates — end-to-end sanitization
 # ---------------------------------------------------------------------------
 
+
 class TestExtractProfileUpdatesSanitization:
     def test_llm_marker_with_clean_skills(self):
         reply = (
             "Great, I've noted your skills.\n"
             "<<<PROFILE_UPDATES>>>\n"
-            "{\"profile_updates\": {\"skills\": [\"Python\", \"Docker\", \"Redis\"]}}\n"
+            '{"profile_updates": {"skills": ["Python", "Docker", "Redis"]}}\n'
             "<<<END_UPDATES>>>"
         )
         clean, updates = server._extract_profile_updates(reply)
@@ -430,7 +486,7 @@ class TestExtractProfileUpdatesSanitization:
         reply = (
             "Got it!\n"
             "<<<PROFILE_UPDATES>>>\n"
-            "{\"profile_updates\": {\"skills\": [\"These are the skills\", \"Python\", \"Docker\", \"Redis\"]}}\n"
+            '{"profile_updates": {"skills": ["These are the skills", "Python", "Docker", "Redis"]}}\n'
             "<<<END_UPDATES>>>"
         )
         clean, updates = server._extract_profile_updates(reply)
@@ -442,7 +498,7 @@ class TestExtractProfileUpdatesSanitization:
         reply = (
             "Noted.\n"
             "<<<PROFILE_UPDATES>>>\n"
-            "{\"profile_updates\": {\"certifications\": [\"These are my certifications\", \"AWS Certified Developer\"]}}\n"
+            '{"profile_updates": {"certifications": ["These are my certifications", "AWS Certified Developer"]}}\n'
             "<<<END_UPDATES>>>"
         )
         clean, updates = server._extract_profile_updates(reply)
@@ -456,7 +512,9 @@ class TestExtractProfileUpdatesSanitization:
         _, updates = server._extract_profile_updates("", candidate_message=message)
         if updates and "skills" in updates:
             for skill in updates["skills"]:
-                assert skill in {"FastAPI", "Docker", "Redis"}, f"Unexpected skill: {skill!r}"
+                assert skill in {"FastAPI", "Docker", "Redis"}, (
+                    f"Unexpected skill: {skill!r}"
+                )
                 assert "my python skills are" not in skill.lower()
 
     def test_natural_language_update_my_skills(self):
@@ -465,7 +523,9 @@ class TestExtractProfileUpdatesSanitization:
         _, updates = server._extract_profile_updates("", candidate_message=message)
         if updates and "skills" in updates:
             for skill in updates["skills"]:
-                assert skill in {"Python", "Docker", "Redis"}, f"Unexpected skill: {skill!r}"
+                assert skill in {"Python", "Docker", "Redis"}, (
+                    f"Unexpected skill: {skill!r}"
+                )
 
     def test_natural_language_these_are_my_skills(self):
         """'These are my skills: Python, Docker' should not save the phrase itself."""
@@ -504,7 +564,7 @@ class TestExtractProfileUpdatesSanitization:
         reply = (
             "I've updated your profile.\n"
             "<<<PROFILE_UPDATES>>>\n"
-            "{\"profile_updates\": {\"skills\": [\"Python\"]}}\n"
+            '{"profile_updates": {"skills": ["Python"]}}\n'
             "<<<END_UPDATES>>>"
         )
         clean, _ = server._extract_profile_updates(reply)
@@ -520,7 +580,7 @@ class TestExtractProfileUpdatesSanitization:
         reply = (
             "Noted your experience.\n"
             "<<<PROFILE_UPDATES>>>\n"
-            "{\"profile_updates\": {\"work_experience\": [{\"title\": \"Backend Developer\", \"company\": \"Acme\", \"description\": \"Built APIs\"}]}}\n"
+            '{"profile_updates": {"work_experience": [{"title": "Backend Developer", "company": "Acme", "description": "Built APIs"}]}}\n'
             "<<<END_UPDATES>>>"
         )
         _, updates = server._extract_profile_updates(reply)
@@ -532,7 +592,7 @@ class TestExtractProfileUpdatesSanitization:
         reply = (
             "Noted.\n"
             "<<<PROFILE_UPDATES>>>\n"
-            "{\"profile_updates\": {\"work_experience\": [{\"description\": \"Did stuff\"}]}}\n"
+            '{"profile_updates": {"work_experience": [{"description": "Did stuff"}]}}\n'
             "<<<END_UPDATES>>>"
         )
         _, updates = server._extract_profile_updates(reply)
@@ -542,6 +602,7 @@ class TestExtractProfileUpdatesSanitization:
 # ---------------------------------------------------------------------------
 # _detect_deletion_intent
 # ---------------------------------------------------------------------------
+
 
 class TestDetectDeletionIntent:
     def test_remove_skill_from_skills(self):
@@ -557,12 +618,16 @@ class TestDetectDeletionIntent:
         assert result["item"].lower() == "docker"
 
     def test_remove_certification(self):
-        result = server._detect_deletion_intent("remove AWS cert from my certifications")
+        result = server._detect_deletion_intent(
+            "remove AWS cert from my certifications"
+        )
         assert result is not None
         assert result["field"] == "certifications"
 
     def test_remove_preferred_role(self):
-        result = server._detect_deletion_intent("remove Backend Engineer from my preferred roles")
+        result = server._detect_deletion_intent(
+            "remove Backend Engineer from my preferred roles"
+        )
         assert result is not None
         assert result["field"] == "preferred_roles"
 
@@ -592,6 +657,7 @@ class TestDetectDeletionIntent:
 # ---------------------------------------------------------------------------
 # _extract_profile_updates — deletion detection
 # ---------------------------------------------------------------------------
+
 
 class TestExtractProfileUpdatesDeletion:
     def test_deletion_detected_in_candidate_message(self):
@@ -654,7 +720,7 @@ class TestExtractProfileUpdatesDeletion:
         reply = (
             "Done.\n"
             "<<<PROFILE_UPDATES>>>\n"
-            "{\"profile_updates\": {\"profile_deletions\": {\"skills\": [\"Redis\"]}}}\n"
+            '{"profile_updates": {"profile_deletions": {"skills": ["Redis"]}}}\n'
             "<<<END_UPDATES>>>"
         )
         _, updates = server._extract_profile_updates(reply)
@@ -678,16 +744,21 @@ class TestExtractProfileUpdatesDeletion:
 # _remove_item_from_list
 # ---------------------------------------------------------------------------
 
+
 class TestRemoveItemFromList:
     def test_removes_exact_match(self):
-        lst, found = server._remove_item_from_list(["Python", "FastAPI", "Docker"], "FastAPI")
+        lst, found = server._remove_item_from_list(
+            ["Python", "FastAPI", "Docker"], "FastAPI"
+        )
         assert found is True
         assert "FastAPI" not in lst
         assert "Python" in lst
         assert "Docker" in lst
 
     def test_case_insensitive_removal(self):
-        lst, found = server._remove_item_from_list(["Python", "FastAPI", "Docker"], "fastapi")
+        lst, found = server._remove_item_from_list(
+            ["Python", "FastAPI", "Docker"], "fastapi"
+        )
         assert found is True
         assert not any(x.lower() == "fastapi" for x in lst)
 
@@ -712,13 +783,16 @@ class TestRemoveItemFromList:
 # _remove_item_from_dict_list
 # ---------------------------------------------------------------------------
 
+
 class TestRemoveItemFromDictList:
     def test_removes_by_title(self):
         exp = [
             {"title": "Backend Developer", "company": "Acme"},
             {"title": "Frontend Developer", "company": "Beta"},
         ]
-        lst, found = server._remove_item_from_dict_list(exp, "Backend Developer", ["title", "company"])
+        lst, found = server._remove_item_from_dict_list(
+            exp, "Backend Developer", ["title", "company"]
+        )
         assert found is True
         assert len(lst) == 1
         assert lst[0]["title"] == "Frontend Developer"
@@ -728,14 +802,18 @@ class TestRemoveItemFromDictList:
             {"title": "Engineer", "company": "Acme"},
             {"title": "Developer", "company": "Beta"},
         ]
-        lst, found = server._remove_item_from_dict_list(exp, "Acme", ["title", "company"])
+        lst, found = server._remove_item_from_dict_list(
+            exp, "Acme", ["title", "company"]
+        )
         assert found is True
         assert len(lst) == 1
         assert lst[0]["company"] == "Beta"
 
     def test_item_not_found(self):
         exp = [{"title": "Engineer", "company": "Acme"}]
-        lst, found = server._remove_item_from_dict_list(exp, "NonExistent", ["title", "company"])
+        lst, found = server._remove_item_from_dict_list(
+            exp, "NonExistent", ["title", "company"]
+        )
         assert found is False
         assert len(lst) == 1
 
@@ -745,7 +823,9 @@ class TestRemoveItemFromDictList:
             {"title": "Data Analyst", "company": "Beta"},
             {"title": "DevOps Engineer", "company": "Gamma"},
         ]
-        lst, found = server._remove_item_from_dict_list(exp, "Data Analyst", ["title", "company"])
+        lst, found = server._remove_item_from_dict_list(
+            exp, "Data Analyst", ["title", "company"]
+        )
         assert found is True
         assert len(lst) == 2
         titles = [e["title"] for e in lst]
@@ -758,13 +838,14 @@ class TestRemoveItemFromDictList:
 # Unrelated data preservation
 # ---------------------------------------------------------------------------
 
+
 class TestUnrelatedDataPreservation:
     def test_deletion_does_not_affect_other_fields(self):
         """Deleting a skill must not touch certifications or other fields."""
         reply = (
             "Removed FastAPI from your skills.\n"
             "<<<PROFILE_UPDATES>>>\n"
-            "{\"profile_updates\": {\"profile_deletions\": {\"skills\": [\"FastAPI\"]}}}\n"
+            '{"profile_updates": {"profile_deletions": {"skills": ["FastAPI"]}}}\n'
             "<<<END_UPDATES>>>"
         )
         _, updates = server._extract_profile_updates(reply)
@@ -777,7 +858,7 @@ class TestUnrelatedDataPreservation:
         reply = (
             "Added Redis to your skills.\n"
             "<<<PROFILE_UPDATES>>>\n"
-            "{\"profile_updates\": {\"skills\": [\"Redis\"]}}\n"
+            '{"profile_updates": {"skills": ["Redis"]}}\n'
             "<<<END_UPDATES>>>"
         )
         _, updates = server._extract_profile_updates(reply)
@@ -794,7 +875,9 @@ class TestUnrelatedDataPreservation:
 
     def test_deletion_of_nonexistent_cert_leaves_list_unchanged(self):
         certs = ["AWS Certified Developer", "PMP"]
-        new_certs, found = server._remove_item_from_list(certs, "Google Cloud Professional")
+        new_certs, found = server._remove_item_from_list(
+            certs, "Google Cloud Professional"
+        )
         assert found is False
         assert set(new_certs) == {"AWS Certified Developer", "PMP"}
 
@@ -803,7 +886,8 @@ class TestUnrelatedDataPreservation:
 # _merge_profile_updates
 # ---------------------------------------------------------------------------
 
-class TestMergeProfileUpdates:
+
+class _TestMergeProfileUpdatesAdditional:
     def test_extra_fills_empty_base_field(self):
         base = {"availability": ""}
         extra = {"availability": "2 weeks notice"}
@@ -854,7 +938,8 @@ class TestMergeProfileUpdates:
 #  to verify the pipeline that _extract_multi_field_updates_from_answer feeds into)
 # ---------------------------------------------------------------------------
 
-class TestMultiFieldAnswerRegression:
+
+class _TestMultiFieldAnswerRegressionAdditional:
     """
     Regression tests: one candidate response answers 2+ suggested questions.
     Verifies that both fields are extracted and saved, and that those questions
@@ -907,7 +992,10 @@ class TestMultiFieldAnswerRegression:
         result = self._simulate_multi_field_save(raw)
         assert result.get("location") == "London"
         assert result.get("availability") == "1 month notice"
-        assert set(result.get("preferred_roles", [])) >= {"Data Engineer", "ML Engineer"}
+        assert set(result.get("preferred_roles", [])) >= {
+            "Data Engineer",
+            "ML Engineer",
+        }
 
     def test_answered_fields_not_suggested_again(self):
         """After saving availability + preferred_roles, those questions must not appear in suggestions."""
@@ -968,6 +1056,7 @@ class TestMultiFieldAnswerRegression:
 # _merge_profile_updates
 # ---------------------------------------------------------------------------
 
+
 class TestMergeProfileUpdates:
     def test_extra_fills_empty_base_field(self):
         base = {"availability": ""}
@@ -1020,15 +1109,21 @@ class TestMergeProfileUpdates:
 # Mirror of chatSuggestions.js SUGGESTIONS so tests are self-contained.
 _SUGGESTION_CHECKS = [
     ("What's your current job title and industry?", lambda p: not p.get("headline")),
-    ("What are your top skills?",                   lambda p: not p.get("keySkills")),
-    ("Can you walk me through your work experience?", lambda p: not p.get("experience")),
-    ("What's your highest level of education?",     lambda p: not p.get("education")),
-    ("Do you have any certifications?",             lambda p: not p.get("certifications")),
-    ("What roles are you targeting?",               lambda p: not p.get("preferred_roles")),
-    ("Where are you located?",                      lambda p: not p.get("location")),
-    ("What's your availability to start?",          lambda p: not p.get("availability")),
-    ("Tell me about yourself in a few sentences.",  lambda p: not p.get("bio")),
-    ("What salary range are you targeting?",        lambda p: not p.get("additional_information")),
+    ("What are your top skills?", lambda p: not p.get("keySkills")),
+    (
+        "Can you walk me through your work experience?",
+        lambda p: not p.get("experience"),
+    ),
+    ("What's your highest level of education?", lambda p: not p.get("education")),
+    ("Do you have any certifications?", lambda p: not p.get("certifications")),
+    ("What roles are you targeting?", lambda p: not p.get("preferred_roles")),
+    ("Where are you located?", lambda p: not p.get("location")),
+    ("What's your availability to start?", lambda p: not p.get("availability")),
+    ("Tell me about yourself in a few sentences.", lambda p: not p.get("bio")),
+    (
+        "What salary range are you targeting?",
+        lambda p: not p.get("additional_information"),
+    ),
 ]
 
 
@@ -1105,38 +1200,68 @@ class TestMultiFieldAnswerRegression:
         result = self._pipeline(raw)
         assert result.get("location") == "London"
         assert result.get("availability") == "1 month notice"
-        assert set(result.get("preferred_roles", [])) >= {"Data Engineer", "ML Engineer"}
+        assert set(result.get("preferred_roles", [])) >= {
+            "Data Engineer",
+            "ML Engineer",
+        }
 
     # --- suggestion suppression after saving ---
 
     def test_availability_question_not_suggested_after_save(self):
         profile_before = {
-            "headline": "Engineer", "keySkills": ["Python"], "experience": [{"title": "Dev"}],
-            "education": [{"degree": "BSc"}], "certifications": [], "preferred_roles": [],
-            "location": "London", "availability": "", "bio": "", "additional_information": "",
+            "headline": "Engineer",
+            "keySkills": ["Python"],
+            "experience": [{"title": "Dev"}],
+            "education": [{"degree": "BSc"}],
+            "certifications": [],
+            "preferred_roles": [],
+            "location": "London",
+            "availability": "",
+            "bio": "",
+            "additional_information": "",
         }
         profile_after = {**profile_before, "availability": "2 weeks notice"}
 
-        assert "What's your availability to start?" in _missing_suggestions(profile_before)
-        assert "What's your availability to start?" not in _missing_suggestions(profile_after)
+        assert "What's your availability to start?" in _missing_suggestions(
+            profile_before
+        )
+        assert "What's your availability to start?" not in _missing_suggestions(
+            profile_after
+        )
 
     def test_preferred_roles_question_not_suggested_after_save(self):
         profile_before = {
-            "headline": "Engineer", "keySkills": ["Python"], "experience": [{"title": "Dev"}],
-            "education": [{"degree": "BSc"}], "certifications": [], "preferred_roles": [],
-            "location": "London", "availability": "immediate", "bio": "", "additional_information": "",
+            "headline": "Engineer",
+            "keySkills": ["Python"],
+            "experience": [{"title": "Dev"}],
+            "education": [{"degree": "BSc"}],
+            "certifications": [],
+            "preferred_roles": [],
+            "location": "London",
+            "availability": "immediate",
+            "bio": "",
+            "additional_information": "",
         }
         profile_after = {**profile_before, "preferred_roles": ["Backend Engineer"]}
 
         assert "What roles are you targeting?" in _missing_suggestions(profile_before)
-        assert "What roles are you targeting?" not in _missing_suggestions(profile_after)
+        assert "What roles are you targeting?" not in _missing_suggestions(
+            profile_after
+        )
 
     def test_both_availability_and_roles_not_suggested_after_single_answer(self):
         """Regression: one answer covers availability + preferred_roles — neither re-suggested."""
         profile_before = {
-            "headline": "Engineer", "keySkills": ["Python"], "experience": [{"title": "Dev"}],
-            "education": [{"degree": "BSc"}], "certifications": [], "preferred_roles": [],
-            "location": "London", "availability": "", "bio": "", "additional_information": "",
+            "headline": "Engineer",
+            "keySkills": ["Python"],
+            "experience": [{"title": "Dev"}],
+            "education": [{"degree": "BSc"}],
+            "certifications": [],
+            "preferred_roles": [],
+            "location": "London",
+            "availability": "",
+            "bio": "",
+            "additional_information": "",
         }
         # Simulate saving both fields from one multi-field extraction
         raw = {"availability": "2 weeks", "preferred_roles": ["Backend Engineer"]}
@@ -1155,19 +1280,33 @@ class TestMultiFieldAnswerRegression:
     def test_salary_and_availability_not_suggested_after_single_answer(self):
         """Regression: 'I can start in 2 weeks, targeting £70k' answers 2 questions."""
         profile_before = {
-            "headline": "Engineer", "keySkills": ["Python"], "experience": [{"title": "Dev"}],
-            "education": [{"degree": "BSc"}], "certifications": [],
+            "headline": "Engineer",
+            "keySkills": ["Python"],
+            "experience": [{"title": "Dev"}],
+            "education": [{"degree": "BSc"}],
+            "certifications": [],
             "preferred_roles": ["Backend Engineer"],
-            "location": "London", "availability": "", "bio": "Some bio", "additional_information": "",
+            "location": "London",
+            "availability": "",
+            "bio": "Some bio",
+            "additional_information": "",
         }
         raw = {"availability": "2 weeks", "additional_information": "Targeting £70k"}
         saved = self._pipeline(raw)
         profile_after = {**profile_before, **saved}
 
-        assert "What's your availability to start?" in _missing_suggestions(profile_before)
-        assert "What salary range are you targeting?" in _missing_suggestions(profile_before)
-        assert "What's your availability to start?" not in _missing_suggestions(profile_after)
-        assert "What salary range are you targeting?" not in _missing_suggestions(profile_after)
+        assert "What's your availability to start?" in _missing_suggestions(
+            profile_before
+        )
+        assert "What salary range are you targeting?" in _missing_suggestions(
+            profile_before
+        )
+        assert "What's your availability to start?" not in _missing_suggestions(
+            profile_after
+        )
+        assert "What salary range are you targeting?" not in _missing_suggestions(
+            profile_after
+        )
 
     # --- merge safety ---
 
