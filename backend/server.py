@@ -8897,7 +8897,7 @@ def _infer_profile_updates_from_message(message: str) -> dict:
             "\\b(?:set|update|change)\\s+(?:my\\s+)?(?:preferred|tar"
             "get) roles?\\s+(?:to|as)\\s+(?P<value>.+?)(?:[.!?;]|$)",
             "\\b(?:i(?:'m| am)?\\s+)?(?:targeting|looking for|seeki"
-            "ng|want(?:ing)?|interested in|open to)\\s+(?P<value>."
+            "ng|want(?:ing)?|open to)\\s+(?P<value>."
             "+?)(?:\\s+roles?\\b|\\s+positions?\\b|\\s+opportunities\\b"
             "|[.!?;]|$)",
             r"\bpreferred roles?\s*[:\-]\s*(?P<value>.+?)(?:[.!?;]|$)",
@@ -8919,6 +8919,18 @@ def _infer_profile_updates_from_message(message: str) -> dict:
             updates["preferred_locations"] = [
                 _normalize_profile_text(compound_role.group("location"))
             ]
+    if not preferred_roles:
+        interest_match = re.search(
+            r"\b(?:i(?:'m| am)?\s+)?interested\s+in\s+(?P<value>.+?)(?:[.!?;]|$)",
+            text,
+            re.IGNORECASE,
+        )
+        if interest_match:
+            interest = _normalize_profile_text(interest_match.group("value"))
+            if interest:
+                updates.setdefault("hobbies", []).extend(
+                    item.title() for item in _split_update_list(interest) if item
+                )
     # Short preference answers often arrive without an intent verb (for
     # example, ``Python developer, full-time, contract work``). Treat only
     # exact standalone employment labels as types; retain every other item as
@@ -12368,6 +12380,45 @@ async def _persist_chat_profile_update_background(
         raise
 
 
+def _profile_message_has_mutation_intent(message: str) -> bool:
+    """Recognize messages worth sending to the profile extractor.
+
+    This is routing only; it never chooses a destination or value.
+    """
+    return bool(
+        re.search(
+            r"\b(?:add|include|save|update|change|replace|remove|delete|"
+            r"interested\s+in|looking\s+for|seeking|targeting|worked\s+with|"
+            r"have\s+(?:a|an)|completed|graduated|certification|skills?|"
+            r"education|degree|role|position|job)\b",
+            message or "",
+            re.IGNORECASE,
+        )
+    )
+
+
+def _cached_profile_match_in_message(message: str, candidate: dict) -> tuple[str, str] | None:
+    """Return an existing profile value explicitly named in the message."""
+    normalized_message = _normalize_profile_key(message)
+    if not normalized_message:
+        return None
+    raw = _parse_raw_data(candidate.get("raw_data"))
+    candidates = [
+        ("preferred roles", "preferred_roles", candidate.get("preferred_roles") or raw.get("preferred_roles")),
+        ("employment types", "employment_types", raw.get("employment_types")),
+        ("skills", "skills", candidate.get("skills")),
+        ("certifications", "certifications", raw.get("certifications")),
+    ]
+    for label, _field, values in candidates:
+        for value in values or []:
+            if isinstance(value, dict):
+                continue
+            clean = _normalize_profile_text(value)
+            if clean and _normalize_profile_key(clean) in normalized_message:
+                return label, clean
+    return None
+
+
 @api_router.post("/chat", response_model=ChatResponse)
 async def chat(request: ChatRequest, authorization: str | None = Header(default=None)):
     if not request.messages:
@@ -12486,8 +12537,15 @@ async def chat(request: ChatRequest, authorization: str | None = Header(default=
     # from being written to certifications or preferred roles.
     mutation_hint = _infer_profile_updates_from_message(last_user.content)
     mutation_hint.pop("profile_deletions", None)
-    if request.candidate_id and candidate_row_for_edit and mutation_hint:
-        duplicate = _duplicate_profile_update(candidate_row_for_edit, mutation_hint)
+    if (
+        request.candidate_id
+        and candidate_row_for_edit
+        and _profile_message_has_mutation_intent(last_user.content)
+    ):
+        cached_match = _cached_profile_match_in_message(
+            last_user.content, candidate_row_for_edit
+        )
+        duplicate = cached_match
         if duplicate:
             section, existing_value = duplicate
             reply = (

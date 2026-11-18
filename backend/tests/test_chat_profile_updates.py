@@ -1336,3 +1336,16 @@ class TestMultiFieldAnswerRegression:
         assert "skills" not in result
         assert "preferred_roles" not in result
         assert result.get("availability") == "immediate"
+def test_interest_in_hobby_is_not_classified_as_preferred_role():
+    updates = server._infer_profile_updates_from_message(
+        "I am interested in playing cricket"
+    )
+    assert "preferred_roles" not in updates
+    assert updates.get("hobbies") == ["Playing Cricket"]
+
+
+def test_interest_in_explicit_roles_remains_preferred_role():
+    updates = server._infer_profile_updates_from_message(
+        "I am interested in AI Developer roles"
+    )
+    assert updates.get("preferred_roles") == ["AI Developer"]
