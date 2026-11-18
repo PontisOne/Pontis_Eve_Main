@@ -247,7 +247,3 @@ def test_delete_btech_from_education_resolves_against_cached_profile():
         "remove the btech from my education", candidate, []
     )
     assert result["updates"] == {"profile_deletions": {"education": ["btech"]}}
-
-
-def test_education_degree_formatter_expands_common_shorthand():
-    assert server._format_education_degree("btech") == "B.Tech"

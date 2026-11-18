@@ -468,6 +468,8 @@ class ManualProfileUpdateRequest(BaseModel):
     skills: list[str] = Field(default_factory=list)
     certifications: list[str] = Field(default_factory=list)
     preferred_roles: list[str] = Field(default_factory=list)
+    employment_types: list[str] = Field(default_factory=list)
+    willing_to_relocate: bool | None = None
     additional_information: str = ""
     hobbies: list[str] = Field(default_factory=list)
 
@@ -1030,6 +1032,7 @@ def _normalize_for_frontend(c: dict) -> dict:
         dates = " — ".join(filter(None, [_sd, "Present" if _is_current else _ed]))
         experience.append(
             {
+                **w,
                 "id": w.get("id", f"exp-{i}"),
                 "title": w.get("title", ""),
                 "company": w.get("company", ""),
@@ -1072,6 +1075,7 @@ def _normalize_for_frontend(c: dict) -> dict:
             )
         education.append(
             {
+                **e,
                 "id": e.get("id", f"edu-{i}"),
                 "degree": e.get("degree", ""),
                 "institution": e.get("institution", ""),
@@ -4777,7 +4781,7 @@ def _education_extraction_updates(result: ExtractionResult) -> dict | None:
     for value in result.value:
         if not isinstance(value, dict):
             continue
-        degree = _format_education_degree(value.get("degree"))
+        degree = _normalize_profile_text(value.get("degree"))
         institution = _normalize_profile_text(value.get("institution"))
         if not degree or not institution:
             continue
@@ -4798,28 +4802,6 @@ def _education_extraction_updates(result: ExtractionResult) -> dict | None:
             record["start_date"] = start_date
         records.append(record)
     return {"education": records} if records else None
-
-
-def _format_education_degree(value: Any) -> str:
-    """Normalize common degree shorthand into profile-friendly display text."""
-    degree = _normalize_profile_text(value)
-    if not degree:
-        return ""
-    normalized = re.sub(r"[.\s]+", "", degree).casefold()
-    labels = {
-        "btech": "B.Tech",
-        "be": "B.E.",
-        "bsc": "B.Sc.",
-        "bca": "BCA",
-        "bba": "BBA",
-        "mtech": "M.Tech",
-        "me": "M.E.",
-        "msc": "M.Sc.",
-        "mba": "MBA",
-        "mca": "MCA",
-        "phd": "Ph.D.",
-    }
-    return labels.get(normalized, degree)
 
 
 def _education_duplicate(candidate: dict, incoming: dict) -> dict | None:
@@ -6471,6 +6453,7 @@ async def update_candidate_profile(
     skills = clean_list(body.skills)
     certifications = clean_list(body.certifications)
     preferred_roles = clean_list(body.preferred_roles)
+    employment_types = _normalize_employment_types(clean_list(body.employment_types))
     hobbies = clean_list(body.hobbies)
     availability = clean_text(body.availability, 200)
     raw.update(
@@ -6480,6 +6463,8 @@ async def update_candidate_profile(
             "expected_salary": clean_text(body.salary_expectation, 200),
             "certifications": certifications,
             "preferred_roles": preferred_roles,
+            "employment_types": employment_types,
+            "willing_to_relocate": body.willing_to_relocate,
             "additional_information": clean_text(body.additional_information),
             "hobbies": hobbies,
             "interests": hobbies,
@@ -6521,6 +6506,48 @@ async def update_candidate_profile(
                 "parsed_resume": json.dumps(parsed),
             },
         )
+        preference_result = await db.execute(
+            text("SELECT 1 FROM candidate_preferences WHERE candidate_id = :cid LIMIT 1"),
+            {"cid": candidate_id},
+        )
+        if preference_result.first():
+            await db.execute(
+                text(
+                    "UPDATE candidate_preferences SET preferred_roles = CAST(:roles AS jsonb), "
+                    "employment_types = CAST(:types AS jsonb), willing_to_relocate = :relocate, "
+                    "updated_at = now() WHERE candidate_id = :cid"
+                ),
+                {
+                    "cid": candidate_id,
+                    "roles": json.dumps(preferred_roles),
+                    "types": json.dumps(employment_types),
+                    "relocate": body.willing_to_relocate,
+                },
+            )
+        else:
+            await db.execute(
+                text(
+                    "INSERT INTO candidate_preferences "
+                    "(id, candidate_id, preferred_roles, preferred_locations, preferred_industries, "
+                    "employment_types, remote_preference, expected_salary, willing_to_relocate, "
+                    "notice_period, created_at, updated_at) "
+                    "VALUES (:id, :cid, CAST(:roles AS jsonb), CAST(:locations AS jsonb), "
+                    "CAST(:industries AS jsonb), CAST(:types AS jsonb), :remote, :salary, "
+                    ":relocate, :notice, now(), now())"
+                ),
+                {
+                    "id": str(uuid.uuid4()),
+                    "cid": candidate_id,
+                    "roles": json.dumps(preferred_roles),
+                    "locations": json.dumps([]),
+                    "industries": json.dumps([]),
+                    "types": json.dumps(employment_types),
+                    "remote": None,
+                    "salary": None,
+                    "relocate": body.willing_to_relocate,
+                    "notice": None,
+                },
+            )
         await db.commit()
         await profile_cache.invalidate(candidate_id)
     return await _get_candidate_profile_payload(candidate_id)
@@ -9275,7 +9302,7 @@ def _infer_profile_updates_from_message(message: str) -> dict:
             re.I,
         )
     if education_match:
-        degree = _format_education_degree(
+        degree = _normalize_profile_text(
             education_match.groupdict().get("degree") or ""
         )
         institution = _normalize_profile_text(education_match.group("institution"))
@@ -11234,6 +11261,8 @@ async def _extract_multi_field_updates_from_answer(
     """
     if not candidate_message or not missing_fields:
         return {}
+
+
     try:
         resp = await openai_client.chat.completions.create(
             model=GROQ_MODEL,
@@ -11265,6 +11294,52 @@ async def _extract_multi_field_updates_from_answer(
         )
     except Exception as e:
         logger.warning("[chat-multi-field] extraction failed: %s", e)
+        return {}
+
+
+_CHAT_PROFILE_MUTATION_SYSTEM = """
+You extract one explicit candidate profile mutation from the user's message.
+Return ONLY JSON in this shape:
+{"action":"add|update|replace", "profile_updates": {}}
+Choose exactly one supported profile field and include only the clean value
+explicitly stated by the candidate. Never copy conversational sentences into a
+field. Choose preferred_roles for desired job roles, certifications only for
+named credentials/certificates, skills only for named skills, education only
+for degrees and institutions, and additional_information only when explicitly
+labelled as such. Return an empty profile_updates object when no explicit
+profile fact is present.
+"""
+
+
+async def _extract_single_chat_profile_mutation(
+    candidate_message: str,
+    candidate_id: str | None = None,
+    session_id: str | None = None,
+) -> dict:
+    """Make the single allowed LLM extraction call for a profile mutation."""
+    try:
+        response = await openai_client.chat.completions.create(
+            model=GROQ_MODEL,
+            messages=[
+                {"role": "system", "content": _CHAT_PROFILE_MUTATION_SYSTEM},
+                {"role": "user", "content": candidate_message[:2000]},
+            ],
+            temperature=0,
+            response_format={"type": "json_object"},
+            _telemetry={
+                "workflow": "chat_profile_extraction",
+                "function_name": "_extract_single_chat_profile_mutation",
+                "candidate_id": candidate_id,
+                "endpoint": "/api/chat",
+                "session_id": session_id,
+            },
+        )
+        raw = json.loads(response.choices[0].message.content or "{}")
+        updates = _sanitize_profile_updates(raw.get("profile_updates") or {})
+        updates = _validate_chat_profile_updates(updates)[0]
+        return {"action": raw.get("action") or "add", "profile_updates": updates}
+    except Exception:
+        logger.warning("[chat-profile-mutation] LLM extraction failed", exc_info=True)
         return {}
 
 
@@ -12404,6 +12479,55 @@ async def chat(request: ChatRequest, authorization: str | None = Header(default=
         ] + incoming
     else:
         combined = incoming
+
+    # Profile mutations use one dedicated extraction call. The deterministic
+    # result is only a cache/duplicate hint and fallback; it is never merged
+    # with a general conversational response, which prevents unrelated prose
+    # from being written to certifications or preferred roles.
+    mutation_hint = _infer_profile_updates_from_message(last_user.content)
+    mutation_hint.pop("profile_deletions", None)
+    if request.candidate_id and candidate_row_for_edit and mutation_hint:
+        duplicate = _duplicate_profile_update(candidate_row_for_edit, mutation_hint)
+        if duplicate:
+            section, existing_value = duplicate
+            reply = (
+                f"{existing_value} is already in your {section}. "
+                "Would you like to update or replace it?"
+            )
+            await _save_chat_window(
+                request.candidate_id,
+                request.session_id,
+                combined + [{"role": "assistant", "content": reply}],
+            )
+            return ChatResponse(reply=reply, session_id=request.session_id)
+
+        extracted = await _extract_single_chat_profile_mutation(
+            last_user.content, request.candidate_id, request.session_id
+        )
+        profile_updates = extracted.get("profile_updates") or mutation_hint
+        profile_updates, input_problems = _validate_chat_profile_updates(
+            profile_updates
+        )
+        if profile_updates and not input_problems:
+            try:
+                await _persist_chat_profile_update_background(
+                    request.candidate_id, profile_updates
+                )
+                reply = "I’ve added that to the correct section of your profile."
+            except Exception:
+                logger.exception("[chat-profile-mutation] persistence failed")
+                reply = "I couldn’t save that profile update yet. Please try again."
+            await _save_chat_window(
+                request.candidate_id,
+                request.session_id,
+                combined + [{"role": "assistant", "content": reply}],
+            )
+            return ChatResponse(
+                reply=reply,
+                session_id=request.session_id,
+                profile_updates=profile_updates,
+            )
+
     authoritative_topic = _authoritative_chat_topic(combined, voice_resume)
     authoritative_updates = _route_authoritative_chat_answer(
         authoritative_topic,

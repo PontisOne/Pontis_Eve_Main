@@ -526,8 +526,8 @@ function parseExperienceDuration(value) {
   return Number(text) || 0;
 }
 
-export function ProfileEditor({ profile, candidateId, onClose, onSaved }) {
-  const [draft, setDraft] = React.useState(() => ({
+function buildProfileEditorDraft(profile) {
+  return {
     name: profile.name || "",
     headline: profile.headline || profile.current_role || "",
     location: profile.location || "",
@@ -553,9 +553,15 @@ export function ProfileEditor({ profile, candidateId, onClose, onSaved }) {
       ? profile.certifications.map((certification) => String(certification ?? ""))
       : parseCsv(String(profile.certifications ?? "")),
     preferred_roles: csv(profile.preferred_roles),
+    employment_types: csv(profile.employment_types),
+    willing_to_relocate: profile.willing_to_relocate === true,
     additional_information: profile.additional_information || "",
     hobbies: csv(profile.hobbies || profile.interests || profile.raw_data?.hobbies),
-  }));
+  };
+}
+
+export function ProfileEditor({ profile, candidateId, onClose, onSaved }) {
+  const [draft, setDraft] = React.useState(() => buildProfileEditorDraft(profile));
   const [saving, setSaving] = React.useState(false);
   const [error, setError] = React.useState("");
   const field = (key, value) => setDraft((current) => ({ ...current, [key]: value }));
@@ -583,6 +589,8 @@ export function ProfileEditor({ profile, candidateId, onClose, onSaved }) {
           .map((certification) => certification.trim())
           .filter(Boolean),
         preferred_roles: parseCsv(draft.preferred_roles),
+        employment_types: parseCsv(draft.employment_types),
+        willing_to_relocate: draft.willing_to_relocate === true,
         hobbies: parseCsv(draft.hobbies),
       });
       await onSaved?.();
@@ -660,7 +668,7 @@ export function ProfileEditor({ profile, candidateId, onClose, onSaved }) {
             </div>
             {draft.work_experience.map((item, index) => (
               <div
-                key={`${item.title}-${item.company}-${item.dates}`}
+                key={`work-experience-${index}`}
                 className="relative mb-4 grid gap-3 rounded-xl border p-3 pt-12 sm:grid-cols-2"
               >
                 <button
@@ -717,7 +725,7 @@ export function ProfileEditor({ profile, candidateId, onClose, onSaved }) {
             </div>
             {draft.education.map((item, index) => (
               <div
-                key={`${item.degree}-${item.institution}-${item.dates}`}
+                key={`education-${index}`}
                 className="relative mb-4 grid gap-3 rounded-xl border p-3 pt-12 sm:grid-cols-3"
               >
                 <button
@@ -768,7 +776,7 @@ export function ProfileEditor({ profile, candidateId, onClose, onSaved }) {
             </div>
             <div className="space-y-2">
               {draft.certifications.map((certification, index) => (
-                <div key={certification} className="flex items-center gap-2">
+                <div key={`certification-${index}`} className="flex items-center gap-2">
                   <input
                     aria-label="Certificate name"
                     value={certification}
@@ -801,6 +809,7 @@ export function ProfileEditor({ profile, candidateId, onClose, onSaved }) {
           </div>
           {[
             ["preferred_roles", "Preferred roles"],
+            ["employment_types", "Employment types"],
             ["hobbies", "Hobbies & interests"],
           ].map(([key, label]) => (
             <label key={key} className="block text-xs font-medium text-[#4A4A48]">
