@@ -4777,7 +4777,7 @@ def _education_extraction_updates(result: ExtractionResult) -> dict | None:
     for value in result.value:
         if not isinstance(value, dict):
             continue
-        degree = _normalize_profile_text(value.get("degree"))
+        degree = _format_education_degree(value.get("degree"))
         institution = _normalize_profile_text(value.get("institution"))
         if not degree or not institution:
             continue
@@ -4798,6 +4798,28 @@ def _education_extraction_updates(result: ExtractionResult) -> dict | None:
             record["start_date"] = start_date
         records.append(record)
     return {"education": records} if records else None
+
+
+def _format_education_degree(value: Any) -> str:
+    """Normalize common degree shorthand into profile-friendly display text."""
+    degree = _normalize_profile_text(value)
+    if not degree:
+        return ""
+    normalized = re.sub(r"[.\s]+", "", degree).casefold()
+    labels = {
+        "btech": "B.Tech",
+        "be": "B.E.",
+        "bsc": "B.Sc.",
+        "bca": "BCA",
+        "bba": "BBA",
+        "mtech": "M.Tech",
+        "me": "M.E.",
+        "msc": "M.Sc.",
+        "mba": "MBA",
+        "mca": "MCA",
+        "phd": "Ph.D.",
+    }
+    return labels.get(normalized, degree)
 
 
 def _education_duplicate(candidate: dict, incoming: dict) -> dict | None:
@@ -9253,7 +9275,7 @@ def _infer_profile_updates_from_message(message: str) -> dict:
             re.I,
         )
     if education_match:
-        degree = _normalize_profile_text(
+        degree = _format_education_degree(
             education_match.groupdict().get("degree") or ""
         )
         institution = _normalize_profile_text(education_match.group("institution"))
@@ -10176,6 +10198,72 @@ def _chat_profile_preflight(
     """
     text_value = message.strip()
     lower = text_value.lower()
+
+    # Deletions are profile edits too. Resolve an explicitly named section
+    # against the cached profile before invoking the LLM. This is especially
+    # important for short requests such as "remove btech from my education";
+    # the model should only be the fallback when the cached record is not
+    # sufficient to identify the target safely.
+    deletion = _detect_deletion_intent(text_value)
+    explicit_education_delete = re.search(
+            r"\b(?:remove|delete|drop)\s+(?:the\s+)?(?P<item>.+?)\s+from\s+(?:my\s+)?education\b",
+            text_value,
+            re.I,
+        )
+    if explicit_education_delete:
+        deletion = {
+            "field": "education",
+            "item": explicit_education_delete.group("item").strip(),
+        }
+    if deletion and deletion.get("field"):
+        field = deletion["field"]
+        item = re.sub(
+            r"^(?:the|a|an|my)\s+", "", str(deletion.get("item") or ""), flags=re.I
+        ).strip()
+        if item and field == "education":
+            matches = [
+                row
+                for row in (candidate.get("education") or [])
+                if isinstance(row, dict)
+                and any(
+                    re.sub(r"[^a-z0-9]", "", _normalize_profile_key(item))
+                    in re.sub(
+                        r"[^a-z0-9]", "", _normalize_profile_key(row.get(key))
+                    )
+                    for key in ("degree", "institution", "field_of_study")
+                )
+            ]
+            if len(matches) == 1:
+                return {
+                    "reply": f"I removed {item} from your education profile.",
+                    "updates": {"profile_deletions": {field: [item]}},
+                }
+            if len(matches) > 1:
+                return {
+                    "reply": "I found more than one matching education record. Which one should I remove?",
+                    "updates": None,
+                }
+        if field in ("work_experience", "education", "projects") and item:
+            section = {
+                "work_experience": "Work Experience",
+                "education": "Education",
+                "projects": "Projects",
+            }[field]
+            matches = _profile_edit_matches(candidate, item).get(section, [])
+            if len(matches) != 1:
+                if len(matches) > 1:
+                    return {
+                        "reply": f"I found more than one matching {field.replace('_', ' ')} record. Which record should I remove?",
+                        "updates": None,
+                    }
+                return None
+        # Other explicitly scoped deletions can be persisted without asking the
+        # model; _apply_profile_updates performs the final exact match check.
+        if item:
+            return {
+                "reply": f"I removed {item} from your profile.",
+                "updates": {"profile_deletions": {field: [item]}},
+            }
     guidance_answer = _profile_guidance_answer(text_value, history)
     if guidance_answer:
         return guidance_answer
@@ -10910,7 +10998,11 @@ def _chat_cache_decision(
     updates, input_problems = _validate_chat_profile_updates(
         preflight.get("updates") if isinstance(preflight, dict) else None
     )
-    topic_fields = [key for key in (updates or {}) if not key.startswith("profile_")]
+    topic_fields = [
+        key for key in (updates or {}) if not key.startswith("profile_")
+    ]
+    if (updates or {}).get("profile_deletions"):
+        topic_fields.append("profile_deletions")
     topic = authoritative_topic or (topic_fields[0] if len(topic_fields) == 1 else None)
     if (
         updates

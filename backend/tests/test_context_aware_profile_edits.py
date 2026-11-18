@@ -230,3 +230,24 @@ def test_delete_with_multiple_matches_asks_before_any_write():
     result = server._chat_profile_preflight("Delete my Java experience", candidate, [])
     assert result["updates"] is None
     assert "Which record" in result["reply"]
+
+
+def test_delete_btech_from_education_resolves_against_cached_profile():
+    candidate = _candidate(
+        education=[
+            {
+                "degree": "B.Tech",
+                "field_of_study": "Electronics and Communication Engineering",
+                "institution": "CMR Engineering College",
+                "end_date": "2022",
+            }
+        ]
+    )
+    result = server._chat_profile_preflight(
+        "remove the btech from my education", candidate, []
+    )
+    assert result["updates"] == {"profile_deletions": {"education": ["btech"]}}
+
+
+def test_education_degree_formatter_expands_common_shorthand():
+    assert server._format_education_degree("btech") == "B.Tech"
