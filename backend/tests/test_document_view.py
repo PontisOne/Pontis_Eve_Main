@@ -52,15 +52,25 @@ def _stub_candidate(monkeypatch, resume_file_path=None):
     monkeypatch.setattr(server, "_get_candidate_row", get_candidate)
 
 
-def test_resume_view_serves_the_persisted_uploaded_pdf_not_legacy_path(tmp_path, monkeypatch):
+def test_resume_view_serves_the_persisted_uploaded_pdf_not_legacy_path(
+    tmp_path, monkeypatch
+):
     persisted_pdf = tmp_path / "documents" / "candidate-1" / "resume" / "uploaded.pdf"
     persisted_pdf.parent.mkdir(parents=True)
     persisted_pdf.write_bytes(b"%PDF-persisted-resume")
     monkeypatch.setattr(server, "DOCS_DIR", tmp_path / "documents")
     _stub_candidate(monkeypatch, str(persisted_pdf))
-    monkeypatch.setattr(server, "SessionLocal", lambda: FakeSession({
-        "SELECT source_filename, source_path FROM internal_candidate_resumes": FakeResult([("resume.pdf", str(persisted_pdf))]),
-    }))
+    monkeypatch.setattr(
+        server,
+        "SessionLocal",
+        lambda: FakeSession(
+            {
+                "SELECT source_filename, source_path FROM internal_candidate_resumes": FakeResult(
+                    [("resume.pdf", str(persisted_pdf))]
+                ),
+            }
+        ),
+    )
 
     response = asyncio.run(server.view_resume("candidate-1", authorization=_auth()))
 
@@ -70,20 +80,34 @@ def test_resume_view_serves_the_persisted_uploaded_pdf_not_legacy_path(tmp_path,
 
 
 def test_certificate_view_serves_the_uploaded_file(tmp_path, monkeypatch):
-    certificate = tmp_path / "documents" / "candidate-1" / "certificates" / "certificate.pdf"
+    certificate = (
+        tmp_path / "documents" / "candidate-1" / "certificates" / "certificate.pdf"
+    )
     certificate.parent.mkdir(parents=True)
     certificate.write_bytes(b"%PDF-persisted-certificate")
     monkeypatch.setattr(server, "DOCS_DIR", tmp_path / "documents")
     _stub_candidate(monkeypatch)
-    monkeypatch.setattr(server, "SessionLocal", lambda: FakeSession({
-        "SELECT file_name, file_path FROM candidate_certificates": FakeResult([("certificate.pdf", str(certificate))]),
-    }))
+    monkeypatch.setattr(
+        server,
+        "SessionLocal",
+        lambda: FakeSession(
+            {
+                "SELECT file_name, file_path FROM candidate_certificates": FakeResult(
+                    [("certificate.pdf", str(certificate))]
+                ),
+            }
+        ),
+    )
 
-    response = asyncio.run(server.view_certificate("candidate-1", "cert-1", authorization=_auth()))
+    response = asyncio.run(
+        server.view_certificate("candidate-1", "cert-1", authorization=_auth())
+    )
 
     assert response.path == str(certificate)
     assert response.media_type == "application/pdf"
-    assert response.headers["content-disposition"] == 'inline; filename="certificate.pdf"'
+    assert (
+        response.headers["content-disposition"] == 'inline; filename="certificate.pdf"'
+    )
 
 
 @pytest.mark.parametrize(
@@ -91,17 +115,29 @@ def test_certificate_view_serves_the_uploaded_file(tmp_path, monkeypatch):
     [
         (
             lambda: server.view_resume("candidate-1", authorization=_auth()),
-            {"SELECT source_filename, source_path FROM internal_candidate_resumes": FakeResult([("resume.pdf", "missing-resume.pdf")])},
+            {
+                "SELECT source_filename, source_path FROM internal_candidate_resumes": FakeResult(
+                    [("resume.pdf", "missing-resume.pdf")]
+                )
+            },
             "missing-resume.pdf",
         ),
         (
-            lambda: server.view_certificate("candidate-1", "cert-1", authorization=_auth()),
-            {"SELECT file_name, file_path FROM candidate_certificates": FakeResult([("certificate.pdf", "missing-certificate.pdf")])},
+            lambda: server.view_certificate(
+                "candidate-1", "cert-1", authorization=_auth()
+            ),
+            {
+                "SELECT file_name, file_path FROM candidate_certificates": FakeResult(
+                    [("certificate.pdf", "missing-certificate.pdf")]
+                )
+            },
             None,
         ),
     ],
 )
-def test_missing_document_file_returns_404(endpoint, responses, resume_path, monkeypatch):
+def test_missing_document_file_returns_404(
+    endpoint, responses, resume_path, monkeypatch
+):
     _stub_candidate(monkeypatch, resume_path)
     monkeypatch.setattr(server, "SessionLocal", lambda: FakeSession(responses))
 
@@ -109,59 +145,115 @@ def test_missing_document_file_returns_404(endpoint, responses, resume_path, mon
         asyncio.run(endpoint())
 
     assert exc.value.status_code == 404
-    assert "unavailable" in exc.value.detail.lower() or "not available" in exc.value.detail.lower()
+    assert (
+        "unavailable" in exc.value.detail.lower()
+        or "not available" in exc.value.detail.lower()
+    )
 
 
 def test_document_listing_metadata_is_unchanged(monkeypatch):
     _stub_candidate(monkeypatch)
-    monkeypatch.setattr(server, "SessionLocal", lambda: FakeSession({
-        "SELECT source_filename, resume_fingerprint": FakeResult([("resume.pdf", "resume-sha")]),
-        "SELECT id, file_name FROM candidate_certificates": FakeResult([("cert-1", "certificate.pdf")]),
-        "SELECT id, file_name, company_name, recommendation_id FROM candidate_application_resumes": FakeResult([("app-1", "pontis_sai_vignesh.pdf", "Pontis", "rec-1")]),
-    }))
+    monkeypatch.setattr(
+        server,
+        "SessionLocal",
+        lambda: FakeSession(
+            {
+                "SELECT source_filename, resume_fingerprint": FakeResult(
+                    [("resume.pdf", "resume-sha")]
+                ),
+                "SELECT id, file_name FROM candidate_certificates": FakeResult(
+                    [("cert-1", "certificate.pdf")]
+                ),
+                "SELECT id, file_name, company_name, recommendation_id FROM candidate_application_resumes": FakeResult(
+                    [("app-1", "pontis_sai_vignesh.pdf", "Pontis", "rec-1")]
+                ),
+            }
+        ),
+    )
 
-    documents = asyncio.run(server.get_candidate_documents("candidate-1", authorization=_auth()))
+    documents = asyncio.run(
+        server.get_candidate_documents("candidate-1", authorization=_auth())
+    )
 
     assert documents == {
         "resume": {"filename": "resume.pdf", "fingerprint": "resume-sha"},
         "certificates": [{"id": "cert-1", "filename": "certificate.pdf"}],
-        "application_resumes": [{"id": "app-1", "filename": "pontis_sai_vignesh.pdf", "company": "Pontis", "recommendation_id": "rec-1"}],
+        "application_resumes": [
+            {
+                "id": "app-1",
+                "filename": "pontis_sai_vignesh.pdf",
+                "company": "Pontis",
+                "recommendation_id": "rec-1",
+            }
+        ],
     }
 
 
-def test_application_resume_view_uses_the_authenticated_document_mechanism(tmp_path, monkeypatch):
+def test_application_resume_view_uses_the_authenticated_document_mechanism(
+    tmp_path, monkeypatch
+):
     stored = tmp_path / "candidate-1" / "application_resumes" / "rec-1.pdf"
     stored.parent.mkdir(parents=True)
     stored.write_bytes(b"%PDF application resume")
     monkeypatch.setattr(server, "DOCS_DIR", tmp_path)
     _stub_candidate(monkeypatch)
-    monkeypatch.setattr(server, "SessionLocal", lambda: FakeSession({
-        "SELECT file_name, file_path, recommendation_id, company_name FROM candidate_application_resumes": FakeResult([("pontis_sai_vignesh.pdf", "rec-1.pdf", "rec-1", "Pontis")]),
-    }))
+    monkeypatch.setattr(
+        server,
+        "SessionLocal",
+        lambda: FakeSession(
+            {
+                "SELECT file_name, file_path, recommendation_id, company_name FROM candidate_application_resumes": FakeResult(
+                    [("pontis_sai_vignesh.pdf", "rec-1.pdf", "rec-1", "Pontis")]
+                ),
+            }
+        ),
+    )
 
-    response = asyncio.run(server.view_application_resume("candidate-1", "app-1", authorization=_auth()))
+    response = asyncio.run(
+        server.view_application_resume("candidate-1", "app-1", authorization=_auth())
+    )
 
     assert response.path == str(stored)
-    assert response.headers["content-disposition"] == 'inline; filename="pontis_sai_vignesh.pdf"'
+    assert (
+        response.headers["content-disposition"]
+        == 'inline; filename="pontis_sai_vignesh.pdf"'
+    )
 
 
-def test_registered_resume_uses_current_persistent_volume_when_old_absolute_path_is_stale(tmp_path, monkeypatch):
+def test_registered_resume_uses_current_persistent_volume_when_old_absolute_path_is_stale(
+    tmp_path, monkeypatch
+):
     monkeypatch.setattr(server, "DOCS_DIR", tmp_path)
     saved = tmp_path / "candidate-1" / "resume" / "upload-id.pdf"
     saved.parent.mkdir(parents=True)
     saved.write_bytes(b"%PDF registered resume")
-    _stub_candidate(monkeypatch, "C:/former-container/documents/candidate-1/resume/upload-id.pdf")
-    monkeypatch.setattr(server, "SessionLocal", lambda: FakeSession({
-        "SELECT source_filename, source_path FROM internal_candidate_resumes": FakeResult([
-            ("my-resume.pdf", "C:/former-container/documents/candidate-1/resume/upload-id.pdf")
-        ]),
-    }))
+    _stub_candidate(
+        monkeypatch, "C:/former-container/documents/candidate-1/resume/upload-id.pdf"
+    )
+    monkeypatch.setattr(
+        server,
+        "SessionLocal",
+        lambda: FakeSession(
+            {
+                "SELECT source_filename, source_path FROM internal_candidate_resumes": FakeResult(
+                    [
+                        (
+                            "my-resume.pdf",
+                            "C:/former-container/documents/candidate-1/resume/upload-id.pdf",
+                        )
+                    ]
+                ),
+            }
+        ),
+    )
 
     response = asyncio.run(server.view_resume("candidate-1", authorization=_auth()))
     assert response.path == str(saved)
 
 
-def test_legacy_windows_resume_path_recovers_by_storage_key_on_linux_or_windows(tmp_path, monkeypatch):
+def test_legacy_windows_resume_path_recovers_by_storage_key_on_linux_or_windows(
+    tmp_path, monkeypatch
+):
     """A path saved by a former Windows worker must work on a Linux deploy."""
     monkeypatch.setattr(server, "DOCS_DIR", tmp_path)
     saved = tmp_path / "candidate-1" / "resume" / "upload-id.pdf"
@@ -169,9 +261,17 @@ def test_legacy_windows_resume_path_recovers_by_storage_key_on_linux_or_windows(
     saved.write_bytes(b"%PDF registered resume")
     legacy_path = r"C:\former-container\documents\candidate-1\resume\upload-id.pdf"
     _stub_candidate(monkeypatch, legacy_path)
-    monkeypatch.setattr(server, "SessionLocal", lambda: FakeSession({
-        "SELECT source_filename, source_path FROM internal_candidate_resumes": FakeResult([("my-resume.pdf", legacy_path)]),
-    }))
+    monkeypatch.setattr(
+        server,
+        "SessionLocal",
+        lambda: FakeSession(
+            {
+                "SELECT source_filename, source_path FROM internal_candidate_resumes": FakeResult(
+                    [("my-resume.pdf", legacy_path)]
+                ),
+            }
+        ),
+    )
 
     response = asyncio.run(server.view_resume("candidate-1", authorization=_auth()))
     assert response.path == str(saved)
@@ -183,12 +283,24 @@ def test_legacy_windows_certificate_path_recovers_by_storage_key(tmp_path, monke
     saved.parent.mkdir(parents=True)
     saved.write_bytes(b"%PDF certificate")
     _stub_candidate(monkeypatch)
-    legacy_path = r"C:\former-container\documents\candidate-1\certificates\credential-id.pdf"
-    monkeypatch.setattr(server, "SessionLocal", lambda: FakeSession({
-        "SELECT file_name, file_path FROM candidate_certificates": FakeResult([("credential.pdf", legacy_path)]),
-    }))
+    legacy_path = (
+        r"C:\former-container\documents\candidate-1\certificates\credential-id.pdf"
+    )
+    monkeypatch.setattr(
+        server,
+        "SessionLocal",
+        lambda: FakeSession(
+            {
+                "SELECT file_name, file_path FROM candidate_certificates": FakeResult(
+                    [("credential.pdf", legacy_path)]
+                ),
+            }
+        ),
+    )
 
-    response = asyncio.run(server.view_certificate("candidate-1", "cert-1", authorization=_auth()))
+    response = asyncio.run(
+        server.view_certificate("candidate-1", "cert-1", authorization=_auth())
+    )
     assert response.path == str(saved)
 
 
@@ -198,15 +310,29 @@ def test_document_view_post_accepts_session_in_body_not_url(tmp_path, monkeypatc
     saved.parent.mkdir(parents=True)
     saved.write_bytes(b"%PDF stored")
     _stub_candidate(monkeypatch, "stored.pdf")
-    monkeypatch.setattr(server, "SessionLocal", lambda: FakeSession({
-        "SELECT source_filename, source_path FROM internal_candidate_resumes": FakeResult([("resume.pdf", "stored.pdf")]),
-    }))
+    monkeypatch.setattr(
+        server,
+        "SessionLocal",
+        lambda: FakeSession(
+            {
+                "SELECT source_filename, source_path FROM internal_candidate_resumes": FakeResult(
+                    [("resume.pdf", "stored.pdf")]
+                ),
+            }
+        ),
+    )
 
-    response = asyncio.run(server.view_resume("candidate-1", authorization=None, candidate_token=_auth()[7:]))
+    response = asyncio.run(
+        server.view_resume(
+            "candidate-1", authorization=None, candidate_token=_auth()[7:]
+        )
+    )
     assert response.path == str(saved)
 
 
-def test_multiple_registered_certificates_each_resolve_to_own_persistent_file(tmp_path, monkeypatch):
+def test_multiple_registered_certificates_each_resolve_to_own_persistent_file(
+    tmp_path, monkeypatch
+):
     monkeypatch.setattr(server, "DOCS_DIR", tmp_path)
     cert_dir = tmp_path / "candidate-1" / "certificates"
     cert_dir.mkdir(parents=True)
@@ -219,10 +345,20 @@ def test_multiple_registered_certificates_each_resolve_to_own_persistent_file(tm
         ("cert-a", "first.pdf", "/old/machine/a.pdf", first),
         ("cert-b", "second.docx", "/old/machine/b.docx", second),
     ]:
-        monkeypatch.setattr(server, "SessionLocal", lambda name=name, old_path=old_path: FakeSession({
-            "SELECT file_name, file_path FROM candidate_certificates": FakeResult([(name, old_path)]),
-        }))
-        response = asyncio.run(server.view_certificate("candidate-1", cert_id, authorization=_auth()))
+        monkeypatch.setattr(
+            server,
+            "SessionLocal",
+            lambda name=name, old_path=old_path: FakeSession(
+                {
+                    "SELECT file_name, file_path FROM candidate_certificates": FakeResult(
+                        [(name, old_path)]
+                    ),
+                }
+            ),
+        )
+        response = asyncio.run(
+            server.view_certificate("candidate-1", cert_id, authorization=_auth())
+        )
         assert response.path == str(expected)
 
 
@@ -232,10 +368,20 @@ def test_newly_uploaded_certificate_view_uses_stored_key(tmp_path, monkeypatch):
     uploaded.parent.mkdir(parents=True)
     uploaded.write_bytes(b"image")
     _stub_candidate(monkeypatch)
-    monkeypatch.setattr(server, "SessionLocal", lambda: FakeSession({
-        "SELECT file_name, file_path FROM candidate_certificates": FakeResult([("credential.jpg", str(uploaded))]),
-    }))
-    response = asyncio.run(server.view_certificate("candidate-1", "cert-new", authorization=_auth()))
+    monkeypatch.setattr(
+        server,
+        "SessionLocal",
+        lambda: FakeSession(
+            {
+                "SELECT file_name, file_path FROM candidate_certificates": FakeResult(
+                    [("credential.jpg", str(uploaded))]
+                ),
+            }
+        ),
+    )
+    response = asyncio.run(
+        server.view_certificate("candidate-1", "cert-new", authorization=_auth())
+    )
     assert response.path == str(uploaded)
     assert response.media_type == "image/jpeg"
 
@@ -243,5 +389,7 @@ def test_newly_uploaded_certificate_view_uses_stored_key(tmp_path, monkeypatch):
 def test_candidate_cannot_view_another_candidates_document(monkeypatch):
     _stub_candidate(monkeypatch)
     with pytest.raises(HTTPException) as exc:
-        asyncio.run(server.view_resume("candidate-1", authorization=_auth("candidate-2")))
+        asyncio.run(
+            server.view_resume("candidate-1", authorization=_auth("candidate-2"))
+        )
     assert exc.value.status_code == 403

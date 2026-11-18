@@ -2,20 +2,27 @@ import json
 import logging
 import re
 import uuid
-from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional, Tuple
+from datetime import UTC, datetime
+from typing import Any
 
-from sqlalchemy.ext.asyncio import async_sessionmaker
 from sqlalchemy import text
+from sqlalchemy.ext.asyncio import async_sessionmaker
 
+from app.job_ingestion.lifecycle import candidate_visible_where
 from candidate_text import build_candidate_text
 from embedding_service import generate_embedding
+from location_matching import (
+    candidate_location,
+    country_eligible,
+    location_preference_score,
+)
 from qdrant_service import search_job_chunks
-from app.job_ingestion.lifecycle import candidate_visible_where
-from location_matching import country_eligible, location_preference_score, candidate_location
 from skill_normalization import canonical_skill, canonical_skill_key
 
 logger = logging.getLogger(__name__)
+
+# Backward-compatible test seam retained for callers that patch the legacy name.
+timezone = UTC
 
 QDRANT_TOP_K = 150
 MAX_RECOMMENDATIONS = 50
@@ -30,7 +37,7 @@ W_PREFERENCES = 0.12
 W_SEMANTIC = 0.10
 
 
-def voice_intake_completed(candidate: Dict[str, Any]) -> bool:
+def voice_intake_completed(candidate: dict[str, Any]) -> bool:
     """Return the persisted Voice Intake completion state for a candidate.
 
     ``raw_data.voice_intake`` is the canonical profile snapshot written by the
@@ -52,10 +59,13 @@ def voice_intake_completed(candidate: Dict[str, Any]) -> bool:
             intake = json.loads(intake)
         except Exception:
             return False
-    return isinstance(intake, dict) and str(intake.get("status") or "").lower() == "completed"
+    return (
+        isinstance(intake, dict)
+        and str(intake.get("status") or "").lower() == "completed"
+    )
 
 
-def candidate_ready_for_matching(candidate: Dict[str, Any]) -> Tuple[bool, str]:
+def candidate_ready_for_matching(candidate: dict[str, Any]) -> tuple[bool, str]:
     """Use persisted profile signal, rather than resumable intake status."""
     candidate_text = build_candidate_text(candidate)
     if not candidate_text.strip():
@@ -76,15 +86,15 @@ def candidate_ready_for_matching(candidate: Dict[str, Any]) -> Tuple[bool, str]:
 
 # Evidence level weights for skill scoring (Phase 7/8)
 _EVIDENCE_WEIGHT = {
-    0: 0.3,   # Unknown
-    1: 0.6,   # Claimed
-    2: 0.8,   # Corroborated
-    3: 1.0,   # Demonstrated
-    4: 1.0,   # Verified
+    0: 0.3,  # Unknown
+    1: 0.6,  # Claimed
+    2: 0.8,  # Corroborated
+    3: 1.0,  # Demonstrated
+    4: 1.0,  # Verified
 }
 
 
-def _get_candidate_intelligence(candidate: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+def _get_candidate_intelligence(candidate: dict[str, Any]) -> dict[str, Any] | None:
     """
     Compute candidate intelligence from profile_strength_service.
     Cached in candidate dict under '_intelligence' to avoid recomputation.
@@ -93,6 +103,7 @@ def _get_candidate_intelligence(candidate: Dict[str, Any]) -> Optional[Dict[str,
         return candidate["_intelligence"]
     try:
         from profile_strength_service import calculate_profile_strength_v2
+
         result = calculate_profile_strength_v2(candidate)
         candidate["_intelligence"] = result
         return result
@@ -102,9 +113,9 @@ def _get_candidate_intelligence(candidate: Dict[str, Any]) -> Optional[Dict[str,
 
 
 def _evidence_weighted_skills_score(
-    candidate_skills: List[str],
+    candidate_skills: list[str],
     job_text: str,
-    intelligence: Optional[Dict[str, Any]],
+    intelligence: dict[str, Any] | None,
     required_skills: Any = None,
 ) -> float:
     """
@@ -129,31 +140,38 @@ def _evidence_weighted_skills_score(
         for skill in required_skills:
             value = _normalize_text(
                 skill.get("name") or skill.get("title") or skill.get("skill")
-                if isinstance(skill, dict) else skill
+                if isinstance(skill, dict)
+                else skill
             )
-            if value and canonical_skill_key(value) not in {canonical_skill_key(item) for item in explicit_required}:
+            if value and canonical_skill_key(value) not in {
+                canonical_skill_key(item) for item in explicit_required
+            }:
                 explicit_required.append(value)
     if explicit_required:
         candidate_text = " ".join(canonical_skill(skill) for skill in candidate_skills)
         candidate_tokens = _phrase_set(candidate_text)
         hits = sum(
-            base_weight for required in explicit_required
-            if _term_in_text(_normalize(canonical_skill(required)), candidate_text, candidate_tokens)
+            base_weight
+            for required in explicit_required
+            if _term_in_text(
+                _normalize(canonical_skill(required)), candidate_text, candidate_tokens
+            )
         )
         return min(hits / len(explicit_required), 1.0)
 
     text_tokens = _phrase_set(job_text)
     hits = sum(
-        base_weight for s in candidate_skills
+        base_weight
+        for s in candidate_skills
         if s and _term_in_text(_normalize(canonical_skill(s)), job_text, text_tokens)
     )
     return min(hits / len(candidate_skills), 1.0)
 
 
 def _check_hard_constraints(
-    constraint_profile: Dict[str, Any],
+    constraint_profile: dict[str, Any],
     job_text: str,
-) -> Tuple[float, List[str]]:
+) -> tuple[float, list[str]]:
     """
     Check candidate hard constraints against job text.
     Returns (penalty_multiplier, incompatibilities).
@@ -162,14 +180,20 @@ def _check_hard_constraints(
     if not constraint_profile:
         return 1.0, []
     penalty = 1.0
-    incompatibilities: List[str] = []
+    incompatibilities: list[str] = []
     job_lower = job_text.lower()
 
     work_mode = constraint_profile.get("work_mode_constraint", "unknown")
     if work_mode == "hard_remote_only":
         onsite_signals = [
-            "on-site", "onsite", "on site", "in-office", "in office",
-            "office based", "office-based", "must be present",
+            "on-site",
+            "onsite",
+            "on site",
+            "in-office",
+            "in office",
+            "office based",
+            "office-based",
+            "must be present",
         ]
         if any(s in job_lower for s in onsite_signals):
             penalty *= 0.1
@@ -186,25 +210,49 @@ def _check_hard_constraints(
                 incompatibilities.append("salary_below_candidate_minimum")
 
     return penalty, incompatibilities
+
+
 EXPERIENCE_EPSILON_YEARS = 1e-6
 _EXPERIENCE_MONTHS = {
-    "jan": 1, "january": 1,
-    "feb": 2, "february": 2,
-    "mar": 3, "march": 3,
-    "apr": 4, "april": 4,
+    "jan": 1,
+    "january": 1,
+    "feb": 2,
+    "february": 2,
+    "mar": 3,
+    "march": 3,
+    "apr": 4,
+    "april": 4,
     "may": 5,
-    "jun": 6, "june": 6,
-    "jul": 7, "july": 7,
-    "aug": 8, "august": 8,
-    "sep": 9, "sept": 9, "september": 9,
-    "oct": 10, "october": 10,
-    "nov": 11, "november": 11,
-    "dec": 12, "december": 12,
+    "jun": 6,
+    "june": 6,
+    "jul": 7,
+    "july": 7,
+    "aug": 8,
+    "august": 8,
+    "sep": 9,
+    "sept": 9,
+    "september": 9,
+    "oct": 10,
+    "october": 10,
+    "nov": 11,
+    "november": 11,
+    "dec": 12,
+    "december": 12,
 }
 _EXPERIENCE_NUMBER_WORDS = {
-    "zero": 0, "one": 1, "two": 2, "three": 3, "four": 4,
-    "five": 5, "six": 6, "seven": 7, "eight": 8, "nine": 9,
-    "ten": 10, "eleven": 11, "twelve": 12,
+    "zero": 0,
+    "one": 1,
+    "two": 2,
+    "three": 3,
+    "four": 4,
+    "five": 5,
+    "six": 6,
+    "seven": 7,
+    "eight": 8,
+    "nine": 9,
+    "ten": 10,
+    "eleven": 11,
+    "twelve": 12,
 }
 
 
@@ -248,12 +296,37 @@ def _term_in_text(term: str, text: str, text_tokens: set) -> bool:
 # Words that must not create a match by themselves — seniority and generic job-title words
 _GENERIC_ROLE_WORDS = {
     # seniority / level
-    "junior", "senior", "sr", "jr", "lead", "principal", "staff", "associate",
-    "mid", "entry", "level", "i", "ii", "iii", "iv",
+    "junior",
+    "senior",
+    "sr",
+    "jr",
+    "lead",
+    "principal",
+    "staff",
+    "associate",
+    "mid",
+    "entry",
+    "level",
+    "i",
+    "ii",
+    "iii",
+    "iv",
     # generic job-title nouns
-    "developer", "engineer", "programmer", "specialist", "consultant",
-    "architect", "manager", "analyst", "designer", "administrator",
-    "director", "officer", "head", "expert", "professional",
+    "developer",
+    "engineer",
+    "programmer",
+    "specialist",
+    "consultant",
+    "architect",
+    "manager",
+    "analyst",
+    "designer",
+    "administrator",
+    "director",
+    "officer",
+    "head",
+    "expert",
+    "professional",
 }
 
 # These preference values describe availability or work constraints, not a
@@ -274,18 +347,51 @@ _NON_ROLE_PREFERENCE_VALUES = {
 # technology it uses.  They are deliberately separate from _GENERIC_ROLE_WORDS:
 # the former can make a broad role match, while the latter carry no role intent.
 _BROAD_ROLE_TOKENS = {
-    "backend", "frontend", "fullstack", "full", "stack", "software",
-    "web", "mobile", "platform", "cloud", "data", "devops",
+    "backend",
+    "frontend",
+    "fullstack",
+    "full",
+    "stack",
+    "software",
+    "web",
+    "mobile",
+    "platform",
+    "cloud",
+    "data",
+    "devops",
 }
 
 # Technologies that commonly qualify an otherwise broad engineering title.
 # This is used only for ordering equally-scored target-role matches; it does
 # not affect the hybrid score, eligibility, or retrieval.
 _ROLE_TECHNOLOGY_TOKENS = {
-    "java", "python", "javascript", "typescript", "node", "node.js",
-    "c", "c#", "c++", "dotnet", ".net", "go", "golang", "ruby",
-    "php", "scala", "kotlin", "swift", "rust", "react", "angular",
-    "vue", "django", "flask", "spring", "springboot", "rails",
+    "java",
+    "python",
+    "javascript",
+    "typescript",
+    "node",
+    "node.js",
+    "c",
+    "c#",
+    "c++",
+    "dotnet",
+    ".net",
+    "go",
+    "golang",
+    "ruby",
+    "php",
+    "scala",
+    "kotlin",
+    "swift",
+    "rust",
+    "react",
+    "angular",
+    "vue",
+    "django",
+    "flask",
+    "spring",
+    "springboot",
+    "rails",
 }
 
 
@@ -294,7 +400,7 @@ def _role_tokens(role: str) -> set:
     return {t for t in _phrase_set(role) if t not in _GENERIC_ROLE_WORDS}
 
 
-def _target_role_score(target_roles: List[str], job_title: str, job_text: str) -> float:
+def _target_role_score(target_roles: list[str], job_title: str, job_text: str) -> float:
     """
     Token-overlap target-role scoring.
     All meaningful tokens from the candidate's target role must appear as whole
@@ -318,7 +424,7 @@ def _target_role_score(target_roles: List[str], job_title: str, job_text: str) -
     return min(best, 1.0)
 
 
-def _target_role_specificity(target_roles: List[str], job_title: str) -> int:
+def _target_role_specificity(target_roles: list[str], job_title: str) -> int:
     """Classify title intent without changing the target-role score.
 
     A preferred technology in the title is a specific match (2); a title that
@@ -341,16 +447,22 @@ def _target_role_specificity(target_roles: List[str], job_title: str) -> int:
     return best
 
 
-def _skills_score(candidate_skills: List[str], job_text: str) -> float:
+def _skills_score(candidate_skills: list[str], job_text: str) -> float:
     """Fraction of candidate skills that appear as whole normalized terms in the job text."""
     if not candidate_skills:
         return 0.0
     text_tokens = _phrase_set(job_text)
-    hits = sum(1 for s in candidate_skills if s and _term_in_text(_normalize(canonical_skill(s)), job_text, text_tokens))
+    hits = sum(
+        1
+        for s in candidate_skills
+        if s and _term_in_text(_normalize(canonical_skill(s)), job_text, text_tokens)
+    )
     return min(hits / len(candidate_skills), 1.0)
 
 
-def _experience_score(candidate_roles: List[str], job_title: str, job_text: str) -> float:
+def _experience_score(
+    candidate_roles: list[str], job_title: str, job_text: str
+) -> float:
     """How well the candidate's past roles match the job title/description."""
     if not candidate_roles:
         return 0.0
@@ -375,7 +487,10 @@ def _normalize_text(value: Any) -> str:
 def _split_experience_range(text: str) -> list[str] | None:
     if not text:
         return None
-    parts = [part.strip() for part in re.split(r"\s+(?:[\u2013\u2014-]|—)\s+", text, maxsplit=1)]
+    parts = [
+        part.strip()
+        for part in re.split(r"\s+(?:[\u2013\u2014-]|—)\s+", text, maxsplit=1)
+    ]
     if len(parts) == 2:
         return parts
     return None
@@ -383,7 +498,9 @@ def _split_experience_range(text: str) -> list[str] | None:
 
 def _is_open_ended_experience_value(value: Any) -> bool:
     normalized = _normalize_text(value).lower()
-    return bool(normalized and re.search(r"\b(?:present|current|ongoing|now)\b", normalized))
+    return bool(
+        normalized and re.search(r"\b(?:present|current|ongoing|now)\b", normalized)
+    )
 
 
 def _parse_experience_date(value: Any, role: str = "end") -> datetime | None:
@@ -395,8 +512,8 @@ def _parse_experience_date(value: Any, role: str = "end") -> datetime | None:
     if m := re.match(r"^(\d{4})$", cleaned):
         year = int(m.group(1))
         if role == "end":
-            return datetime(year + 1, 1, 1, tzinfo=timezone.utc)
-        return datetime(year, 1, 1, tzinfo=timezone.utc)
+            return datetime(year + 1, 1, 1, tzinfo=UTC)
+        return datetime(year, 1, 1, tzinfo=UTC)
 
     if m := re.match(r"^(\d{4})[./](\d{1,2})$", cleaned):
         year = int(m.group(1))
@@ -405,9 +522,9 @@ def _parse_experience_date(value: Any, role: str = "end") -> datetime | None:
             return None
         if role == "end":
             if month == 12:
-                return datetime(year + 1, 1, 1, tzinfo=timezone.utc)
-            return datetime(year, month + 1, 1, tzinfo=timezone.utc)
-        return datetime(year, month, 1, tzinfo=timezone.utc)
+                return datetime(year + 1, 1, 1, tzinfo=UTC)
+            return datetime(year, month + 1, 1, tzinfo=UTC)
+        return datetime(year, month, 1, tzinfo=UTC)
 
     if m := re.match(r"^([A-Za-z]{3,9})\s+(\d{4})$", cleaned):
         month = _EXPERIENCE_MONTHS.get(m.group(1).lower())
@@ -416,19 +533,19 @@ def _parse_experience_date(value: Any, role: str = "end") -> datetime | None:
         year = int(m.group(2))
         if role == "end":
             if month == 12:
-                return datetime(year + 1, 1, 1, tzinfo=timezone.utc)
-            return datetime(year, month + 1, 1, tzinfo=timezone.utc)
-        return datetime(year, month, 1, tzinfo=timezone.utc)
+                return datetime(year + 1, 1, 1, tzinfo=UTC)
+            return datetime(year, month + 1, 1, tzinfo=UTC)
+        return datetime(year, month, 1, tzinfo=UTC)
 
     for fmt in ("%Y-%m-%d", "%Y/%m/%d", "%d-%m-%Y", "%d/%m/%Y", "%m-%d-%Y", "%m/%d/%Y"):
         try:
-            return datetime.strptime(text, fmt).replace(tzinfo=timezone.utc)
+            return datetime.strptime(text, fmt).replace(tzinfo=UTC)
         except ValueError:
             continue
 
     if m := re.match(r"^(\d{4})[./](\d{1,2})[./](\d{1,2})$", cleaned):
         year, month, day = map(int, m.groups())
-        return datetime(year, month, day, tzinfo=timezone.utc)
+        return datetime(year, month, day, tzinfo=UTC)
 
     return None
 
@@ -437,7 +554,9 @@ def _parse_experience_window(item: Any) -> tuple[datetime | None, datetime | Non
     if not isinstance(item, dict):
         return None, None
 
-    start = _parse_experience_date(item.get("start_date") or item.get("startDate"), "start")
+    start = _parse_experience_date(
+        item.get("start_date") or item.get("startDate"), "start"
+    )
     end = _parse_experience_date(item.get("end_date") or item.get("endDate"), "end")
 
     dates_text = _normalize_text(item.get("dates") or item.get("duration") or "")
@@ -458,7 +577,7 @@ def _parse_experience_window(item: Any) -> tuple[datetime | None, datetime | Non
     return start, end
 
 
-def _candidate_total_experience_years(candidate: Dict[str, Any]) -> float:
+def _candidate_total_experience_years(candidate: dict[str, Any]) -> float:
     work_exp = candidate.get("work_experience") or []
     if isinstance(work_exp, str):
         try:
@@ -467,15 +586,33 @@ def _candidate_total_experience_years(candidate: Dict[str, Any]) -> float:
             work_exp = []
 
     intervals: list[tuple[datetime, datetime]] = []
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
 
     for item in work_exp if isinstance(work_exp, list) else []:
         if not isinstance(item, dict):
             continue
         # Personal/self projects are not employer experience, even when an
         # extractor placed them in the work_experience array.
-        kind = " ".join(str(item.get(key) or "") for key in ("type", "category", "employment_type", "title", "company", "project_name")).lower()
-        if item.get("is_project") or any(marker in kind for marker in ("self project", "personal project", "side project", "independent project")):
+        kind = " ".join(
+            str(item.get(key) or "")
+            for key in (
+                "type",
+                "category",
+                "employment_type",
+                "title",
+                "company",
+                "project_name",
+            )
+        ).lower()
+        if item.get("is_project") or any(
+            marker in kind
+            for marker in (
+                "self project",
+                "personal project",
+                "side project",
+                "independent project",
+            )
+        ):
             continue
         start, end = _parse_experience_window(item)
         if start is None:
@@ -490,7 +627,14 @@ def _candidate_total_experience_years(candidate: Dict[str, Any]) -> float:
         # all. Once records exist, stale scalar totals must not override them.
         if not work_exp:
             try:
-                return max(0.0, float(candidate.get("experience_years") or candidate.get("total_experience_years") or 0))
+                return max(
+                    0.0,
+                    float(
+                        candidate.get("experience_years")
+                        or candidate.get("total_experience_years")
+                        or 0
+                    ),
+                )
             except (TypeError, ValueError):
                 return 0.0
         return 0.0
@@ -510,13 +654,22 @@ def _candidate_total_experience_years(candidate: Dict[str, Any]) -> float:
     return max(0.0, merged_days / 365.25)
 
 
-def _job_text(job_title: str, job_description: str, job_requirements: Any = "", job_skills: Any = None) -> str:
+def _job_text(
+    job_title: str,
+    job_description: str,
+    job_requirements: Any = "",
+    job_skills: Any = None,
+) -> str:
     parts = [job_title or "", job_description or "", _normalize_text(job_requirements)]
     if isinstance(job_skills, list):
         skill_parts: list[str] = []
         for skill in job_skills:
             if isinstance(skill, dict):
-                skill_parts.append(_normalize_text(skill.get("name") or skill.get("title") or skill.get("skill")))
+                skill_parts.append(
+                    _normalize_text(
+                        skill.get("name") or skill.get("title") or skill.get("skill")
+                    )
+                )
             else:
                 skill_parts.append(_normalize_text(skill))
         skill_parts.extend(canonical_skill(skill) for skill in list(skill_parts))
@@ -526,7 +679,9 @@ def _job_text(job_title: str, job_description: str, job_requirements: Any = "", 
     return " ".join(part for part in parts if part)
 
 
-def normalize_job_experience(job_text: Any = "", experience_required: Any = "") -> tuple[float | None, float | None]:
+def normalize_job_experience(
+    job_text: Any = "", experience_required: Any = ""
+) -> tuple[float | None, float | None]:
     """Normalize explicit experience from any source into common min/max years."""
     return _job_experience_bounds(_job_text("", job_text, experience_required))
 
@@ -536,7 +691,9 @@ def _job_experience_bounds(job_text: str) -> tuple[float | None, float | None]:
     if not normalized:
         return None, None
 
-    for word, number in sorted(_EXPERIENCE_NUMBER_WORDS.items(), key=lambda item: -len(item[0])):
+    for word, number in sorted(
+        _EXPERIENCE_NUMBER_WORDS.items(), key=lambda item: -len(item[0])
+    ):
         normalized = re.sub(rf"\b{word}\b", str(number), normalized)
 
     min_years: float | None = None
@@ -552,20 +709,35 @@ def _job_experience_bounds(job_text: str) -> tuple[float | None, float | None]:
             min_years = low if min_years is None else max(min_years, low)
             max_years = high if max_years is None else min(max_years, high)
 
-    for match in re.finditer(r"(?:minimum|min\.?|at least|requires?|requiring)?\s*(?:of\s*)?(?P<years>\d+(?:\.\d+)?)\s*\+\s*(?:years?|yrs?)", normalized):
+    for match in re.finditer(
+        r"(?:minimum|min\.?|at least|requires?|requiring)?\s*(?:of\s*)?(?P<years>\d+(?:\.\d+)?)\s*\+\s*(?:years?|yrs?)",
+        normalized,
+    ):
         years = float(match.group("years"))
         min_years = years if min_years is None else max(min_years, years)
 
     # Do not re-interpret the upper end of an already parsed ``1-3 years``
     # range as a separate minimum requirement.
-    range_free = re.sub(r"\d+(?:\.\d+)?\s*(?:[-\u2013\u2014]|to)\s*\d+(?:\.\d+)?\s*(?:years?|yrs?)", "", normalized)
-    for match in re.finditer(r"(?:minimum|min\.?|at least|requires?|requiring)?\s*(?:of\s*)?(?P<years>\d+(?:\.\d+)?)\s*(?:years?|yrs?)", range_free):
+    range_free = re.sub(
+        r"\d+(?:\.\d+)?\s*(?:[-\u2013\u2014]|to)\s*\d+(?:\.\d+)?\s*(?:years?|yrs?)",
+        "",
+        normalized,
+    )
+    for match in re.finditer(
+        r"(?:minimum|min\.?|at least|requires?|requiring)?\s*(?:of\s*)?(?P<years>\d+(?:\.\d+)?)\s*(?:years?|yrs?)",
+        range_free,
+    ):
         years = float(match.group("years"))
         min_years = years if min_years is None else max(min_years, years)
         # Bare "5 years" is treated as an exact stated band; phrases that
         # explicitly establish a floor remain open-ended.
-        prefix = (match.group(0)[:match.group(0).lower().find(str(int(years)))].strip().lower()
-                  if str(int(years)) in match.group(0) else "")
+        prefix = (
+            match.group(0)[: match.group(0).lower().find(str(int(years)))]
+            .strip()
+            .lower()
+            if str(int(years)) in match.group(0)
+            else ""
+        )
         if not prefix and max_years is None:
             max_years = years
 
@@ -575,38 +747,66 @@ def _job_experience_bounds(job_text: str) -> tuple[float | None, float | None]:
     return min_years, max_years
 
 
-def _count_skill_matches(candidate_skills: List[str], job_text: str) -> int:
+def _count_skill_matches(candidate_skills: list[str], job_text: str) -> int:
     if not candidate_skills:
         return 0
     text_tokens = _phrase_set(job_text)
-    return sum(1 for skill in candidate_skills if skill and _term_in_text(_normalize(canonical_skill(skill)), job_text, text_tokens))
+    return sum(
+        1
+        for skill in candidate_skills
+        if skill
+        and _term_in_text(_normalize(canonical_skill(skill)), job_text, text_tokens)
+    )
 
 
-def _job_is_eligible(signals: Dict[str, Any], candidate_years: float, job_title: str, job_description: str, job_requirements: Any = "", job_skills: Any = None) -> bool:
+def _job_is_eligible(
+    signals: dict[str, Any],
+    candidate_years: float,
+    job_title: str,
+    job_description: str,
+    job_requirements: Any = "",
+    job_skills: Any = None,
+) -> bool:
     job_text = _job_text(job_title, job_description, job_requirements, job_skills)
     if not _job_passes_experience(candidate_years, job_text, job_requirements):
         return False
     return _job_passes_skills_or_role(signals, job_title, job_text)
 
 
-def experience_eligibility(candidate_years: float, job_text: Any = "", experience_required: Any = "") -> Dict[str, Any]:
+def experience_eligibility(
+    candidate_years: float, job_text: Any = "", experience_required: Any = ""
+) -> dict[str, Any]:
     """Central hard gate applied before scoring, regardless of job source."""
     min_years, max_years = normalize_job_experience(job_text, experience_required)
     reason = None
     if min_years is not None and candidate_years + EXPERIENCE_EPSILON_YEARS < min_years:
         reason = "candidate_below_job_minimum"
-    elif max_years is not None and candidate_years - EXPERIENCE_EPSILON_YEARS > max_years:
+    elif (
+        max_years is not None and candidate_years - EXPERIENCE_EPSILON_YEARS > max_years
+    ):
         reason = "candidate_above_job_maximum"
-    result = {"candidate_years": candidate_years, "job_min_years": min_years,
-              "job_max_years": max_years, "eligible": reason is None,
-              "decision": "eligible" if reason is None else "rejected",
-              "rejection_reason": reason}
-    logger.info("[experience-eligibility] candidate_years=%s job_min_years=%s job_max_years=%s decision=%s rejection_reason=%s",
-                result["candidate_years"], result["job_min_years"], result["job_max_years"], result["decision"], result["rejection_reason"])
+    result = {
+        "candidate_years": candidate_years,
+        "job_min_years": min_years,
+        "job_max_years": max_years,
+        "eligible": reason is None,
+        "decision": "eligible" if reason is None else "rejected",
+        "rejection_reason": reason,
+    }
+    logger.info(
+        "[experience-eligibility] candidate_years=%s job_min_years=%s job_max_years=%s decision=%s rejection_reason=%s",
+        result["candidate_years"],
+        result["job_min_years"],
+        result["job_max_years"],
+        result["decision"],
+        result["rejection_reason"],
+    )
     return result
 
 
-def stored_recommendation_experience_eligibility(candidate: Dict[str, Any], job: Dict[str, Any]) -> Dict[str, Any]:
+def stored_recommendation_experience_eligibility(
+    candidate: dict[str, Any], job: dict[str, Any]
+) -> dict[str, Any]:
     """Read-only experience gate for an already-persisted recommendation.
 
     This deliberately evaluates only the hard experience boundary.  It does
@@ -622,20 +822,30 @@ def stored_recommendation_experience_eligibility(candidate: Dict[str, Any], job:
     # Normalize once here so retrieval uses the same stored-job interpretation
     # as the matcher; experience_eligibility remains the authoritative decision.
     normalize_job_experience(job_text, job.get("experience_required"))
-    return experience_eligibility(candidate_years, job_text, job.get("experience_required"))
+    return experience_eligibility(
+        candidate_years, job_text, job.get("experience_required")
+    )
 
 
-def _job_passes_experience(candidate_years: float, job_text: str, experience_required: Any = "") -> bool:
-    return bool(experience_eligibility(candidate_years, job_text, experience_required)["eligible"])
+def _job_passes_experience(
+    candidate_years: float, job_text: str, experience_required: Any = ""
+) -> bool:
+    return bool(
+        experience_eligibility(candidate_years, job_text, experience_required)[
+            "eligible"
+        ]
+    )
 
 
-def _job_passes_skills_or_role(signals: Dict[str, Any], job_title: str, job_text: str) -> bool:
+def _job_passes_skills_or_role(
+    signals: dict[str, Any], job_title: str, job_text: str
+) -> bool:
     skill_hits = _count_skill_matches(signals["skills"], job_text)
     role_score = _target_role_score(signals["target_roles"], job_title, job_text)
     return skill_hits > 0 or role_score > 0.0
 
 
-def _as_list(value: Any) -> List[str]:
+def _as_list(value: Any) -> list[str]:
     if isinstance(value, str):
         try:
             value = json.loads(value)
@@ -653,15 +863,21 @@ def _norm_set(values: Any) -> set:
 def _preference_text_match(preferences: Any, value: Any) -> bool:
     """Whole-value preference match; never treats an absent job field as bad."""
     wanted, actual = _norm_set(preferences), _normalize_text(value).lower()
-    return bool(wanted and actual and any(p == actual or p in actual or actual in p for p in wanted))
+    return bool(
+        wanted
+        and actual
+        and any(p == actual or p in actual or actual in p for p in wanted)
+    )
 
 
 def _remote_only(value: Any) -> bool:
     text = _normalize_text(value).lower()
-    return "remote" in text and any(word in text for word in ("only", "exclusive", "strict"))
+    return "remote" in text and any(
+        word in text for word in ("only", "exclusive", "strict")
+    )
 
 
-def _job_work_mode(job: Dict[str, Any]) -> str:
+def _job_work_mode(job: dict[str, Any]) -> str:
     policy = _normalize_text(job.get("remote_policy")).lower()
     if job.get("remote") is True or "remote" in policy:
         return "remote"
@@ -687,11 +903,15 @@ def _salary_number(value: Any) -> float | None:
     return amount
 
 
-def _preference_eligibility(signals: Dict[str, Any], job: Dict[str, Any], candidate_years: float) -> Tuple[bool, List[str]]:
+def _preference_eligibility(
+    signals: dict[str, Any], job: dict[str, Any], candidate_years: float
+) -> tuple[bool, list[str]]:
     """Apply only explicit constraints. Unknown job metadata remains eligible."""
-    reasons: List[str] = []
+    reasons: list[str] = []
     # Country is an eligibility boundary, never a ranking signal.
-    if signals.get("_candidate") is not None and not country_eligible(signals.get("_candidate", {}), job):
+    if signals.get("_candidate") is not None and not country_eligible(
+        signals.get("_candidate", {}), job
+    ):
         reasons.append("job_country_ineligible")
     mode = _job_work_mode(job)
     if _remote_only(signals.get("remote_preference")) and mode in ("onsite", "hybrid"):
@@ -699,15 +919,33 @@ def _preference_eligibility(signals: Dict[str, Any], job: Dict[str, Any], candid
     locations = signals.get("preferred_locations") or []
     # Explicit locations are a restriction, except a remote job satisfies an
     # explicit remote-or-location preference.
-    job_location = " ".join(str(job.get(k) or "") for k in ("location", "city", "state", "country"))
-    if locations and mode != "remote" and job_location and not _preference_text_match(locations, job_location):
+    job_location = " ".join(
+        str(job.get(k) or "") for k in ("location", "city", "state", "country")
+    )
+    if (
+        locations
+        and mode != "remote"
+        and job_location
+        and not _preference_text_match(locations, job_location)
+    ):
         reasons.append("job_outside_explicit_locations")
     types = signals.get("employment_types") or []
-    if types and job.get("employment_type") and not _preference_text_match(types, job.get("employment_type")):
+    if (
+        types
+        and job.get("employment_type")
+        and not _preference_text_match(types, job.get("employment_type"))
+    ):
         reasons.append("employment_type_mismatch")
     # The established experience boundary remains an eligibility gate.
-    job_text = _job_text(job.get("title", ""), job.get("description", ""), job.get("requirements", ""), job.get("skills"))
-    experience = experience_eligibility(candidate_years, job_text, job.get("experience_required"))
+    job_text = _job_text(
+        job.get("title", ""),
+        job.get("description", ""),
+        job.get("requirements", ""),
+        job.get("skills"),
+    )
+    experience = experience_eligibility(
+        candidate_years, job_text, job.get("experience_required")
+    )
     if not experience["eligible"]:
         reasons.append("experience_outside_required_range")
     return not reasons, reasons
@@ -724,32 +962,62 @@ def _experience_fit_score(candidate_years: float, job_text: str) -> float:
     return 1.0
 
 
-def _preference_score(signals: Dict[str, Any], job: Dict[str, Any]) -> Tuple[float, Dict[str, float]]:
+def _preference_score(
+    signals: dict[str, Any], job: dict[str, Any]
+) -> tuple[float, dict[str, float]]:
     """Average only preferences for which the job supplies comparable metadata."""
-    scored: Dict[str, float] = {}
+    scored: dict[str, float] = {}
     if signals.get("_candidate"):
-        scored["country_location"] = location_preference_score(signals["_candidate"], job)
+        scored["country_location"] = location_preference_score(
+            signals["_candidate"], job
+        )
     mode = _job_work_mode(job)
     if signals.get("remote_preference") and mode:
         desired = _normalize_text(signals["remote_preference"]).lower()
         scored["work_mode"] = 1.0 if mode in desired else 0.0
-    location = " ".join(str(job.get(k) or "") for k in ("location", "city", "state", "country"))
+    location = " ".join(
+        str(job.get(k) or "") for k in ("location", "city", "state", "country")
+    )
     if signals.get("preferred_locations") and location:
-        scored["location"] = 1.0 if _preference_text_match(signals["preferred_locations"], location) else 0.0
+        scored["location"] = (
+            1.0
+            if _preference_text_match(signals["preferred_locations"], location)
+            else 0.0
+        )
     if signals.get("employment_types") and job.get("employment_type"):
-        scored["employment_type"] = 1.0 if _preference_text_match(signals["employment_types"], job["employment_type"]) else 0.0
+        scored["employment_type"] = (
+            1.0
+            if _preference_text_match(
+                signals["employment_types"], job["employment_type"]
+            )
+            else 0.0
+        )
     if signals.get("preferred_industries") and job.get("industry"):
-        scored["industry"] = 1.0 if _preference_text_match(signals["preferred_industries"], job["industry"]) else 0.0
-    company_type = " ".join(str(job.get(k) or "") for k in ("company_type", "structured_data", "description"))
+        scored["industry"] = (
+            1.0
+            if _preference_text_match(signals["preferred_industries"], job["industry"])
+            else 0.0
+        )
+    company_type = " ".join(
+        str(job.get(k) or "")
+        for k in ("company_type", "structured_data", "description")
+    )
     if signals.get("preferred_companies") and company_type:
-        scored["company_type"] = 1.0 if _preference_text_match(signals["preferred_companies"], company_type) else 0.0
-    expected, offered = _salary_number(signals.get("expected_salary")), _salary_number(job.get("salary_range"))
+        scored["company_type"] = (
+            1.0
+            if _preference_text_match(signals["preferred_companies"], company_type)
+            else 0.0
+        )
+    expected, offered = (
+        _salary_number(signals.get("expected_salary")),
+        _salary_number(job.get("salary_range")),
+    )
     if expected and offered:
         scored["salary"] = 1.0 if offered >= expected else max(0.0, offered / expected)
     return (sum(scored.values()) / len(scored) if scored else 0.5), scored
 
 
-def _build_candidate_signals(candidate: Dict[str, Any]) -> Dict[str, Any]:
+def _build_candidate_signals(candidate: dict[str, Any]) -> dict[str, Any]:
     """Extract matching signals from the candidate profile."""
     import json
 
@@ -763,22 +1031,28 @@ def _build_candidate_signals(candidate: Dict[str, Any]) -> Dict[str, Any]:
     # preferred_roles is the candidate's stated job direction.  A current role
     # describes experience; it must not redirect a candidate who is explicitly
     # seeking a different role or technology.
-    preferences: Dict[str, Any] = {}
+    preferences: dict[str, Any] = {}
     try:
         from profile_strength_service import get_canonical_preferences
+
         preferences = get_canonical_preferences(candidate, candidate.get("_prefs_row"))
         preferred_roles = preferences.get("preferred_roles") or []
     except Exception:
-        preferred_roles = raw_data.get("preferred_roles") or raw_data.get("target_roles") or []
+        preferred_roles = (
+            raw_data.get("preferred_roles") or raw_data.get("target_roles") or []
+        )
         preferences = raw_data
     if isinstance(preferred_roles, str):
         preferred_roles = [preferred_roles]
     current_role = (candidate.get("current_role") or "").strip()
-    target_roles = list(dict.fromkeys(
-        str(role).strip()
-        for role in preferred_roles
-        if str(role).strip() and _normalize(str(role)) not in _NON_ROLE_PREFERENCE_VALUES
-    ))
+    target_roles = list(
+        dict.fromkeys(
+            str(role).strip()
+            for role in preferred_roles
+            if str(role).strip()
+            and _normalize(str(role)) not in _NON_ROLE_PREFERENCE_VALUES
+        )
+    )
     # A broad role saved alongside a more specific role is useful profile
     # context, but it must not dilute the candidate's explicit direction.
     # For example, "Backend Developer" is subsumed by "Java Backend
@@ -840,7 +1114,12 @@ def _build_candidate_signals(candidate: Dict[str, Any]) -> Dict[str, Any]:
         # avoids creating a second preference source of truth.
         "preferred_locations": _as_list(preferences.get("preferred_locations")),
         "preferred_industries": _as_list(preferences.get("preferred_industries")),
-        "preferred_companies": _as_list(preferences.get("preferred_companies") or preferences.get("company_types") or raw_data.get("company_types") or raw_data.get("company_type_preference")),
+        "preferred_companies": _as_list(
+            preferences.get("preferred_companies")
+            or preferences.get("company_types")
+            or raw_data.get("company_types")
+            or raw_data.get("company_type_preference")
+        ),
         "employment_types": _as_list(preferences.get("employment_types")),
         "remote_preference": preferences.get("remote_preference") or "",
         "expected_salary": preferences.get("expected_salary") or "",
@@ -851,7 +1130,7 @@ def _build_candidate_signals(candidate: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
-def _build_target_role_retrieval_text(target_roles: List[str]) -> str:
+def _build_target_role_retrieval_text(target_roles: list[str]) -> str:
     """Build an intent-only Qdrant query, excluding experience and skills.
 
     Target-role retrieval deliberately contains no current role, resume text, or
@@ -862,7 +1141,7 @@ def _build_target_role_retrieval_text(target_roles: List[str]) -> str:
     return "Target job roles:\n" + "\n".join(target_roles)
 
 
-def _extract_job_required_skills(job_text: str) -> List[str]:
+def _extract_job_required_skills(job_text: str) -> list[str]:
     """
     Heuristically extract required skills from job text.
     Looks for skills listed after 'required:', 'requirements:', 'must have:',
@@ -876,10 +1155,19 @@ def _extract_job_required_skills(job_text: str) -> List[str]:
     section = re.compile(rf"^\s*{heading_text}\s*:?[ \t]*$", re.I)
     inline_section = re.compile(rf"^\s*{heading_text}\s*:\s*(?P<items>.+)$", re.I)
     requires_line = re.compile(r"\brequires?\s+(?P<items>[^.!?]+)", re.I)
-    stop = re.compile(r"^\s*(?:preferred|nice\s+to\s+have|benefits?|responsibilities|about\s+(?:the\s+company|us|the\s+role)|what\s+we\s+offer)\b", re.I)
+    stop = re.compile(
+        r"^\s*(?:preferred|nice\s+to\s+have|benefits?|responsibilities|about\s+(?:the\s+company|us|the\s+role)|what\s+we\s+offer)\b",
+        re.I,
+    )
     bullet = re.compile(r"^\s*(?:[-*•▪‣]|\d+[.)])\s+")
-    rejected_start = re.compile(r"^(?:be|build|communicate|conduct|create|develop|ensure|help|lead|manage|maintain|provide|support|work|all|the|a|an|and|or)\b", re.I)
-    rejected = re.compile(r"\b(?:location|salary|compensation|travel|clearance|citizenship|eligib|authorization|visa|degree|education|bachelor|master|phd|years?\s+of\s+experience)\b", re.I)
+    rejected_start = re.compile(
+        r"^(?:be|build|communicate|conduct|create|develop|ensure|help|lead|manage|maintain|provide|support|work|all|the|a|an|and|or)\b",
+        re.I,
+    )
+    rejected = re.compile(
+        r"\b(?:location|salary|compensation|travel|clearance|citizenship|eligib|authorization|visa|degree|education|bachelor|master|phd|years?\s+of\s+experience)\b",
+        re.I,
+    )
     skills = []
     collecting = False
     for raw_line in text.splitlines():
@@ -902,24 +1190,47 @@ def _extract_job_required_skills(job_text: str) -> List[str]:
         if not collecting:
             continue
         item_text = bullet.sub("", line).strip(" .:;()")
-        items = re.split(r"[,;]|\band\b", item_text, flags=re.I) if is_bullet else [item_text]
+        items = (
+            re.split(r"[,;]|\band\b", item_text, flags=re.I)
+            if is_bullet
+            else [item_text]
+        )
         for item in items:
-            item = re.sub(r"^(?:strong|proven|demonstrated|hands[- ]on)\s+(?:experience|proficiency|knowledge|expertise|familiarity)\s+(?:with|in|of)\s+", "", item.strip(" .:;()"), flags=re.I)
-            if 2 <= len(item) <= 60 and len(item.split()) <= 6 and not rejected_start.match(item) and not rejected.search(item) and not item.endswith((".", "!", "?")):
+            item = re.sub(
+                r"^(?:strong|proven|demonstrated|hands[- ]on)\s+(?:experience|proficiency|knowledge|expertise|familiarity)\s+(?:with|in|of)\s+",
+                "",
+                item.strip(" .:;()"),
+                flags=re.I,
+            )
+            if (
+                2 <= len(item) <= 60
+                and len(item.split()) <= 6
+                and not rejected_start.match(item)
+                and not rejected.search(item)
+                and not item.endswith((".", "!", "?"))
+            ):
                 skills.append(item)
     return list(dict.fromkeys(skills))
     # Look for explicit required section
-    for marker in ("required:", "requirements:", "must have:", "you must have:",
-                   "requires ", "requiring "):
-        idx = lower.find(marker)
+    for marker in (
+        "required:",
+        "requirements:",
+        "must have:",
+        "you must have:",
+        "requires ",
+        "requiring ",
+    ):
+        idx = job_text.lower().find(marker)
         if idx != -1:
-            snippet = job_text[idx:idx + 300]
+            snippet = job_text[idx : idx + 300]
             # Extract comma/newline separated items
             items = re.split(r"[,\n;]", snippet)
             skills = []
             for item in items[1:8]:  # skip the marker itself
                 item = item.strip().strip(".-•*")
-                if 2 <= len(item) <= 40 and not item.lower().startswith(("and ", "or ", "the ")):
+                if 2 <= len(item) <= 40 and not item.lower().startswith(
+                    ("and ", "or ", "the ")
+                ):
                     skills.append(item)
             if skills:
                 return skills
@@ -927,10 +1238,10 @@ def _extract_job_required_skills(job_text: str) -> List[str]:
 
 
 def _skill_evidence_breakdown(
-    candidate_skills: List[str],
+    candidate_skills: list[str],
     job_text: str,
-    intelligence: Optional[Dict[str, Any]],
-) -> Dict[str, List[str]]:
+    intelligence: dict[str, Any] | None,
+) -> dict[str, list[str]]:
     """
     Classify each candidate skill that appears in the job text by evidence level.
     Returns {strong, partial, missing_required} lists for explainability.
@@ -955,13 +1266,13 @@ def _skill_evidence_breakdown(
 
 
 def _compute_job_specific_confidence(
-    signals: Dict[str, Any],
+    signals: dict[str, Any],
     job_title: str,
     job_text: str,
     hybrid_score: float,
-    components: Dict[str, Any],
-    intelligence: Optional[Dict[str, Any]],
-) -> Dict[str, Any]:
+    components: dict[str, Any],
+    intelligence: dict[str, Any] | None,
+) -> dict[str, Any]:
     """
     Job-Specific Recommendation Confidence.
 
@@ -982,7 +1293,6 @@ def _compute_job_specific_confidence(
     """
     rec_readiness = (intelligence or {}).get("recommendation_readiness") or {}
     readiness_level = rec_readiness.get("level", "low")
-    readiness_confidence = float(rec_readiness.get("confidence") or 0.0)
 
     # Readiness factor: scales base score — does NOT replace it
     # High readiness → full weight; Low readiness → 0.6 floor (job-critical info may still be known)
@@ -1013,14 +1323,15 @@ def _compute_job_specific_confidence(
     # is missing some, cap confidence proportionally.
     # This prevents high confidence when semantic similarity is high but required skills absent.
     required_skills = _extract_job_required_skills(job_text)
-    missing_required: List[str] = []
+    missing_required: list[str] = []
     if required_skills:
         candidate_skill_set = signals["skills"]
         for req in required_skills:
             req_norm = _normalize(req)
             if not any(
                 req_norm in _normalize(s) or _normalize(s) in req_norm
-                for s in candidate_skill_set if s
+                for s in candidate_skill_set
+                if s
             ):
                 missing_required.append(req)
         if missing_required:
@@ -1060,7 +1371,9 @@ def _compute_job_specific_confidence(
         tier = "limited"
 
     # Build match explanation
-    skill_breakdown = _skill_evidence_breakdown(signals["skills"], job_text, intelligence)
+    skill_breakdown = _skill_evidence_breakdown(
+        signals["skills"], job_text, intelligence
+    )
     strong_reasons = list(skill_breakdown["strong"])
     partial_reasons = list(skill_breakdown["partial"])
 
@@ -1079,7 +1392,9 @@ def _compute_job_specific_confidence(
             else:
                 constraint_notes.append(inc.replace("_", " "))
     elif components.get("constraint_penalty", 1.0) >= 1.0:
-        if (intelligence or {}).get("constraint_profile", {}).get("work_mode_constraint") not in (None, "unknown"):
+        if (intelligence or {}).get("constraint_profile", {}).get(
+            "work_mode_constraint"
+        ) not in (None, "unknown"):
             constraint_notes.append("Work mode compatible")
 
     concerns = []
@@ -1104,16 +1419,16 @@ def _compute_job_specific_confidence(
 
 
 def _hybrid_score(
-    signals: Dict[str, Any],
+    signals: dict[str, Any],
     job_title: str,
     job_description: str,
     job_requirements: Any,
     job_skills: Any,
     semantic_score: float,
-    intelligence: Optional[Dict[str, Any]] = None,
-    job_metadata: Optional[Dict[str, Any]] = None,
-    candidate_years: Optional[float] = None,
-) -> Tuple[float, Dict[str, Any]]:
+    intelligence: dict[str, Any] | None = None,
+    job_metadata: dict[str, Any] | None = None,
+    candidate_years: float | None = None,
+) -> tuple[float, dict[str, Any]]:
     """
     Compute a weighted hybrid score for one job.
     Integrates candidate intelligence (evidence quality + hard constraints).
@@ -1122,33 +1437,50 @@ def _hybrid_score(
     job_text = _job_text(job_title, job_description, job_requirements, job_skills)
 
     tr_score = _target_role_score(signals["target_roles"], job_title, job_text)
-    score_required_skills = job_skills if isinstance(job_skills, list) and job_skills else _extract_job_required_skills(job_text)
+    score_required_skills = (
+        job_skills
+        if isinstance(job_skills, list) and job_skills
+        else _extract_job_required_skills(job_text)
+    )
     sk_score = _evidence_weighted_skills_score(
         signals["skills"], job_text, intelligence, score_required_skills
     )
     history_score = _experience_score(signals["past_roles"], job_title, job_text)
-    years = candidate_years if candidate_years is not None else float(signals.get("total_experience_years") or 0)
+    years = (
+        candidate_years
+        if candidate_years is not None
+        else float(signals.get("total_experience_years") or 0)
+    )
     experience_fit = _experience_fit_score(years, job_text)
-    preference_score, preference_components = _preference_score(signals, job_metadata or {})
+    preference_score, preference_components = _preference_score(
+        signals, job_metadata or {}
+    )
     sem_score = max(0.0, min(1.0, float(semantic_score)))
 
     final = (
-        W_TARGET_ROLE * tr_score + W_SKILLS * sk_score
-        + W_EXPERIENCE_FIT * experience_fit + W_RELEVANT_HISTORY * history_score
-        + W_PREFERENCES * preference_score + W_SEMANTIC * sem_score
+        W_TARGET_ROLE * tr_score
+        + W_SKILLS * sk_score
+        + W_EXPERIENCE_FIT * experience_fit
+        + W_RELEVANT_HISTORY * history_score
+        + W_PREFERENCES * preference_score
+        + W_SEMANTIC * sem_score
     )
 
     constraint_profile = (intelligence or {}).get("constraint_profile") or {}
-    constraint_penalty, incompatibilities = _check_hard_constraints(constraint_profile, job_text)
+    constraint_penalty, incompatibilities = _check_hard_constraints(
+        constraint_profile, job_text
+    )
     final *= constraint_penalty
 
-    components: Dict[str, Any] = {
+    components: dict[str, Any] = {
         "target_role_score": round(tr_score, 4),
         "skills_score": round(sk_score, 4),
         "experience_score": round(history_score, 4),
         "experience_fit_score": round(experience_fit, 4),
         "preference_score": round(preference_score, 4),
-        "preference_components": {key: round(value, 4) for key, value in preference_components.items()},
+        "preference_components": {
+            key: round(value, 4) for key, value in preference_components.items()
+        },
         "semantic_score": round(sem_score, 4),
         "constraint_penalty": round(constraint_penalty, 4),
         "final_score": round(final, 4),
@@ -1156,15 +1488,22 @@ def _hybrid_score(
     required_skills = _extract_job_required_skills(job_text)
     if not required_skills and isinstance(job_skills, list):
         required_skills = [
-            _normalize_text(skill.get("name") or skill.get("title") or skill.get("skill"))
-            if isinstance(skill, dict) else _normalize_text(skill)
+            _normalize_text(
+                skill.get("name") or skill.get("title") or skill.get("skill")
+            )
+            if isinstance(skill, dict)
+            else _normalize_text(skill)
             for skill in job_skills
         ]
     candidate_skills = signals.get("skills") or []
     components["missing_required_skills"] = [
-        skill for skill in required_skills if skill and not any(
+        skill
+        for skill in required_skills
+        if skill
+        and not any(
             canonical_skill_key(skill) == canonical_skill_key(candidate_skill)
-            for candidate_skill in candidate_skills if candidate_skill
+            for candidate_skill in candidate_skills
+            if candidate_skill
         )
     ]
     if incompatibilities:
@@ -1181,7 +1520,7 @@ def _hybrid_score(
 
 async def refresh_candidate_job_matches(
     candidate_id: str,
-    candidate: Dict[str, Any],
+    candidate: dict[str, Any],
     SessionLocal: async_sessionmaker,
 ) -> None:
     """
@@ -1189,7 +1528,12 @@ async def refresh_candidate_job_matches(
     and upsert into candidate_job_recommendations.
     """
     ready, readiness_reason = candidate_ready_for_matching(candidate)
-    logger.info("[matching] candidate=%s readiness=%s reason=%s", candidate_id, ready, readiness_reason)
+    logger.info(
+        "[matching] candidate=%s readiness=%s reason=%s",
+        candidate_id,
+        ready,
+        readiness_reason,
+    )
     if not ready:
         return
 
@@ -1200,32 +1544,46 @@ async def refresh_candidate_job_matches(
     candidate_country = candidate_location(candidate)["country_code"]
     candidate_text = build_candidate_text(candidate)
     if not candidate_text.strip():
-        logger.info("[matching] Candidate %s has no profile text — skipping", candidate_id)
+        logger.info(
+            "[matching] Candidate %s has no profile text — skipping", candidate_id
+        )
         return
 
     # Preserve the existing broad candidate-semantic retrieval.
     query_vector = generate_embedding(candidate_text)
-    job_scores = search_job_chunks(query_vector, limit=QDRANT_TOP_K, country_code=candidate_country or None)
-    logger.info("[matching] candidate=%s broad_qdrant_results=%d", candidate_id, len(job_scores))
+    job_scores = search_job_chunks(
+        query_vector, limit=QDRANT_TOP_K, country_code=candidate_country or None
+    )
+    logger.info(
+        "[matching] candidate=%s broad_qdrant_results=%d", candidate_id, len(job_scores)
+    )
 
     # An explicit preferred role receives an independent, intent-only path.
     # Current role, skills, and resume history are intentionally excluded so a
     # career transition cannot be redirected by past experience before ranking.
-    target_role_scores: List[Tuple[str, float]] = []
+    target_role_scores: list[tuple[str, float]] = []
     if signals["has_explicit_target_roles"]:
         target_role_query = _build_target_role_retrieval_text(signals["target_roles"])
         logger.info(
             "[matching] candidate=%s target-role retrieval query=%r normalized_preferred_roles=%r",
-            candidate_id, target_role_query, signals["target_roles"],
+            candidate_id,
+            target_role_query,
+            signals["target_roles"],
         )
         target_role_scores = search_job_chunks(
-            generate_embedding(target_role_query), limit=QDRANT_TOP_K, country_code=candidate_country or None
+            generate_embedding(target_role_query),
+            limit=QDRANT_TOP_K,
+            country_code=candidate_country or None,
         )
-        logger.info("[matching] candidate=%s target_role_qdrant_results=%d", candidate_id, len(target_role_scores))
+        logger.info(
+            "[matching] candidate=%s target_role_qdrant_results=%d",
+            candidate_id,
+            len(target_role_scores),
+        )
 
     # Merge both paths by ID and retain the strongest semantic score.  Hybrid
     # scoring itself remains exactly as it was.
-    combined_scores: Dict[str, float] = {}
+    combined_scores: dict[str, float] = {}
     for job_id, score in [*job_scores, *target_role_scores]:
         combined_scores[job_id] = max(combined_scores.get(job_id, float("-inf")), score)
     job_scores = sorted(combined_scores.items(), key=lambda item: item[1], reverse=True)
@@ -1235,7 +1593,11 @@ async def refresh_candidate_job_matches(
 
     semantic_map = {jid: score for jid, score in job_scores}
     candidate_job_ids = [jid for jid, _ in job_scores]
-    logger.info("[matching] candidate=%s unique Qdrant job IDs=%d", candidate_id, len(candidate_job_ids))
+    logger.info(
+        "[matching] candidate=%s unique Qdrant job IDs=%d",
+        candidate_id,
+        len(candidate_job_ids),
+    )
     candidate_years = _candidate_total_experience_years(candidate)
 
     # 2. Fetch job details for all candidates
@@ -1251,58 +1613,81 @@ async def refresh_candidate_job_matches(
                        , opportunity_type
                 FROM job_descriptions
                 WHERE id::text IN ({placeholders})
-                  AND {candidate_visible_where('job_descriptions')}
+                  AND {candidate_visible_where("job_descriptions")}
                   AND COALESCE(job_descriptions.opportunity_type, 'jobs') = :opportunity_type
             """),
             {**params, "opportunity_type": opportunity_type},
         )
-        job_details = {str(r[0]): {
-            "title": r[1] or "",
-            "description": r[2] or "",
-            # ATS normalizers may place experience and skills in either the
-            # legacy columns or their normalized counterparts.  Feed both to
-            # the existing text/evidence routines without changing storage.
-            "requirements": " ".join(str(value) for value in (r[3], r[9]) if value),
-            "skills": [*(r[4] or []), *(r[16] or [])] if isinstance(r[4], list) and isinstance(r[16], list) else (r[4] or r[16] or []),
-            "company_name": r[5] or "",
-            "department": r[6] or "",
-            "location": r[7] or "",
-            "employment_type": r[8] or "",
-            "experience_required": r[9] or "",
-            "salary_range": r[10] or "",
-            "city": r[11] or "", "state": r[12] or "", "country": r[13] or "",
-            "remote": r[14], "industry": r[15] or "", "skills_required": r[16] or [],
-            "structured_data": r[17] or {}, "remote_policy": r[18] or "",
-            # Legacy test/session adapters and pre-migration rows do not expose
-            # the new column; those are ordinary jobs by definition.
-            "opportunity_type": (r[19] if len(r) > 19 else None) or "jobs",
+        job_details = {
+            str(r[0]): {
+                "title": r[1] or "",
+                "description": r[2] or "",
+                # ATS normalizers may place experience and skills in either the
+                # legacy columns or their normalized counterparts.  Feed both to
+                # the existing text/evidence routines without changing storage.
+                "requirements": " ".join(str(value) for value in (r[3], r[9]) if value),
+                "skills": [*(r[4] or []), *(r[16] or [])]
+                if isinstance(r[4], list) and isinstance(r[16], list)
+                else (r[4] or r[16] or []),
+                "company_name": r[5] or "",
+                "department": r[6] or "",
+                "location": r[7] or "",
+                "employment_type": r[8] or "",
+                "experience_required": r[9] or "",
+                "salary_range": r[10] or "",
+                "city": r[11] or "",
+                "state": r[12] or "",
+                "country": r[13] or "",
+                "remote": r[14],
+                "industry": r[15] or "",
+                "skills_required": r[16] or [],
+                "structured_data": r[17] or {},
+                "remote_policy": r[18] or "",
+                # Legacy test/session adapters and pre-migration rows do not expose
+                # the new column; those are ordinary jobs by definition.
+                "opportunity_type": (r[19] if len(r) > 19 else None) or "jobs",
+            }
+            for r in rows.fetchall()
         }
-                       for r in rows.fetchall()}
 
     if not job_details:
         logger.info(
             "[matching] candidate=%s active DB overlap=0 discarded_missing_or_inactive=%d",
-            candidate_id, len(candidate_job_ids),
+            candidate_id,
+            len(candidate_job_ids),
         )
         return
     logger.info(
         "[matching] candidate=%s active DB overlap=%d discarded_missing_or_inactive=%d",
-        candidate_id, len(job_details), len(candidate_job_ids) - len(job_details),
+        candidate_id,
+        len(job_details),
+        len(candidate_job_ids) - len(job_details),
     )
-    logger.info("[matching] candidate=%s eligibility_input_jobs=%d", candidate_id, len(job_details))
+    logger.info(
+        "[matching] candidate=%s eligibility_input_jobs=%d",
+        candidate_id,
+        len(job_details),
+    )
 
     # 3. Compute candidate intelligence once (evidence quality + constraints)
     intelligence = _get_candidate_intelligence(candidate)
 
     # 4. Hybrid re-ranking
-    scored: List[Tuple[str, float, Dict]] = []
+    scored: list[tuple[str, float, dict]] = []
     rejected_experience = 0
     experience_ineligible_job_ids: set[str] = set()
     rejected_skills_role = 0
     rejected_preferences = 0
     for job_id, job_data in job_details.items():
-        job_text = _job_text(job_data["title"], job_data["description"], job_data["requirements"], job_data["skills"])
-        preference_eligible, ineligibility = _preference_eligibility(signals, job_data, candidate_years)
+        job_text = _job_text(
+            job_data["title"],
+            job_data["description"],
+            job_data["requirements"],
+            job_data["skills"],
+        )
+        preference_eligible, ineligibility = _preference_eligibility(
+            signals, job_data, candidate_years
+        )
         if not preference_eligible:
             if "experience_outside_required_range" in ineligibility:
                 rejected_experience += 1
@@ -1345,8 +1730,7 @@ async def refresh_candidate_job_matches(
     target_matches_available = False
     if signals["has_explicit_target_roles"]:
         intent_scored = [
-            item for item in scored
-            if item[2].get("target_role_score", 0.0) > 0.0
+            item for item in scored if item[2].get("target_role_score", 0.0) > 0.0
         ]
         if intent_scored:
             scored = intent_scored
@@ -1360,7 +1744,9 @@ async def refresh_candidate_job_matches(
     if target_matches_available:
         scored.sort(
             key=lambda item: (
-                _target_role_specificity(signals["target_roles"], job_details[item[0]]["title"]),
+                _target_role_specificity(
+                    signals["target_roles"], job_details[item[0]]["title"]
+                ),
                 item[2].get("target_role_score", 0.0),
                 item[1],
             ),
@@ -1372,7 +1758,12 @@ async def refresh_candidate_job_matches(
     logger.info(
         "[matching] candidate=%s passing_eligibility=%d rejected_experience=%d "
         "rejected_skills_or_role=%d rejected_explicit_preferences=%d final_recommendations=%d",
-        candidate_id, len(scored), rejected_experience, rejected_skills_role, rejected_preferences, len(ranked_jobs),
+        candidate_id,
+        len(scored),
+        rejected_experience,
+        rejected_skills_role,
+        rejected_preferences,
+        len(ranked_jobs),
     )
 
     # 5. Load existing recommendations to preserve tracked_at / hidden_at
@@ -1385,21 +1776,27 @@ async def refresh_candidate_job_matches(
             """),
             {"cid": candidate_id},
         )
-        existing = {str(r[0]): {"id": str(r[1]), "tracked_at": r[2], "hidden_at": r[3]}
-                    for r in existing_rows.fetchall()}
+        existing = {
+            str(r[0]): {"id": str(r[1]), "tracked_at": r[2], "hidden_at": r[3]}
+            for r in existing_rows.fetchall()
+        }
 
     # 6. Upsert recommendations
     import json as _json
+
     async with SessionLocal() as db:
         # Reconcile recommendations made from older or incomplete job data.
         # Only explicit experience failures are hidden here; jobs omitted by
         # ranking limits or other preference rules retain their history.
         for stale_job_id in experience_ineligible_job_ids:
-            await db.execute(text("""
+            await db.execute(
+                text("""
                 UPDATE candidate_job_recommendations
                 SET hidden_at = COALESCE(hidden_at, NOW()), generated_at = NOW()
                 WHERE candidate_id = :cid AND job_id = :jid
-            """), {"cid": candidate_id, "jid": stale_job_id})
+            """),
+                {"cid": candidate_id, "jid": stale_job_id},
+            )
         for rank, (job_id, score, components) in enumerate(ranked_jobs, start=1):
             ex = existing.get(job_id)
             match_reason = _json.dumps({"type": "hybrid_match", **components})
@@ -1413,8 +1810,12 @@ async def refresh_candidate_job_matches(
                             generated_at = now()
                         WHERE id = :rid
                     """),
-                    {"score": score, "rank": rank, "rid": ex["id"],
-                     "match_reason": match_reason},
+                    {
+                        "score": score,
+                        "rank": rank,
+                        "rid": ex["id"],
+                        "match_reason": match_reason,
+                    },
                 )
             else:
                 await db.execute(
@@ -1439,14 +1840,15 @@ async def refresh_candidate_job_matches(
 
     logger.info(
         "[matching] Upserted %d job recommendations for candidate %s",
-        len(ranked_jobs), candidate_id,
+        len(ranked_jobs),
+        candidate_id,
     )
 
 
 async def refresh_candidate_job_match(
     candidate_id: str,
     recommendation_id: str,
-    candidate: Dict[str, Any],
+    candidate: dict[str, Any],
     SessionLocal: async_sessionmaker,
 ) -> None:
     """Re-score one existing recommendation without retrieval or insertion.
@@ -1456,8 +1858,10 @@ async def refresh_candidate_job_match(
     subscription behaviour, recommendation selection, or Qdrant retrieval.
     """
     import json as _json
+
     async with SessionLocal() as db:
-        row = await db.execute(text("""
+        row = await db.execute(
+            text("""
             SELECT cjr.match_reason, jd.title, jd.description, jd.requirements,
                    jd.skills, jd.skills_required, jd.experience_required,
                    jd.location, jd.employment_type, jd.remote, jd.remote_policy,
@@ -1467,7 +1871,9 @@ async def refresh_candidate_job_match(
             JOIN job_descriptions jd ON jd.id = cjr.job_id
             WHERE cjr.id = :rid AND cjr.candidate_id = :cid
             LIMIT 1
-        """), {"rid": recommendation_id, "cid": candidate_id})
+        """),
+            {"rid": recommendation_id, "cid": candidate_id},
+        )
         selected = row.mappings().fetchone()
     if not selected:
         return
@@ -1477,19 +1883,31 @@ async def refresh_candidate_job_match(
             reason = _json.loads(reason)
         except Exception:
             reason = {}
-    semantic_score = float(reason.get("semantic_score", 0.0)) if isinstance(reason, dict) else 0.0
+    semantic_score = (
+        float(reason.get("semantic_score", 0.0)) if isinstance(reason, dict) else 0.0
+    )
     signals = _build_candidate_signals(candidate)
     # Use the same normalized job inputs as the full recommendation refresh.
     # Omitting metadata here reset preference/experience components whenever a
     # resume was saved, which could make a genuinely added required skill look
     # like it lowered the match.
     job_requirements = " ".join(
-        str(value) for value in (selected["requirements"], selected["experience_required"])
+        str(value)
+        for value in (selected["requirements"], selected["experience_required"])
         if value
     )
     legacy_skills = selected["skills"] if isinstance(selected["skills"], list) else []
-    required_skills = selected["skills_required"] if isinstance(selected["skills_required"], list) else []
-    job_skills = [*legacy_skills, *required_skills] or selected["skills_required"] or selected["skills"] or []
+    required_skills = (
+        selected["skills_required"]
+        if isinstance(selected["skills_required"], list)
+        else []
+    )
+    job_skills = (
+        [*legacy_skills, *required_skills]
+        or selected["skills_required"]
+        or selected["skills"]
+        or []
+    )
     job_metadata = {
         "title": selected["title"] or "",
         "description": selected["description"] or "",
@@ -1510,32 +1928,51 @@ async def refresh_candidate_job_match(
     }
     experience = experience_eligibility(
         _candidate_total_experience_years(candidate),
-        _job_text(selected["title"] or "", selected["description"] or "", job_requirements, job_skills),
+        _job_text(
+            selected["title"] or "",
+            selected["description"] or "",
+            job_requirements,
+            job_skills,
+        ),
         selected["experience_required"],
     )
     if not experience["eligible"]:
         async with SessionLocal() as db:
-            await db.execute(text("""
+            await db.execute(
+                text("""
                 UPDATE candidate_job_recommendations
                 SET hidden_at = COALESCE(hidden_at, NOW()), generated_at = NOW()
                 WHERE id = :rid AND candidate_id = :cid
-            """), {"rid": recommendation_id, "cid": candidate_id})
+            """),
+                {"rid": recommendation_id, "cid": candidate_id},
+            )
             await db.commit()
         return
     score, components = _hybrid_score(
-        signals, selected["title"] or "", selected["description"] or "",
-        job_requirements, job_skills, semantic_score,
+        signals,
+        selected["title"] or "",
+        selected["description"] or "",
+        job_requirements,
+        job_skills,
+        semantic_score,
         intelligence=_get_candidate_intelligence(candidate),
         job_metadata=job_metadata,
         candidate_years=_candidate_total_experience_years(candidate),
     )
     async with SessionLocal() as db:
-        await db.execute(text("""
+        await db.execute(
+            text("""
             UPDATE candidate_job_recommendations
             SET match_score = :score,
                 match_reason = CAST(:reason AS jsonb),
                 generated_at = now()
             WHERE id = :rid AND candidate_id = :cid
-        """), {"score": score, "reason": _json.dumps({"type": "hybrid_match", **components}),
-                  "rid": recommendation_id, "cid": candidate_id})
+        """),
+            {
+                "score": score,
+                "reason": _json.dumps({"type": "hybrid_match", **components}),
+                "rid": recommendation_id,
+                "cid": candidate_id,
+            },
+        )
         await db.commit()

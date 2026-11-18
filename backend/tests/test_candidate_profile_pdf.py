@@ -17,7 +17,9 @@ def _extract_pdf_text(pdf_bytes: bytes) -> str:
     return re.sub(r"\s+", " ", text).strip()
 
 
-def test_candidate_profile_download_renders_clean_pdf_without_candidate_id_or_extra_fields(monkeypatch):
+def test_candidate_profile_download_renders_clean_pdf_without_candidate_id_or_extra_fields(
+    monkeypatch,
+):
     async def fake_get_candidate_profile_payload(candidate_id: str):
         return {
             "candidate_id": candidate_id,
@@ -63,14 +65,23 @@ def test_candidate_profile_download_renders_clean_pdf_without_candidate_id_or_ex
             },
         }
 
-    monkeypatch.setattr(server, "_get_candidate_profile_payload", fake_get_candidate_profile_payload)
+    monkeypatch.setattr(
+        server, "_get_candidate_profile_payload", fake_get_candidate_profile_payload
+    )
     monkeypatch.setattr(server, "_get_candidate_row", fake_get_candidate_row)
 
-    response = asyncio.run(server.download_candidate_profile("cand-123", authorization=f"Bearer {server._issue_candidate_session_token('cand-123')}"))
+    response = asyncio.run(
+        server.download_candidate_profile(
+            "cand-123",
+            authorization=f"Bearer {server._issue_candidate_session_token('cand-123')}",
+        )
+    )
     text = _extract_pdf_text(response.body)
 
     assert response.headers["content-type"] == "application/pdf"
-    assert response.headers["content-disposition"].endswith('filename="Jane_Doe_profile.pdf"')
+    assert response.headers["content-disposition"].endswith(
+        'filename="Jane_Doe_profile.pdf"'
+    )
     assert response.body.startswith(b"%PDF")
 
     assert "Jane Doe" in text
@@ -136,10 +147,17 @@ def test_candidate_profile_download_paginates_large_profiles(monkeypatch):
     async def fake_get_candidate_row(candidate_id: str):
         return {"id": candidate_id, "raw_data": {}}
 
-    monkeypatch.setattr(server, "_get_candidate_profile_payload", fake_get_candidate_profile_payload)
+    monkeypatch.setattr(
+        server, "_get_candidate_profile_payload", fake_get_candidate_profile_payload
+    )
     monkeypatch.setattr(server, "_get_candidate_row", fake_get_candidate_row)
 
-    response = asyncio.run(server.download_candidate_profile("cand-456", authorization=f"Bearer {server._issue_candidate_session_token('cand-456')}"))
+    response = asyncio.run(
+        server.download_candidate_profile(
+            "cand-456",
+            authorization=f"Bearer {server._issue_candidate_session_token('cand-456')}",
+        )
+    )
     reader = PdfReader(io.BytesIO(response.body))
     text = _extract_pdf_text(response.body)
 
@@ -184,10 +202,17 @@ def test_candidate_profile_download_excludes_project_features_from_skills(monkey
     async def fake_get_candidate_row(candidate_id: str):
         return {"id": candidate_id, "raw_data": {}}
 
-    monkeypatch.setattr(server, "_get_candidate_profile_payload", fake_get_candidate_profile_payload)
+    monkeypatch.setattr(
+        server, "_get_candidate_profile_payload", fake_get_candidate_profile_payload
+    )
     monkeypatch.setattr(server, "_get_candidate_row", fake_get_candidate_row)
 
-    response = asyncio.run(server.download_candidate_profile("cand-789", authorization=f"Bearer {server._issue_candidate_session_token('cand-789')}"))
+    response = asyncio.run(
+        server.download_candidate_profile(
+            "cand-789",
+            authorization=f"Bearer {server._issue_candidate_session_token('cand-789')}",
+        )
+    )
     text = _extract_pdf_text(response.body)
     text_lower = text.lower()
 
@@ -196,7 +221,9 @@ def test_candidate_profile_download_excludes_project_features_from_skills(monkey
     assert "python" in text_lower
 
     # Skills section: split on "technical skills" heading, end before "professional experience"
-    skills_section = text_lower.split("technical skills", 1)[1].split("professional experience", 1)[0]
+    skills_section = text_lower.split("technical skills", 1)[1].split(
+        "professional experience", 1
+    )[0]
     assert "voice intake" not in skills_section
     assert "resume processing" not in skills_section
     assert "python" in skills_section
@@ -231,10 +258,17 @@ def test_candidate_profile_download_normalizes_unicode_dashes(monkeypatch):
     async def fake_get_candidate_row(candidate_id: str):
         return {"id": candidate_id, "raw_data": {}}
 
-    monkeypatch.setattr(server, "_get_candidate_profile_payload", fake_get_candidate_profile_payload)
+    monkeypatch.setattr(
+        server, "_get_candidate_profile_payload", fake_get_candidate_profile_payload
+    )
     monkeypatch.setattr(server, "_get_candidate_row", fake_get_candidate_row)
 
-    response = asyncio.run(server.download_candidate_profile("cand-321", authorization=f"Bearer {server._issue_candidate_session_token('cand-321')}"))
+    response = asyncio.run(
+        server.download_candidate_profile(
+            "cand-321",
+            authorization=f"Bearer {server._issue_candidate_session_token('cand-321')}",
+        )
+    )
     text = _extract_pdf_text(response.body).lower()
 
     assert "third-party" in text

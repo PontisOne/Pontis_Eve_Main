@@ -2,6 +2,7 @@
 Integration test: upsert_ats_job() → verify PostgreSQL insert → verify Qdrant vector → cleanup.
 Run from backend/: python test_automatic_job_embedding.py
 """
+
 import asyncio
 import sys
 import uuid
@@ -14,12 +15,12 @@ load_dotenv(Path(__file__).parent / ".env")
 sys.path.insert(0, str(Path(__file__).parent))
 sys.path.insert(0, str(Path(__file__).parent / "app" / "job_ingestion"))
 
-from sqlalchemy import text
-from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker
+from sqlalchemy import text  # noqa: E402
+from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine  # noqa: E402
 
-from server import DATABASE_URL
-from app.job_ingestion.job_ingestion_service import upsert_ats_job
-from app.job_ingestion.qdrant_service import COLLECTION_NAME, _client
+from app.job_ingestion.job_ingestion_service import upsert_ats_job  # noqa: E402
+from app.job_ingestion.qdrant_service import COLLECTION_NAME, _client  # noqa: E402
+from server import DATABASE_URL  # noqa: E402
 
 engine = create_async_engine(DATABASE_URL, pool_pre_ping=True)
 SessionLocal = async_sessionmaker(bind=engine, expire_on_commit=False)
@@ -46,7 +47,9 @@ async def run_test():
 
         # --- Verify PostgreSQL row ---
         result = await db.execute(
-            text("SELECT id, title, ats_job_id, is_active FROM job_descriptions WHERE id = :id"),
+            text(
+                "SELECT id, title, ats_job_id, is_active FROM job_descriptions WHERE id = :id"
+            ),
             {"id": job_id},
         )
         row = result.mappings().first()
@@ -68,12 +71,16 @@ async def run_test():
         assert results, f"Qdrant point {point_id} not found in '{COLLECTION_NAME}'"
         point = results[0]
 
-        assert len(point.vector) == 384, f"Expected vector size 384, got {len(point.vector)}"
+        assert len(point.vector) == 384, (
+            f"Expected vector size 384, got {len(point.vector)}"
+        )
         assert point.payload.get("embedding_version") == "v2_structured", (
             f"Expected embedding_version='v2_structured', got {point.payload.get('embedding_version')!r}"
         )
         assert point.payload.get("job_id") == job_id
-        print(f"Qdrant assertions passed ✓  (vector_size={len(point.vector)}, embedding_version={point.payload['embedding_version']})")
+        print(
+            f"Qdrant assertions passed ✓  (vector_size={len(point.vector)}, embedding_version={point.payload['embedding_version']})"
+        )
 
         # --- Cleanup: PostgreSQL ---
         await db.execute(

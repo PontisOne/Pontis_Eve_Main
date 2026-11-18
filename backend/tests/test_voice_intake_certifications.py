@@ -1,4 +1,4 @@
-﻿"""
+"""
 Regression tests for Voice Intake certification extraction fix.
 
 Covers:
@@ -7,33 +7,44 @@ Covers:
 3. Existing certifications are preserved when new ones are added
 4. A Voice Intake without certifications behaves exactly as before
 """
+
 import asyncio
 import json
-import sys
 import os
-
-import pytest
+import sys
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 import server
 
 
 def test_authoritative_certification_answer_cannot_become_work_experience():
-    topic = server._authoritative_chat_topic([
-        {"role": "assistant", "content": "Do you have any professional certifications?"},
-        {"role": "user", "content": "AWS Solutions Architect"},
-    ])
+    topic = server._authoritative_chat_topic(
+        [
+            {
+                "role": "assistant",
+                "content": "Do you have any professional certifications?",
+            },
+            {"role": "user", "content": "AWS Solutions Architect"},
+        ]
+    )
     assert topic == "certifications"
-    assert server._route_authoritative_chat_answer(topic, "AWS Solutions Architect") == {
+    assert server._route_authoritative_chat_answer(
+        topic, "AWS Solutions Architect"
+    ) == {
         "certifications": ["AWS Solutions Architect"],
     }
 
 
 def test_authoritative_relocation_answer_is_boolean_only():
-    topic = server._authoritative_chat_topic([
-        {"role": "assistant", "content": "Are you open to relocating for the right opportunity?"},
-        {"role": "user", "content": "Yes, I am."},
-    ])
+    topic = server._authoritative_chat_topic(
+        [
+            {
+                "role": "assistant",
+                "content": "Are you open to relocating for the right opportunity?",
+            },
+            {"role": "user", "content": "Yes, I am."},
+        ]
+    )
     assert topic == "willing_to_relocate"
     assert server._route_authoritative_chat_answer(topic, "Yes, I am.") == {
         "willing_to_relocate": True,
@@ -43,6 +54,7 @@ def test_authoritative_relocation_answer_is_boolean_only():
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
 
 def _make_candidate(raw_data=None, parsed_resume_json=None):
     return {
@@ -59,7 +71,9 @@ def _make_candidate(raw_data=None, parsed_resume_json=None):
         "work_experience": [],
         "education": [],
         "raw_data": raw_data or {},
-        "parsed_resume_json": json.dumps(parsed_resume_json) if parsed_resume_json else None,
+        "parsed_resume_json": json.dumps(parsed_resume_json)
+        if parsed_resume_json
+        else None,
     }
 
 
@@ -86,13 +100,23 @@ def _make_fake_session(state):
     class FakeResult:
         def __init__(self, rows=None):
             self._rows = rows or []
-        def mappings(self): return self
-        def fetchone(self): return self._rows[0] if self._rows else None
-        def scalar(self): return None
+
+        def mappings(self):
+            return self
+
+        def fetchone(self):
+            return self._rows[0] if self._rows else None
+
+        def scalar(self):
+            return None
 
     class FakeSession:
-        async def __aenter__(self): return self
-        async def __aexit__(self, *a): return False
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *a):
+            return False
+
         async def execute(self_inner, statement, params=None):
             sql = str(statement)
             params = params or {}
@@ -107,7 +131,9 @@ def _make_fake_session(state):
             if "UPDATE candidate_preferences SET" in sql:
                 return FakeResult()
             return FakeResult()
-        async def commit(self): return None
+
+        async def commit(self):
+            return None
 
     return FakeSession
 
@@ -116,12 +142,14 @@ def _make_fake_session(state):
 # 1. _merge_voice_into_profile
 # ---------------------------------------------------------------------------
 
-class TestMergeVoiceIntoCertifications:
 
+class TestMergeVoiceIntoCertifications:
     def test_single_cert_from_voice_appears_in_profile(self):
         """Candidate mentions one certification -> it appears in merged profile."""
         candidate = _make_candidate()
-        voice = _voice_data(certifications=["AWS Certified Solutions Architect - Associate"])
+        voice = _voice_data(
+            certifications=["AWS Certified Solutions Architect - Associate"]
+        )
 
         merged = server._merge_voice_into_profile(candidate, voice)
 
@@ -130,11 +158,13 @@ class TestMergeVoiceIntoCertifications:
     def test_multiple_certs_from_voice_all_saved(self):
         """Candidate mentions multiple certifications -> all are saved."""
         candidate = _make_candidate()
-        voice = _voice_data(certifications=[
-            "AWS Certified Solutions Architect - Associate",
-            "Google Cloud Professional Data Engineer",
-            "PMP",
-        ])
+        voice = _voice_data(
+            certifications=[
+                "AWS Certified Solutions Architect - Associate",
+                "Google Cloud Professional Data Engineer",
+                "PMP",
+            ]
+        )
 
         merged = server._merge_voice_into_profile(candidate, voice)
 
@@ -148,7 +178,9 @@ class TestMergeVoiceIntoCertifications:
         candidate = _make_candidate(
             parsed_resume_json={"certifications": ["Certified Scrum Master"]}
         )
-        voice = _voice_data(certifications=["AWS Certified Solutions Architect - Associate"])
+        voice = _voice_data(
+            certifications=["AWS Certified Solutions Architect - Associate"]
+        )
 
         merged = server._merge_voice_into_profile(candidate, voice)
 
@@ -158,7 +190,9 @@ class TestMergeVoiceIntoCertifications:
 
     def test_existing_raw_data_certs_preserved_when_voice_adds_new(self):
         """Certifications already in raw_data are preserved when voice adds more."""
-        candidate = _make_candidate(raw_data={"certifications": ["Google Cloud Associate"]})
+        candidate = _make_candidate(
+            raw_data={"certifications": ["Google Cloud Associate"]}
+        )
         voice = _voice_data(certifications=["PMP"])
 
         merged = server._merge_voice_into_profile(candidate, voice)
@@ -170,9 +204,13 @@ class TestMergeVoiceIntoCertifications:
     def test_no_duplicate_certs_when_voice_repeats_existing(self):
         """Certifications mentioned in voice that already exist are not duplicated."""
         candidate = _make_candidate(
-            raw_data={"certifications": ["AWS Certified Solutions Architect - Associate"]}
+            raw_data={
+                "certifications": ["AWS Certified Solutions Architect - Associate"]
+            }
         )
-        voice = _voice_data(certifications=["aws certified solutions architect associate"])
+        voice = _voice_data(
+            certifications=["aws certified solutions architect associate"]
+        )
 
         merged = server._merge_voice_into_profile(candidate, voice)
 
@@ -221,20 +259,24 @@ class TestMergeVoiceIntoCertifications:
 # 2. _persist_voice_intake_profile_state (mocked DB)
 # ---------------------------------------------------------------------------
 
-class TestPersistVoiceIntakeCertifications:
 
+class TestPersistVoiceIntakeCertifications:
     def test_single_cert_persisted_to_raw_data(self, monkeypatch):
         """One certification from voice is written to raw_data.certifications."""
         state = {"raw_data": {}}
         monkeypatch.setattr(server, "SessionLocal", _make_fake_session(state))
 
         candidate = _make_candidate()
-        voice = _voice_data(certifications=["AWS Certified Solutions Architect - Associate"])
+        voice = _voice_data(
+            certifications=["AWS Certified Solutions Architect - Associate"]
+        )
         vi_state = {"status": "in_progress", "progress": 1, "completed_turns": []}
 
-        asyncio.run(server._persist_voice_intake_profile_state(
-            "cand-cert-test", candidate, voice, vi_state
-        ))
+        asyncio.run(
+            server._persist_voice_intake_profile_state(
+                "cand-cert-test", candidate, voice, vi_state
+            )
+        )
 
         assert "AWS Certified Solutions Architect - Associate" in (
             state["raw_data"].get("certifications") or []
@@ -246,12 +288,16 @@ class TestPersistVoiceIntakeCertifications:
         monkeypatch.setattr(server, "SessionLocal", _make_fake_session(state))
 
         candidate = _make_candidate()
-        voice = _voice_data(certifications=["PMP", "AWS Certified Developer", "Google Cloud Associate"])
+        voice = _voice_data(
+            certifications=["PMP", "AWS Certified Developer", "Google Cloud Associate"]
+        )
         vi_state = {"status": "in_progress", "progress": 1, "completed_turns": []}
 
-        asyncio.run(server._persist_voice_intake_profile_state(
-            "cand-cert-test", candidate, voice, vi_state
-        ))
+        asyncio.run(
+            server._persist_voice_intake_profile_state(
+                "cand-cert-test", candidate, voice, vi_state
+            )
+        )
 
         saved = state["raw_data"].get("certifications") or []
         assert "PMP" in saved
@@ -267,12 +313,16 @@ class TestPersistVoiceIntakeCertifications:
             raw_data={"certifications": ["Certified Scrum Master"]},
             parsed_resume_json={"certifications": ["PMP"]},
         )
-        voice = _voice_data(certifications=["AWS Certified Solutions Architect - Associate"])
+        voice = _voice_data(
+            certifications=["AWS Certified Solutions Architect - Associate"]
+        )
         vi_state = {"status": "in_progress", "progress": 1, "completed_turns": []}
 
-        asyncio.run(server._persist_voice_intake_profile_state(
-            "cand-cert-test", candidate, voice, vi_state
-        ))
+        asyncio.run(
+            server._persist_voice_intake_profile_state(
+                "cand-cert-test", candidate, voice, vi_state
+            )
+        )
 
         saved = state["raw_data"].get("certifications") or []
         assert "Certified Scrum Master" in saved
@@ -284,15 +334,21 @@ class TestPersistVoiceIntakeCertifications:
         state = {"raw_data": {}}
         monkeypatch.setattr(server, "SessionLocal", _make_fake_session(state))
 
-        candidate = _make_candidate(raw_data={"certifications": ["Google Cloud Professional"]})
+        candidate = _make_candidate(
+            raw_data={"certifications": ["Google Cloud Professional"]}
+        )
         voice = _voice_data(certifications=[])
         vi_state = {"status": "in_progress", "progress": 1, "completed_turns": []}
 
-        asyncio.run(server._persist_voice_intake_profile_state(
-            "cand-cert-test", candidate, voice, vi_state
-        ))
+        asyncio.run(
+            server._persist_voice_intake_profile_state(
+                "cand-cert-test", candidate, voice, vi_state
+            )
+        )
 
-        assert "Google Cloud Professional" in (state["raw_data"].get("certifications") or [])
+        assert "Google Cloud Professional" in (
+            state["raw_data"].get("certifications") or []
+        )
 
     def test_voice_intake_state_written_alongside_certifications(self, monkeypatch):
         """The voice_intake state is written to raw_data alongside certifications."""
@@ -303,9 +359,11 @@ class TestPersistVoiceIntakeCertifications:
         voice = _voice_data(certifications=["PMP"])
         vi_state = {"status": "completed", "progress": 7, "completed_turns": []}
 
-        asyncio.run(server._persist_voice_intake_profile_state(
-            "cand-cert-test", candidate, voice, vi_state
-        ))
+        asyncio.run(
+            server._persist_voice_intake_profile_state(
+                "cand-cert-test", candidate, voice, vi_state
+            )
+        )
 
         assert state["raw_data"].get("voice_intake") == vi_state
         assert "PMP" in (state["raw_data"].get("certifications") or [])
@@ -315,8 +373,8 @@ class TestPersistVoiceIntakeCertifications:
 # 3. _normalize_for_frontend exposes certifications to Dashboard
 # ---------------------------------------------------------------------------
 
-class TestNormalizeForFrontendCertifications:
 
+class TestNormalizeForFrontendCertifications:
     def _candidate(self, certs):
         return {
             "id": "cand-fe",
@@ -340,12 +398,16 @@ class TestNormalizeForFrontendCertifications:
         profile = server._normalize_for_frontend(
             self._candidate(["AWS Certified Solutions Architect - Associate"])
         )
-        assert "AWS Certified Solutions Architect - Associate" in (profile.get("certifications") or [])
+        assert "AWS Certified Solutions Architect - Associate" in (
+            profile.get("certifications") or []
+        )
 
     def test_multiple_certs_all_appear_in_frontend_profile(self):
         """_normalize_for_frontend exposes all certifications."""
         profile = server._normalize_for_frontend(
-            self._candidate(["PMP", "AWS Certified Developer", "Google Cloud Associate"])
+            self._candidate(
+                ["PMP", "AWS Certified Developer", "Google Cloud Associate"]
+            )
         )
         certs = profile.get("certifications") or []
         assert "PMP" in certs
@@ -362,8 +424,8 @@ class TestNormalizeForFrontendCertifications:
 # 4. VOICE_EXTRACT_SYSTEM prompt contains certification instruction
 # ---------------------------------------------------------------------------
 
-class TestVoiceExtractSystemPrompt:
 
+class TestVoiceExtractSystemPrompt:
     def test_prompt_contains_certifications_field(self):
         """VOICE_EXTRACT_SYSTEM schema must include the certifications field."""
         assert '"certifications"' in server.VOICE_EXTRACT_SYSTEM
@@ -375,5 +437,7 @@ class TestVoiceExtractSystemPrompt:
 
     def test_prompt_instructs_not_to_omit_incidental_mentions(self):
         """The prompt must tell the LLM not to omit certifications mentioned in passing."""
-        assert "mentioned in passing" in server.VOICE_EXTRACT_SYSTEM or \
-               "incidentally" in server.VOICE_EXTRACT_SYSTEM
+        assert (
+            "mentioned in passing" in server.VOICE_EXTRACT_SYSTEM
+            or "incidentally" in server.VOICE_EXTRACT_SYSTEM
+        )

@@ -1,10 +1,12 @@
 import os
 import uuid
-from qdrant_client import QdrantClient
-from qdrant_client.models import Distance, VectorParams, PointStruct
+
 from dotenv import load_dotenv
+from qdrant_client import QdrantClient
+from qdrant_client.models import Distance, PointStruct, VectorParams
+
 from location_matching import country_code
-from skill_normalization import merge_skills, canonical_skill
+from skill_normalization import canonical_skill, merge_skills
 
 load_dotenv()
 
@@ -35,7 +37,11 @@ def _point_id(job_id: str) -> int:
 def delete_job_embedding(job_id: str) -> bool:
     """Delete exactly this job's deterministic point, never a broad filter."""
     from qdrant_client.models import PointIdsList
-    _client.delete(collection_name=COLLECTION_NAME, points_selector=PointIdsList(points=[_point_id(job_id)]))
+
+    _client.delete(
+        collection_name=COLLECTION_NAME,
+        points_selector=PointIdsList(points=[_point_id(job_id)]),
+    )
     return True
 
 
@@ -49,17 +55,20 @@ def _existing_payload(job_id: str) -> dict | None:
     return dict(points[0].payload or {}) if points else None
 
 
-def upsert_job_embedding(job_id: str, embedding: list[float], job: dict, *, reindex: bool = False) -> bool:
+def upsert_job_embedding(
+    job_id: str, embedding: list[float], job: dict, *, reindex: bool = False
+) -> bool:
     """Upsert a stable job point, requiring explicit replacement of incompatible vectors."""
     if len(embedding) != VECTOR_SIZE:
-        raise ValueError(f"Expected {VECTOR_SIZE}-dimensional job embedding, got {len(embedding)}")
+        raise ValueError(
+            f"Expected {VECTOR_SIZE}-dimensional job embedding, got {len(embedding)}"
+        )
     existing = _existing_payload(job_id)
     if existing:
         existing_version = existing.get("embedding_version")
         existing_model = existing.get("embedding_model")
-        incompatible = (
-            (existing_version and existing_version != EMBEDDING_VERSION)
-            or (existing_model and existing_model != EMBEDDING_MODEL_NAME)
+        incompatible = (existing_version and existing_version != EMBEDDING_VERSION) or (
+            existing_model and existing_model != EMBEDDING_MODEL_NAME
         )
         if incompatible and not reindex:
             raise ValueError(
@@ -87,8 +96,15 @@ def upsert_job_embedding(job_id: str, embedding: list[float], job: dict, *, rein
                     "state": job.get("state"),
                     "location": job.get("location"),
                     "remote": job.get("remote"),
-                    "skills": merge_skills(job.get("skills_required"), job.get("skills")),
-                    "canonical_skills": [canonical_skill(value) for value in merge_skills(job.get("skills_required"), job.get("skills"))],
+                    "skills": merge_skills(
+                        job.get("skills_required"), job.get("skills")
+                    ),
+                    "canonical_skills": [
+                        canonical_skill(value)
+                        for value in merge_skills(
+                            job.get("skills_required"), job.get("skills")
+                        )
+                    ],
                     "embedding_version": EMBEDDING_VERSION,
                     "embedding_model": EMBEDDING_MODEL_NAME,
                 },

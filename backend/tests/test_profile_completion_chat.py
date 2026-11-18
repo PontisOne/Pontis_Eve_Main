@@ -6,19 +6,19 @@ Three scenarios:
   2. Profile reaching 75%+ — guidance says stop asking; no more profile questions.
   3. Profile already at 75%+ — guidance says stop asking from the start.
 """
+
 import os
 import sys
-import json
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 import server
 from profile_strength_service import calculate_profile_strength_v2
 
-
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
 
 def _base_candidate():
     return {
@@ -42,62 +42,77 @@ def _base_candidate():
 def _strong_candidate():
     """Candidate whose profile scores >= 75%."""
     c = _base_candidate()
-    c.update({
-        "name": "Strong Dev",
-        "email": "strong@example.com",
-        "location": "Remote",
-        "current_role": "Senior Backend Engineer",
-        "experience_years": 7,
-        "skills": ["Python", "FastAPI", "PostgreSQL", "Docker", "AWS"],
-        "work_experience": [
-            {
-                "title": "Lead Engineer",
-                "company": "Acme",
-                "description": "Led platform work",
-                "start_date": "2018-01-01",
-                "end_date": "2023-01-01",
-            }
-        ],
-        "education": [{"degree": "B.Tech", "institution": "University"}],
-        "interview_technical_score": 9.0,
-        "interview_communication_score": 8.5,
-        "raw_data": {
-            "preferred_roles": ["Senior Backend Engineer"],
-            "availability": "30 days",
-            "location_preferences": ["Remote"],
-            "work_type_preference": "remote",
-            "projects": ["AI platform", "REST API service"],
-            "voice_intake": {
-                "status": "completed",
-                "completed_turns": [
-                    {"question": "What roles?", "answer": "Senior backend engineering roles."},
-                    {"question": "Skills?", "answer": "Python, FastAPI, PostgreSQL."},
-                    {"question": "Availability?", "answer": "30 days notice."},
-                ],
-                "known_topics": [
-                    "background_experience", "skills_technologies", "target_role",
-                    "responsibilities_projects", "availability_location", "career_preferences",
-                ],
+    c.update(
+        {
+            "name": "Strong Dev",
+            "email": "strong@example.com",
+            "location": "Remote",
+            "current_role": "Senior Backend Engineer",
+            "experience_years": 7,
+            "skills": ["Python", "FastAPI", "PostgreSQL", "Docker", "AWS"],
+            "work_experience": [
+                {
+                    "title": "Lead Engineer",
+                    "company": "Acme",
+                    "description": "Led platform work",
+                    "start_date": "2018-01-01",
+                    "end_date": "2023-01-01",
+                }
+            ],
+            "education": [{"degree": "B.Tech", "institution": "University"}],
+            "interview_technical_score": 9.0,
+            "interview_communication_score": 8.5,
+            "raw_data": {
+                "preferred_roles": ["Senior Backend Engineer"],
+                "availability": "30 days",
+                "location_preferences": ["Remote"],
+                "work_type_preference": "remote",
+                "projects": ["AI platform", "REST API service"],
+                "voice_intake": {
+                    "status": "completed",
+                    "completed_turns": [
+                        {
+                            "question": "What roles?",
+                            "answer": "Senior backend engineering roles.",
+                        },
+                        {
+                            "question": "Skills?",
+                            "answer": "Python, FastAPI, PostgreSQL.",
+                        },
+                        {"question": "Availability?", "answer": "30 days notice."},
+                    ],
+                    "known_topics": [
+                        "background_experience",
+                        "skills_technologies",
+                        "target_role",
+                        "responsibilities_projects",
+                        "availability_location",
+                        "career_preferences",
+                    ],
+                },
             },
-        },
-    })
+        }
+    )
     return c
 
 
 def _weak_candidate():
     """Candidate whose profile scores well below 75%."""
     c = _base_candidate()
-    c.update({
-        "name": "Weak Candidate",
-        "email": "weak@example.com",
-        # No role, no skills, no experience — very incomplete
-    })
+    c.update(
+        {
+            "name": "Weak Candidate",
+            "email": "weak@example.com",
+            # No role, no skills, no experience — very incomplete
+        }
+    )
     return c
 
 
 # ---------------------------------------------------------------------------
 # Scenario 1: Profile below 75% — guidance includes a next question
 # ---------------------------------------------------------------------------
+
 
 class TestProfileBelow75:
     def test_guidance_mentions_below_75(self):
@@ -138,6 +153,7 @@ class TestProfileBelow75:
 # Scenario 2: Profile reaching 75%+ — guidance says stop asking
 # ---------------------------------------------------------------------------
 
+
 class TestProfileReaching75:
     def test_strong_candidate_scores_at_least_75(self):
         c = _strong_candidate()
@@ -162,40 +178,49 @@ class TestProfileReaching75:
         assert "below 90%" in before
 
         # Simulate profile update: add the fields that push score to 75%+
-        c.update({
-            "current_role": "Senior Backend Engineer",
-            "experience_years": 7,
-            "skills": ["Python", "FastAPI", "PostgreSQL", "Docker", "AWS"],
-            "work_experience": [
-                {
-                    "title": "Lead Engineer",
-                    "company": "Acme",
-                    "description": "Led platform work",
-                    "start_date": "2018-01-01",
-                    "end_date": "2023-01-01",
-                }
-            ],
-            "education": [{"degree": "B.Tech", "institution": "University"}],
-            "interview_technical_score": 9.0,
-            "interview_communication_score": 8.5,
-            "raw_data": {
-                "preferred_roles": ["Senior Backend Engineer"],
-                "availability": "30 days",
-                "location_preferences": ["Remote"],
-                "work_type_preference": "remote",
-                "projects": ["AI platform"],
-                "voice_intake": {
-                    "status": "completed",
-                    "completed_turns": [
-                        {"question": "What roles?", "answer": "Senior backend engineering roles."},
-                    ],
-                    "known_topics": [
-                        "background_experience", "skills_technologies", "target_role",
-                        "responsibilities_projects", "availability_location", "career_preferences",
-                    ],
+        c.update(
+            {
+                "current_role": "Senior Backend Engineer",
+                "experience_years": 7,
+                "skills": ["Python", "FastAPI", "PostgreSQL", "Docker", "AWS"],
+                "work_experience": [
+                    {
+                        "title": "Lead Engineer",
+                        "company": "Acme",
+                        "description": "Led platform work",
+                        "start_date": "2018-01-01",
+                        "end_date": "2023-01-01",
+                    }
+                ],
+                "education": [{"degree": "B.Tech", "institution": "University"}],
+                "interview_technical_score": 9.0,
+                "interview_communication_score": 8.5,
+                "raw_data": {
+                    "preferred_roles": ["Senior Backend Engineer"],
+                    "availability": "30 days",
+                    "location_preferences": ["Remote"],
+                    "work_type_preference": "remote",
+                    "projects": ["AI platform"],
+                    "voice_intake": {
+                        "status": "completed",
+                        "completed_turns": [
+                            {
+                                "question": "What roles?",
+                                "answer": "Senior backend engineering roles.",
+                            },
+                        ],
+                        "known_topics": [
+                            "background_experience",
+                            "skills_technologies",
+                            "target_role",
+                            "responsibilities_projects",
+                            "availability_location",
+                            "career_preferences",
+                        ],
+                    },
                 },
-            },
-        })
+            }
+        )
         after = server._build_profile_completion_guidance(c)
         result = calculate_profile_strength_v2(c)
         if result["percent"] >= 90:
@@ -208,6 +233,7 @@ class TestProfileReaching75:
 # ---------------------------------------------------------------------------
 # Scenario 3: Profile already at 75%+ — guidance says stop from the start
 # ---------------------------------------------------------------------------
+
 
 class TestProfileAlreadyAt75:
     def test_already_strong_guidance_says_stop(self):
@@ -238,6 +264,7 @@ class TestProfileAlreadyAt75:
 # ---------------------------------------------------------------------------
 # Unit: _build_profile_completion_guidance contract
 # ---------------------------------------------------------------------------
+
 
 class TestGuidanceContract:
     def test_returns_string(self):
@@ -275,10 +302,12 @@ class TestRequiredFieldsVersusProfileStrength:
                 "percent": 87,
                 "recommended_next_actions": [],
                 "ninety_percent_guidance": {
-                    "items": [{
-                        "title": "Measured impact",
-                        "question": "What measurable result did your work achieve?",
-                    }],
+                    "items": [
+                        {
+                            "title": "Measured impact",
+                            "question": "What measurable result did your work achieve?",
+                        }
+                    ],
                 },
             },
             "_prefs_row": {
@@ -298,7 +327,10 @@ class TestRequiredFieldsVersusProfileStrength:
         assert "below 90%" in guidance
         assert "Core required details may already be present" in guidance
         assert "Do not describe the profile as complete or 100% complete" in guidance
-        assert 'never say the profile is "complete", "100% complete"' in server.EVE_SYSTEM_TEMPLATE
+        assert (
+            'never say the profile is "complete", "100% complete"'
+            in server.EVE_SYSTEM_TEMPLATE
+        )
 
     def test_below_90_uses_existing_partial_gap_guidance(self):
         profile = {
@@ -306,10 +338,12 @@ class TestRequiredFieldsVersusProfileStrength:
                 "percent": 87,
                 "recommended_next_actions": [],
                 "ninety_percent_guidance": {
-                    "items": [{
-                        "title": "Project evidence",
-                        "question": "Tell me about another relevant project and what you contributed.",
-                    }],
+                    "items": [
+                        {
+                            "title": "Project evidence",
+                            "question": "Tell me about another relevant project and what you contributed.",
+                        }
+                    ],
                 },
             },
             "_prefs_row": {
@@ -330,9 +364,11 @@ class TestRequiredFieldsVersusProfileStrength:
         assert "Tell me about another relevant project" in guidance
 
     def test_strength_100_keeps_fully_complete_stop_behavior(self):
-        guidance = server._build_profile_completion_guidance({
-            "profile_strength_detail": {"percent": 100},
-        })
+        guidance = server._build_profile_completion_guidance(
+            {
+                "profile_strength_detail": {"percent": 100},
+            }
+        )
 
         assert guidance == (
             "Profile is at 100% (90%+ reached). "
@@ -343,7 +379,9 @@ class TestRequiredFieldsVersusProfileStrength:
         profile = {
             "profile_strength_detail": {
                 "percent": 40,
-                "recommended_next_actions": ["Tell Eve what kind of role you are targeting"],
+                "recommended_next_actions": [
+                    "Tell Eve what kind of role you are targeting"
+                ],
             },
             "_prefs_row": {},
         }
@@ -351,7 +389,7 @@ class TestRequiredFieldsVersusProfileStrength:
         guidance = server._build_profile_completion_guidance(profile)
 
         assert guidance == (
-            'Profile is at 40% (below 90%). Ask this one work-preference question naturally: '
+            "Profile is at 40% (below 90%). Ask this one work-preference question naturally: "
             '"What kinds of roles are you looking for?"'
         )
 
@@ -362,11 +400,13 @@ class TestCompletionClaimConsistency:
         return {
             "percent": percent,
             "ninety_percent_guidance": {
-                "items": [{
-                    "title": "Project evidence",
-                    "action": "Add another relevant project",
-                    "question": "Tell me about another relevant project and what you contributed.",
-                }],
+                "items": [
+                    {
+                        "title": "Project evidence",
+                        "action": "Add another relevant project",
+                        "question": "Tell me about another relevant project and what you contributed.",
+                    }
+                ],
             },
         }
 
@@ -397,7 +437,9 @@ class TestCompletionClaimConsistency:
 
     def test_completion_claim_at_90_or_above_is_unchanged(self):
         reply = "Your profile is complete."
-        assert server._sanitize_profile_completion_claim(reply, self._detail(90)) == reply
+        assert (
+            server._sanitize_profile_completion_claim(reply, self._detail(90)) == reply
+        )
 
     def test_replacement_uses_existing_ninety_percent_guidance(self):
         result = server._sanitize_profile_completion_claim(

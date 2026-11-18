@@ -1,8 +1,8 @@
 import os
 from typing import Any
-import numpy as np
-from sentence_transformers import SentenceTransformer
+
 from dotenv import load_dotenv
+from sentence_transformers import SentenceTransformer
 
 load_dotenv()
 
@@ -22,7 +22,9 @@ def build_job_text(job: dict[str, Any]) -> str:
         f"Skills Required: {job.get('skills_required', '')}",
         f"Description: {job.get('description', '')}",
     ]
-    return "\n".join(p for p in parts if not p.endswith(": ") and not p.endswith("None"))
+    return "\n".join(
+        p for p in parts if not p.endswith(": ") and not p.endswith("None")
+    )
 
 
 def generate_job_embedding(job: dict[str, Any]) -> list[float]:

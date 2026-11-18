@@ -1,4 +1,5 @@
 """Focused contract tests for opaque LLM request-to-candidate correlation."""
+
 from types import SimpleNamespace
 
 import pytest
@@ -21,7 +22,9 @@ async def test_association_updates_existing_events_only_through_matching_stored_
     import llm_telemetry
 
     conn = _Connection("candidate-1")
-    await llm_telemetry._associate_candidate_on_connection(conn, "request-1", "candidate-1")
+    await llm_telemetry._associate_candidate_on_connection(
+        conn, "request-1", "candidate-1"
+    )
 
     assert len(conn.calls) == 3
     update_sql, update_params = conn.calls[-1]
@@ -35,7 +38,9 @@ async def test_conflicting_association_never_updates_usage_events(caplog):
     import llm_telemetry
 
     conn = _Connection("candidate-already-linked")
-    await llm_telemetry._associate_candidate_on_connection(conn, "request-1", "candidate-new")
+    await llm_telemetry._associate_candidate_on_connection(
+        conn, "request-1", "candidate-new"
+    )
 
     assert len(conn.calls) == 2
     assert "conflict" in caplog.text.lower()
@@ -56,7 +61,9 @@ async def test_transaction_association_failure_does_not_break_onboarding(caplog)
         def begin_nested(self):
             return BrokenSavepoint()
 
-    await llm_telemetry.associate_candidate_in_transaction(BrokenSession(), "request-1", "candidate-1")
+    await llm_telemetry.associate_candidate_in_transaction(
+        BrokenSession(), "request-1", "candidate-1"
+    )
     assert "association failed" in caplog.text.lower()
 
 
@@ -64,8 +71,12 @@ def test_historical_migration_is_immutable_and_upgrade_is_additive():
     from pathlib import Path
 
     migrations = Path(__file__).parents[1] / "migrations"
-    original = (migrations / "20261008_llm_usage_events.sql").read_text(encoding="utf-8")
-    upgrade = (migrations / "20261010_llm_usage_event_correlation.sql").read_text(encoding="utf-8")
+    original = (migrations / "20261008_llm_usage_events.sql").read_text(
+        encoding="utf-8"
+    )
+    upgrade = (migrations / "20261010_llm_usage_event_correlation.sql").read_text(
+        encoding="utf-8"
+    )
 
     assert "session_id" not in original
     assert "llm_usage_request_candidate_links" not in original

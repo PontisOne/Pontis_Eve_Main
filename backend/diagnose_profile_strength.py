@@ -3,6 +3,7 @@
 Usage (from backend):
     python diagnose_profile_strength.py 6ab604d8-4867-4846-bc73-6b03b08b881f
 """
+
 import asyncio
 import json
 import os
@@ -16,11 +17,14 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from profile_strength_service import build_profile_strength_diagnostic
 
 CANDIDATE_ID_SQL = "SELECT * FROM candidates WHERE id = :candidate_id LIMIT 1"
-PREFERENCES_SQL = "SELECT * FROM candidate_preferences WHERE candidate_id = :candidate_id LIMIT 1"
+PREFERENCES_SQL = (
+    "SELECT * FROM candidate_preferences WHERE candidate_id = :candidate_id LIMIT 1"
+)
 CERTIFICATES_SQL = (
     "SELECT id, file_name, file_path FROM candidate_certificates "
     "WHERE candidate_id = :candidate_id ORDER BY created_at ASC"
 )
+
 
 async def load_and_print(candidate_id: str) -> dict:
     load_dotenv(Path(__file__).parent / ".env")
@@ -45,8 +49,12 @@ async def load_and_print(candidate_id: str) -> dict:
                 text(CERTIFICATES_SQL),
                 {"candidate_id": candidate_id},
             )
-            candidate_data["candidate_certificates"] = [dict(row) for row in certificates_result.mappings().all()]
-        diagnostic = build_profile_strength_diagnostic(candidate_data, prefs_row=dict(preferences) if preferences else None)
+            candidate_data["candidate_certificates"] = [
+                dict(row) for row in certificates_result.mappings().all()
+            ]
+        diagnostic = build_profile_strength_diagnostic(
+            candidate_data, prefs_row=dict(preferences) if preferences else None
+        )
         print(json.dumps(diagnostic, indent=2, default=str, sort_keys=True))
         return diagnostic
     finally:
@@ -54,5 +62,7 @@ async def load_and_print(candidate_id: str) -> dict:
 
 
 if __name__ == "__main__":
-    requested_id = sys.argv[1] if len(sys.argv) > 1 else "6ab604d8-4867-4846-bc73-6b03b08b881f"
+    requested_id = (
+        sys.argv[1] if len(sys.argv) > 1 else "6ab604d8-4867-4846-bc73-6b03b08b881f"
+    )
     asyncio.run(load_and_print(requested_id))

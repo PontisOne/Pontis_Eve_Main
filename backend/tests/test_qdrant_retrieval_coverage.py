@@ -18,23 +18,30 @@ class _QueryClient:
 
 
 def test_query_points_deduplicates_by_stable_job_id(monkeypatch):
-    client = _QueryClient([
-        SimpleNamespace(payload={"job_id": "job-1"}, score=.4),
-        SimpleNamespace(payload={"job_id": "job-2"}, score=.7),
-        SimpleNamespace(payload={"job_id": "job-1"}, score=.9),
-    ])
+    client = _QueryClient(
+        [
+            SimpleNamespace(payload={"job_id": "job-1"}, score=0.4),
+            SimpleNamespace(payload={"job_id": "job-2"}, score=0.7),
+            SimpleNamespace(payload={"job_id": "job-1"}, score=0.9),
+        ]
+    )
     monkeypatch.setattr(qdrant_service, "_get_client", lambda: client)
 
-    assert qdrant_service.search_job_chunks([.1], limit=150) == [("job-1", .9), ("job-2", .7)]
+    assert qdrant_service.search_job_chunks([0.1], limit=150) == [
+        ("job-1", 0.9),
+        ("job-2", 0.7),
+    ]
     assert client.calls[0]["limit"] == 150
     assert "score_threshold" not in client.calls[0]
 
 
 def test_query_points_keeps_all_distinct_available_jobs(monkeypatch):
-    client = _QueryClient([
-        SimpleNamespace(payload={"job_id": f"job-{index}"}, score=1 - index / 100)
-        for index in range(5)
-    ])
+    client = _QueryClient(
+        [
+            SimpleNamespace(payload={"job_id": f"job-{index}"}, score=1 - index / 100)
+            for index in range(5)
+        ]
+    )
     monkeypatch.setattr(qdrant_service, "_get_client", lambda: client)
 
-    assert len(qdrant_service.search_job_chunks([.1], limit=150)) == 5
+    assert len(qdrant_service.search_job_chunks([0.1], limit=150)) == 5

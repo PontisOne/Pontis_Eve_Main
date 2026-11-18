@@ -11,6 +11,7 @@ Verifies that:
 6. Deleting a non-existent skill is a no-op (no error, list unchanged).
 7. Existing add/update behaviour is not broken.
 """
+
 import os
 import sys
 

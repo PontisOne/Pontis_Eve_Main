@@ -18,15 +18,21 @@ def test_resume_opportunity_type_preserves_valid_values():
 
 
 def test_explicit_internship_preference_is_extracted():
-    assert server._infer_profile_updates_from_message(
-        "I'm looking for a Python internship."
-    )["opportunity_type"] == "intern"
+    assert (
+        server._infer_profile_updates_from_message(
+            "I'm looking for a Python internship."
+        )["opportunity_type"]
+        == "intern"
+    )
 
 
 def test_explicit_job_preference_is_extracted():
-    assert server._infer_profile_updates_from_message(
-        "I'm looking for full-time Java developer jobs."
-    )["opportunity_type"] == "jobs"
+    assert (
+        server._infer_profile_updates_from_message(
+            "I'm looking for full-time Java developer jobs."
+        )["opportunity_type"]
+        == "jobs"
+    )
 
 
 def test_unrelated_fresher_or_intern_context_does_not_infer_internship():
@@ -36,9 +42,12 @@ def test_unrelated_fresher_or_intern_context_does_not_infer_internship():
 
 
 def test_switching_away_from_internships_is_job():
-    assert server._infer_profile_updates_from_message(
-        "I'm no longer looking for internships; I'm looking for full-time jobs."
-    )["opportunity_type"] == "jobs"
+    assert (
+        server._infer_profile_updates_from_message(
+            "I'm no longer looking for internships; I'm looking for full-time jobs."
+        )["opportunity_type"]
+        == "jobs"
+    )
 
 
 def test_profile_update_allowlist_accepts_only_normalized_values():
@@ -46,3 +55,11 @@ def test_profile_update_allowlist_accepts_only_normalized_values():
         "opportunity_type": "intern"
     }
     assert server._sanitize_profile_updates({"opportunity_type": "fresher"}) == {}
+
+
+def test_profile_api_exposes_job_while_database_uses_jobs():
+    profile = server._normalize_for_frontend(
+        {"id": "candidate-1", "opportunity_type": "jobs"}
+    )
+    assert profile["opportunity_type"] == "job"
+    assert server._resume_candidate_opportunity_type("job") == "jobs"

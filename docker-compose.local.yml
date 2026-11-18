@@ -1,0 +1,55 @@
+name: pontis-eve-local
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: pontis-eve-local-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: pontis_local
+      POSTGRES_PASSWORD: pontis_local_dev_only
+      POSTGRES_DB: pontis_eve_local
+    ports:
+      - "127.0.0.1:55432:5432"
+    volumes:
+      - pontis_eve_local_postgres_data:/var/lib/postgresql/data
+      - ./docker/postgres/init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U pontis_local -d pontis_eve_local"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  redis:
+    image: redis:7-alpine
+    container_name: pontis-eve-local-redis
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "yes"]
+    ports:
+      - "127.0.0.1:56379:6379"
+    volumes:
+      - pontis_eve_local_redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  qdrant:
+    image: qdrant/qdrant:v1.15.5
+    container_name: pontis-eve-local-qdrant
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:56333:6333"
+    volumes:
+      - pontis_eve_local_qdrant_data:/qdrant/storage
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:6333/readyz >/dev/null || exit 1"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+volumes:
+  pontis_eve_local_postgres_data:
+  pontis_eve_local_redis_data:
+  pontis_eve_local_qdrant_data:

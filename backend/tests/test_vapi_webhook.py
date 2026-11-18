@@ -10,7 +10,6 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 import server
 from server import app
 
-
 client = TestClient(app)
 
 
@@ -45,7 +44,9 @@ def test_vapi_webhook_acknowledges_non_object_json_without_500():
 
 class _FakeDb:
     def __init__(self, rowcount=1):
-        self.execute = AsyncMock(return_value=type("Result", (), {"rowcount": rowcount})())
+        self.execute = AsyncMock(
+            return_value=type("Result", (), {"rowcount": rowcount})()
+        )
         self.commit = AsyncMock()
 
     async def __aenter__(self):
@@ -73,14 +74,19 @@ def test_intermediate_vapi_event_does_not_complete_intake(monkeypatch):
 
     response = client.post(
         "/api/webhooks/vapi",
-        json={"type": "conversation-update", "call": {"metadata": {"candidateId": "bad"}}},
+        json={
+            "type": "conversation-update",
+            "call": {"metadata": {"candidateId": "bad"}},
+        },
     )
 
     assert response.status_code == 200
     db.execute.assert_not_awaited()
 
 
-def test_final_vapi_event_completes_correct_intake_and_preserves_transcript(monkeypatch):
+def test_final_vapi_event_completes_correct_intake_and_preserves_transcript(
+    monkeypatch,
+):
     db = _FakeDb()
     monkeypatch.setattr(server, "SessionLocal", lambda: db)
     monkeypatch.setattr(
@@ -130,15 +136,23 @@ def test_incomplete_vapi_end_call_preserves_resumable_progress(monkeypatch):
     monkeypatch.setattr(
         server,
         "_get_candidate_row",
-        AsyncMock(return_value={"raw_data": {"voice_intake": {
-            "status": "in_progress",
-            "current_question": "What are your key skills?",
-        }}}),
+        AsyncMock(
+            return_value={
+                "raw_data": {
+                    "voice_intake": {
+                        "status": "in_progress",
+                        "current_question": "What are your key skills?",
+                    }
+                }
+            }
+        ),
     )
     matching = AsyncMock()
     monkeypatch.setattr(server, "_trigger_matching", matching)
 
-    response = client.post("/api/webhooks/vapi", json=_terminal_payload("partial transcript"))
+    response = client.post(
+        "/api/webhooks/vapi", json=_terminal_payload("partial transcript")
+    )
 
     assert response.status_code == 200
     params = db.execute.await_args.args[1]

@@ -89,15 +89,19 @@ def test_google_registration_token_is_scoped_and_bound(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_returning_google_subject_resolves_mapped_candidate(monkeypatch):
-    session = _Session([
-        _Result(mapping={
-            "id": "candidate-id",
-            "name": "Candidate",
-            "phone": "+10000000000",
-            "summary": "Profile",
-            "parsing_status": "completed",
-        })
-    ])
+    session = _Session(
+        [
+            _Result(
+                mapping={
+                    "id": "candidate-id",
+                    "name": "Candidate",
+                    "phone": "+10000000000",
+                    "summary": "Profile",
+                    "parsing_status": "completed",
+                }
+            )
+        ]
+    )
     monkeypatch.setattr(server, "SessionLocal", lambda: session)
 
     candidate_id, needs_onboarding = await server._resolve_google_identity(
@@ -126,10 +130,12 @@ async def test_unknown_subject_with_existing_email_uses_new_registration(monkeyp
 
 @pytest.mark.asyncio
 async def test_concurrent_google_registration_uses_verified_winner():
-    session = _Session([
-        _Result(row=None),
-        _Result(row=("winning-candidate", "Person@Example.Test")),
-    ])
+    session = _Session(
+        [
+            _Result(row=None),
+            _Result(row=("winning-candidate", "Person@Example.Test")),
+        ]
+    )
 
     candidate_id, created = await server._create_google_identity_or_resolve_winner(
         session,
@@ -145,10 +151,12 @@ async def test_concurrent_google_registration_uses_verified_winner():
 
 @pytest.mark.asyncio
 async def test_google_identity_mapping_cannot_be_reassigned_to_conflicting_candidate():
-    session = _Session([
-        _Result(row=None),
-        _Result(row=("other-candidate", "different@example.test")),
-    ])
+    session = _Session(
+        [
+            _Result(row=None),
+            _Result(row=("other-candidate", "different@example.test")),
+        ]
+    )
 
     with pytest.raises(HTTPException) as exc:
         await server._create_google_identity_or_resolve_winner(
@@ -173,18 +181,25 @@ class _GoogleClient:
         return False
 
     async def post(self, *args, **kwargs):
-        return server.httpx.Response(200, json={"access_token": "provider-access-token"})
+        return server.httpx.Response(
+            200, json={"access_token": "provider-access-token"}
+        )
 
     async def get(self, *args, **kwargs):
-        return server.httpx.Response(200, json={
-            "sub": "new-google-subject",
-            "email": "person@example.test",
-            "email_verified": True,
-        })
+        return server.httpx.Response(
+            200,
+            json={
+                "sub": "new-google-subject",
+                "email": "person@example.test",
+                "email_verified": True,
+            },
+        )
 
 
 @pytest.mark.asyncio
-async def test_missing_mapping_issues_new_registration_not_email_matched_session(monkeypatch):
+async def test_missing_mapping_issues_new_registration_not_email_matched_session(
+    monkeypatch,
+):
     monkeypatch.setattr(server, "GOOGLE_CLIENT_ID", "client-id")
     monkeypatch.setattr(server, "GOOGLE_CLIENT_SECRET", "client-secret")
     monkeypatch.setattr(server.httpx, "AsyncClient", _GoogleClient)
@@ -230,11 +245,14 @@ async def test_unverified_unknown_google_user_is_not_sent_to_registration(monkey
 
     class UnverifiedGoogleClient(_GoogleClient):
         async def get(self, *args, **kwargs):
-            return server.httpx.Response(200, json={
-                "sub": "new-google-subject",
-                "email": "person@example.test",
-                "email_verified": False,
-            })
+            return server.httpx.Response(
+                200,
+                json={
+                    "sub": "new-google-subject",
+                    "email": "person@example.test",
+                    "email_verified": False,
+                },
+            )
 
     monkeypatch.setattr(server.httpx, "AsyncClient", UnverifiedGoogleClient)
 

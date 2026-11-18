@@ -5,21 +5,37 @@ from typing import Any
 
 from sqlalchemy import text
 
+from app.job_ingestion.normalize import (
+    UNKNOWN_EXPERIENCE_LEVEL,
+    _valid_http_url,
+    normalize_opportunity_type,
+    parse_ats_datetime,
+)
 from ats_agency_service import get_or_create_ats_agency
-from app.job_ingestion.normalize import UNKNOWN_EXPERIENCE_LEVEL, _valid_http_url, normalize_opportunity_type, parse_ats_datetime
 
 logger = logging.getLogger(__name__)
 
 
 _EXISTING_ATS_JOB_COLUMNS = (
-    "id", "job_url", "description", "requirements", "skills", "skills_required",
-    "experience_required", "salary_range", "employment_type", "structured_data",
-    "ats_type", "ats_job_id",
+    "id",
+    "job_url",
+    "description",
+    "requirements",
+    "skills",
+    "skills_required",
+    "experience_required",
+    "salary_range",
+    "employment_type",
+    "structured_data",
+    "ats_type",
+    "ats_job_id",
 )
 _EXISTING_LOOKUP_UNSET = object()
 
 
-def _ats_identity_state(existing: dict[str, Any], ats_type: str, ats_job_id: str) -> str:
+def _ats_identity_state(
+    existing: dict[str, Any], ats_type: str, ats_job_id: str
+) -> str:
     """Classify a supplied row without treating legacy projections as collisions."""
     existing_type = existing.get("ats_type")
     existing_id = existing.get("ats_job_id")
@@ -66,7 +82,9 @@ def _existing_ats_job(row: Any) -> dict[str, Any] | None:
     }
 
 
-async def find_existing_ats_job(db, ats_type: str, ats_job_id: str) -> dict[str, Any] | None:
+async def find_existing_ats_job(
+    db, ats_type: str, ats_job_id: str
+) -> dict[str, Any] | None:
     """Read one ATS record by its provider-scoped stable identifier."""
     result = await db.execute(
         text("""
@@ -108,7 +126,9 @@ async def find_existing_ats_job_by_id_or_url(
     return _existing_ats_job(result.first())
 
 
-def _merge_existing_undisclosed_markers(job: dict[str, Any], existing: dict[str, Any]) -> None:
+def _merge_existing_undisclosed_markers(
+    job: dict[str, Any], existing: dict[str, Any]
+) -> None:
     """Keep source-proven absences when a later provider response omits them.
 
     A marker is evidence only when it is literally ``True``.  In particular,
@@ -117,7 +137,9 @@ def _merge_existing_undisclosed_markers(job: dict[str, Any], existing: dict[str,
     """
     incoming_structured = job.get("structured_data")
     existing_structured = existing.get("structured_data")
-    if not isinstance(incoming_structured, dict) or not isinstance(existing_structured, dict):
+    if not isinstance(incoming_structured, dict) or not isinstance(
+        existing_structured, dict
+    ):
         return
 
     incoming_markers = incoming_structured.get("explicitly_undisclosed")
@@ -128,7 +150,8 @@ def _merge_existing_undisclosed_markers(job: dict[str, Any], existing: dict[str,
     # Preserve unrelated future metadata keys, while validating the two
     # canonical absence markers owned by this ingestion flow.
     merged_markers = {
-        key: value for key, value in incoming_markers.items()
+        key: value
+        for key, value in incoming_markers.items()
         if key not in {"salary_range", "experience_required"}
     }
     for field in ("salary_range", "experience_required"):
@@ -136,7 +159,11 @@ def _merge_existing_undisclosed_markers(job: dict[str, Any], existing: dict[str,
         existing_has_value = bool(str(existing.get(field) or "").strip())
         incoming_marker = incoming_markers.get(field) is True
         existing_marker = existing_markers.get(field) is True
-        if not incoming_has_value and not existing_has_value and (incoming_marker or existing_marker):
+        if (
+            not incoming_has_value
+            and not existing_has_value
+            and (incoming_marker or existing_marker)
+        ):
             merged_markers[field] = True
 
     structured = dict(incoming_structured)
@@ -185,7 +212,8 @@ async def upsert_ats_job(
         verified = await find_existing_ats_job(db, ats_type, ats_job_id)
         existing = (
             verified
-            if verified and _ats_identity_state(verified, ats_type, ats_job_id) == "match"
+            if verified
+            and _ats_identity_state(verified, ats_type, ats_job_id) == "match"
             else None
         )
 
@@ -196,12 +224,16 @@ async def upsert_ats_job(
         # Support legacy test/session rows that predate the requirements column.
         existing_job_url = existing.get("job_url")
         existing_description = existing.get("description") or ""
-        existing_requirements = existing.get("requirements") or ""
         from skill_normalization import merge_skills
+
         existing_skills = existing.get("skills") or []
         existing_required = existing.get("skills_required") or []
-        job["skills"] = merge_skills(existing_skills, job.get("skills"), canonical_display=True)
-        job["skills_required"] = merge_skills(existing_required, job.get("skills_required"), canonical_display=True)
+        job["skills"] = merge_skills(
+            existing_skills, job.get("skills"), canonical_display=True
+        )
+        job["skills_required"] = merge_skills(
+            existing_required, job.get("skills_required"), canonical_display=True
+        )
         incoming_job_url = _valid_http_url(job.get("job_url"))
         incoming_description = str(job.get("description") or "").strip()
         # Refresh longer descriptions, and same-length replacements.  A
@@ -243,16 +275,24 @@ async def upsert_ats_job(
                 WHERE id = CAST(:id AS UUID)
             """),
             {
-                "id": job_id, "title": job.get("title"), "job_url": incoming_job_url, "description": incoming_description,
+                "id": job_id,
+                "title": job.get("title"),
+                "job_url": incoming_job_url,
+                "description": incoming_description,
                 "is_global_provider": ats_type in {"fantastic", "theirstack"},
-                "refresh_description": refresh_description, **_metadata_params(job),
+                "refresh_description": refresh_description,
+                **_metadata_params(job),
             },
         )
         await db.commit()
-        if (not (existing_job_url or "").strip() and incoming_job_url is not None) or refresh_description:
+        if (
+            not (existing_job_url or "").strip() and incoming_job_url is not None
+        ) or refresh_description:
             logger.debug(
                 "[job-scheduler] Refreshed existing ATS job ats_type=%s ats_job_id=%s db_id=%s description_refreshed=%s",
-                ats_type, ats_job_id, job_id,
+                ats_type,
+                ats_job_id,
+                job_id,
                 refresh_description,
             )
         # Recreate a point that may have been removed while the job was closed.
@@ -260,11 +300,19 @@ async def upsert_ats_job(
         if _valid_http_url(existing_job_url) or incoming_job_url:
             try:
                 from app.job_ingestion.embedding_service import generate_job_embedding
-                from app.job_ingestion.qdrant_service import ensure_collection, upsert_job_embedding
+                from app.job_ingestion.qdrant_service import (
+                    ensure_collection,
+                    upsert_job_embedding,
+                )
+
                 ensure_collection()
                 upsert_job_embedding(str(job_id), generate_job_embedding(job), job)
             except Exception as exc:
-                logger.error("Qdrant embedding upsert failed for reactivated job_id=%s: %s", job_id, exc)
+                logger.error(
+                    "Qdrant embedding upsert failed for reactivated job_id=%s: %s",
+                    job_id,
+                    exc,
+                )
         return str(job_id)
 
     # Fantastic is a global provider: it intentionally has neither a
@@ -388,8 +436,14 @@ async def upsert_ats_job(
             "department": job.get("department"),
             "location": job.get("location"),
             "responsibilities": job.get("responsibilities"),
-            "city": job.get("city"), "state": job.get("state"), "country": job.get("country"), "remote": job.get("remote"),
-            "company_website_url": _valid_http_url(job.get("company_website_url")), "company_logo_url": _valid_http_url(job.get("company_logo_url")), "industry": job.get("industry"), "valid_through": parse_ats_datetime(job.get("valid_through")),
+            "city": job.get("city"),
+            "state": job.get("state"),
+            "country": job.get("country"),
+            "remote": job.get("remote"),
+            "company_website_url": _valid_http_url(job.get("company_website_url")),
+            "company_logo_url": _valid_http_url(job.get("company_logo_url")),
+            "industry": job.get("industry"),
+            "valid_through": parse_ats_datetime(job.get("valid_through")),
             "employment_type": job.get("employment_type"),
             "salary_range": job.get("salary_range"),
             "description": job["description"],
@@ -409,14 +463,19 @@ async def upsert_ats_job(
 
     # A malformed/no-URL ATS job is retained for audit but never indexed.
     if _valid_http_url(job.get("job_url")):
-      try:
-        from app.job_ingestion.embedding_service import generate_job_embedding
-        from app.job_ingestion.qdrant_service import ensure_collection, upsert_job_embedding
+        try:
+            from app.job_ingestion.embedding_service import generate_job_embedding
+            from app.job_ingestion.qdrant_service import (
+                ensure_collection,
+                upsert_job_embedding,
+            )
 
-        ensure_collection()
-        upsert_job_embedding(str(new_id), generate_job_embedding(job), job)
-      except Exception as exc:
-        logger.error("Qdrant embedding upsert failed for job_id=%s: %s", new_id, exc)
+            ensure_collection()
+            upsert_job_embedding(str(new_id), generate_job_embedding(job), job)
+        except Exception as exc:
+            logger.error(
+                "Qdrant embedding upsert failed for job_id=%s: %s", new_id, exc
+            )
 
     return str(new_id)
 
@@ -430,9 +489,17 @@ def _metadata_params(job: dict[str, Any]) -> dict[str, Any]:
     return {
         "employment_type": safe.get("employment_type"),
         "opportunity_type": safe.get("opportunity_type", "jobs"),
-        "department": safe.get("department"), "location": safe.get("location"), "responsibilities": safe.get("responsibilities"),
-        "city": safe.get("city"), "state": safe.get("state"), "country": safe.get("country"), "remote": safe.get("remote"),
-        "company_website_url": _valid_http_url(safe.get("company_website_url")), "company_logo_url": _valid_http_url(safe.get("company_logo_url")), "industry": safe.get("industry"), "valid_through": parse_ats_datetime(safe.get("valid_through")),
+        "department": safe.get("department"),
+        "location": safe.get("location"),
+        "responsibilities": safe.get("responsibilities"),
+        "city": safe.get("city"),
+        "state": safe.get("state"),
+        "country": safe.get("country"),
+        "remote": safe.get("remote"),
+        "company_website_url": _valid_http_url(safe.get("company_website_url")),
+        "company_logo_url": _valid_http_url(safe.get("company_logo_url")),
+        "industry": safe.get("industry"),
+        "valid_through": parse_ats_datetime(safe.get("valid_through")),
         "remote_policy": safe.get("remote_policy"),
         "experience_level": safe["experience_level"],
         "experience_required": safe.get("experience_required"),
@@ -458,14 +525,18 @@ def _persistence_safe_job(job: dict[str, Any]) -> dict[str, Any]:
     if not isinstance(job, dict):
         raise ValueError("ATS job must be a mapping")
     safe = dict(job)
+
     def text_value(key: str, fallback: str | None = None) -> str | None:
         value = safe.get(key)
         if value is None:
             return fallback
         value = str(value).strip()
         return value or fallback
+
     safe["ats_type"] = (text_value("ats_type") or "").lower()
-    safe["opportunity_type"] = normalize_opportunity_type(text_value("opportunity_type", "jobs"))
+    safe["opportunity_type"] = normalize_opportunity_type(
+        text_value("opportunity_type", "jobs")
+    )
     safe["ats_job_id"] = text_value("ats_job_id") or ""
     # These are core persisted text fields.  Empty description/title are an
     # honest representation of an incomplete board response, unlike invented
@@ -474,17 +545,38 @@ def _persistence_safe_job(job: dict[str, Any]) -> dict[str, Any]:
     safe["company_name"] = text_value("company_name", "Unknown company")
     safe["description"] = text_value("description", "")
     safe["requirements"] = text_value("requirements")
-    for key in ("department", "location", "employment_type", "experience_required", "salary_range", "responsibilities", "city", "state", "country", "company_website_url", "company_logo_url", "industry"):
+    for key in (
+        "department",
+        "location",
+        "employment_type",
+        "experience_required",
+        "salary_range",
+        "responsibilities",
+        "city",
+        "state",
+        "country",
+        "company_website_url",
+        "company_logo_url",
+        "industry",
+    ):
         safe[key] = text_value(key)
     # job_descriptions.remote_policy is NOT NULL, while ATS providers such as
     # Greenhouse legitimately omit remote-work metadata.
     safe["remote_policy"] = text_value("remote_policy", "unknown")
-    safe["experience_level"] = text_value("experience_level") or safe["experience_required"] or UNKNOWN_EXPERIENCE_LEVEL
+    safe["experience_level"] = (
+        text_value("experience_level")
+        or safe["experience_required"]
+        or UNKNOWN_EXPERIENCE_LEVEL
+    )
     for key in ("skills_required", "skills"):
         value = safe.get(key)
         if isinstance(value, str):
             value = [part.strip() for part in value.replace(";", ",").split(",")]
-        safe[key] = [part.strip() for part in value if isinstance(part, str) and part.strip()] if isinstance(value, (list, tuple, set)) else []
+        safe[key] = (
+            [part.strip() for part in value if isinstance(part, str) and part.strip()]
+            if isinstance(value, (list, tuple, set))
+            else []
+        )
     structured = safe.get("structured_data")
     if not isinstance(structured, (dict, list)):
         structured = {}
