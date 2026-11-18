@@ -12,6 +12,7 @@ from apscheduler.triggers.cron import CronTrigger
 from sqlalchemy import text
 
 from app.job_ingestion.feature_flags import provider_enabled
+from app.job_ingestion.normalize import parse_ats_datetime
 
 logger = logging.getLogger(__name__)
 
@@ -60,14 +61,16 @@ async def reconcile_missing_ats_jobs(
         "workable",
     } and not provider_enabled(ats_type):
         logger.info(
-            "[job-lifecycle] provider=%s reconciliation skipped because provider is disabled",
+            "[job-lifecycle] provider=%s reconciliation skipped because "
+            "provider is disabled",
             ats_type,
         )
         return []
     if ats_type not in {"ashby", "lever", "greenhouse", "workable"}:
         logger.info(
             "[job-lifecycle] provider=%s snapshot_status=unsupported_for_reconciliation "
-            "pages_fetched=0 jobs_seen=%d jobs_closed=0 jobs_reactivated=0 jobs_skipped=0 "
+            "pages_fetched=0 jobs_seen=%d jobs_closed=0 jobs_reactivated=0 "
+            "jobs_skipped=0 "
             "reason=provider_response_is_not_a_complete_board_snapshot",
             ats_type,
             len(current_ats_ids),
@@ -99,14 +102,16 @@ async def reconcile_missing_ats_jobs(
     await db.execute(
         text("""
         UPDATE job_descriptions
-        SET is_active = FALSE, status = 'closed', job_status = 'closed', updated_at = NOW()
+        SET is_active = FALSE, status = 'closed', job_status = 'closed',
+            updated_at = NOW()
         WHERE id = ANY(CAST(:job_ids AS uuid[]))
     """),
         {"job_ids": missing},
     )
     logger.info(
         "[job-lifecycle] provider=%s snapshot_status=complete pages_fetched=1 "
-        "jobs_seen=%d jobs_closed=%d jobs_reactivated=0 jobs_skipped=0 reason=missing_from_complete_board",
+        "jobs_seen=%d jobs_closed=%d jobs_reactivated=0 jobs_skipped=0 "
+        "reason=missing_from_complete_board",
         ats_type,
         len(current_ats_ids),
         len(missing),
@@ -162,13 +167,134 @@ async def _close_confirmed_jobs(
     return db_ids
 
 
+async def _close_confirmed_fantastic_job_board_jobs(
+    db, *, ats_job_ids: set[str]
+) -> tuple[list[str], int]:
+    """Close only confirmed LinkedIn job-board rows from Fantastic."""
+    if not ats_job_ids:
+        return [], 0
+    result = await db.execute(
+        text("""
+        SELECT id, ats_job_id, structured_data
+        FROM job_descriptions
+        WHERE LOWER(ats_type) = 'fantastic'
+          AND is_active IS TRUE
+          AND ats_job_id = ANY(:ats_job_ids)
+    """),
+        {"ats_job_ids": list(ats_job_ids)},
+    )
+    eligible_ids = []
+    skipped = 0
+    for row in result.fetchall():
+        structured = row[2] if isinstance(row[2], dict) else {}
+        source = structured.get("source")
+        fantastic_data = structured.get("fantastic")
+        if not source and isinstance(fantastic_data, dict):
+            source = fantastic_data.get("source")
+        source = str(source or "").strip().casefold()
+        feed = str(structured.get("fantastic_feed") or "").strip().casefold()
+        if source == "linkedin" and feed == "active-jb":
+            eligible_ids.append(str(row[0]))
+        else:
+            skipped += 1
+    if not eligible_ids:
+        return [], skipped
+    await db.execute(
+        text("""
+        UPDATE job_descriptions
+        SET is_active = FALSE, status = 'closed', job_status = 'closed', updated_at = NOW()
+        WHERE id = ANY(CAST(:job_ids AS uuid[]))
+    """),
+        {"job_ids": eligible_ids},
+    )
+    await db.execute(
+        text("""
+        UPDATE candidate_job_recommendations
+        SET hidden_at = COALESCE(hidden_at, NOW())
+        WHERE job_id = ANY(CAST(:job_ids AS uuid[]))
+    """),
+        {"job_ids": eligible_ids},
+    )
+    return eligible_ids, skipped
+
+
+async def cleanup_fantastic_expired_job_boards(client=None) -> dict[str, int]:
+    """Close only confirmed LinkedIn job-board expirations from Fantastic."""
+    from app.job_ingestion.connectors.fantastic import FantasticClient
+
+    client = client or FantasticClient()
+    checked = confirmed = unresolved = skipped = qdrant_failures = 0
+    try:
+        expired_ids = await client.fetch_expired_job_boards("1d")
+        checked = len(expired_ids)
+        SessionLocal = _get_session_local()
+        async with SessionLocal() as db:
+            closed_db_ids, skipped = await _close_confirmed_fantastic_job_board_jobs(
+                db, ats_job_ids=set(expired_ids)
+            )
+            await db.commit()
+            confirmed = len(closed_db_ids)
+            unresolved = max(0, checked - confirmed - skipped)
+            for job_id in closed_db_ids:
+                try:
+                    from app.job_ingestion.qdrant_service import delete_job_embedding
+
+                    delete_job_embedding(job_id)
+                except Exception as exc:
+                    qdrant_failures += 1
+                    logger.warning(
+                        "[job-lifecycle] provider=fantastic feed=active-jb "
+                        "qdrant_cleanup_failed job_id=%s error=%s",
+                        job_id,
+                        exc,
+                    )
+    except Exception as exc:
+        logger.error(
+            "[job-lifecycle] provider=fantastic feed=active-jb "
+            "jobs_checked=%d jobs_confirmed_closed=0 jobs_unresolved=0 "
+            "jobs_skipped=%d qdrant_failures=0 errors=1 reason=%s",
+            checked,
+            skipped,
+            exc,
+        )
+        return {
+            "jobs_checked": checked,
+            "jobs_confirmed_closed": 0,
+            "jobs_unresolved": 0,
+            "jobs_skipped": skipped,
+            "qdrant_failures": 0,
+            "api_requests_made": getattr(client, "_requests_used", 0),
+            "errors": 1,
+        }
+    logger.info(
+        "[job-lifecycle] provider=fantastic feed=active-jb jobs_checked=%d "
+        "jobs_confirmed_closed=%d jobs_unresolved=%d jobs_skipped=%d "
+        "qdrant_failures=%d errors=0",
+        checked,
+        confirmed,
+        unresolved,
+        skipped,
+        qdrant_failures,
+    )
+    return {
+        "jobs_checked": checked,
+        "jobs_confirmed_closed": confirmed,
+        "jobs_unresolved": unresolved,
+        "jobs_skipped": skipped,
+        "qdrant_failures": qdrant_failures,
+        "api_requests_made": getattr(client, "_requests_used", 0),
+        "errors": 0,
+    }
+
+
 async def cleanup_fantastic_expired_jobs() -> dict[str, int]:
     """Apply only IDs explicitly returned by Fantastic's expiration feed."""
     from app.job_ingestion.connectors.fantastic import FantasticClient
 
     checked = confirmed = already_closed = unresolved = 0
+    client = FantasticClient()
     try:
-        expired_ids = await FantasticClient().fetch_expired_ats_ids("1d")
+        expired_ids = await client.fetch_expired_ats_ids("1d")
         checked = len(expired_ids)
         SessionLocal = _get_session_local()
         async with SessionLocal() as db:
@@ -185,13 +311,16 @@ async def cleanup_fantastic_expired_jobs() -> dict[str, int]:
                     delete_job_embedding(job_id)
                 except Exception as exc:
                     logger.warning(
-                        "[job-lifecycle] provider=fantastic qdrant_cleanup_failed job_id=%s error=%s",
+                        "[job-lifecycle] provider=fantastic qdrant_cleanup_failed "
+                        "job_id=%s error=%s",
                         job_id,
                         exc,
                     )
     except Exception as exc:
         logger.error(
-            "[job-lifecycle] provider=fantastic checked_at=%s jobs_checked=%d jobs_confirmed_closed=0 jobs_already_closed=0 jobs_unresolved=0 errors=1 reason=%s",
+            "[job-lifecycle] provider=fantastic checked_at=%s jobs_checked=%d "
+            "jobs_confirmed_closed=0 jobs_already_closed=0 jobs_unresolved=0 "
+            "errors=1 reason=%s",
             datetime.now(IST).isoformat(),
             checked,
             exc,
@@ -201,10 +330,14 @@ async def cleanup_fantastic_expired_jobs() -> dict[str, int]:
             "jobs_confirmed_closed": 0,
             "jobs_already_closed": 0,
             "jobs_unresolved": 0,
+            "api_requests_made": getattr(client, "_requests_used", 0),
             "errors": 1,
         }
+    job_board_stats = await cleanup_fantastic_expired_job_boards(client)
     logger.info(
-        "[job-lifecycle] provider=fantastic checked_at=%s jobs_checked=%d jobs_confirmed_closed=%d jobs_already_closed=0 jobs_unresolved=%d errors=0",
+        "[job-lifecycle] provider=fantastic checked_at=%s jobs_checked=%d "
+        "jobs_confirmed_closed=%d jobs_already_closed=0 jobs_unresolved=%d "
+        "errors=0",
         datetime.now(IST).isoformat(),
         checked,
         confirmed,
@@ -215,7 +348,14 @@ async def cleanup_fantastic_expired_jobs() -> dict[str, int]:
         "jobs_confirmed_closed": confirmed,
         "jobs_already_closed": already_closed,
         "jobs_unresolved": unresolved,
-        "errors": 0,
+        "errors": int(bool(job_board_stats["errors"])),
+        "api_requests_made": job_board_stats["api_requests_made"],
+        "job_board_jobs_checked": job_board_stats["jobs_checked"],
+        "job_board_jobs_confirmed_closed": job_board_stats["jobs_confirmed_closed"],
+        "job_board_jobs_unresolved": job_board_stats["jobs_unresolved"],
+        "job_board_jobs_skipped": job_board_stats["jobs_skipped"],
+        "job_board_qdrant_failures": job_board_stats["qdrant_failures"],
+        "job_board_errors": job_board_stats["errors"],
     }
 
 
@@ -243,10 +383,13 @@ async def cleanup_theirstack_closed_jobs() -> dict[str, int]:
             batch = stored_ids[offset : offset + 100]
             jobs = await client.fetch_jobs_by_ids(batch)
             checked += len(batch)
+            batch_ids = set(batch)
             closed_ids = {
-                str(job.get("id")).strip()
+                job_id
                 for job in jobs
-                if job.get("closed_at") is not None
+                if isinstance(job, dict)
+                and (job_id := str(job.get("id") or "").strip()) in batch_ids
+                and parse_ats_datetime(job.get("closed_at")) is not None
             }
             if closed_ids:
                 async with SessionLocal() as db:
@@ -264,7 +407,8 @@ async def cleanup_theirstack_closed_jobs() -> dict[str, int]:
                             delete_job_embedding(job_id)
                         except Exception as exc:
                             logger.warning(
-                                "[job-lifecycle] provider=theirstack qdrant_cleanup_failed job_id=%s error=%s",
+                                "[job-lifecycle] provider=theirstack "
+                                "qdrant_cleanup_failed job_id=%s error=%s",
                                 job_id,
                                 exc,
                             )
@@ -272,7 +416,9 @@ async def cleanup_theirstack_closed_jobs() -> dict[str, int]:
     except Exception as exc:
         errors = 1
         logger.error(
-            "[job-lifecycle] provider=theirstack checked_at=%s jobs_checked=%d jobs_confirmed_closed=%d jobs_already_closed=0 jobs_unresolved=%d errors=1 reason=%s",
+            "[job-lifecycle] provider=theirstack checked_at=%s jobs_checked=%d "
+            "jobs_confirmed_closed=%d jobs_already_closed=0 jobs_unresolved=%d "
+            "errors=1 reason=%s",
             datetime.now(IST).isoformat(),
             checked,
             confirmed,
@@ -281,7 +427,9 @@ async def cleanup_theirstack_closed_jobs() -> dict[str, int]:
         )
     else:
         logger.info(
-            "[job-lifecycle] provider=theirstack checked_at=%s jobs_checked=%d jobs_confirmed_closed=%d jobs_already_closed=0 jobs_unresolved=%d errors=0",
+            "[job-lifecycle] provider=theirstack checked_at=%s jobs_checked=%d "
+            "jobs_confirmed_closed=%d jobs_already_closed=0 jobs_unresolved=%d "
+            "errors=0",
             datetime.now(IST).isoformat(),
             checked,
             confirmed,
@@ -388,7 +536,8 @@ async def sync_jobs() -> None:
         complete, current_ats_ids = _complete_board_payload(jobs)
         if not complete:
             logger.error(
-                "[job-scheduler] incomplete ATS payload for company=%s; reconciliation skipped",
+                "[job-scheduler] incomplete ATS payload for company=%s; "
+                "reconciliation skipped",
                 company_name,
             )
             continue
@@ -429,7 +578,8 @@ async def sync_jobs() -> None:
                     # exhausting Railway's log-rate allowance.
                     if logged_failures < MAX_LOGGED_JOB_FAILURES:
                         logger.error(
-                            "[job-scheduler] failed job id=%s title=%r for company=%s: %s",
+                            "[job-scheduler] failed job id=%s title=%r for "
+                            "company=%s: %s",
                             job_ats_id,
                             job.get("title"),
                             company_name,
@@ -438,7 +588,8 @@ async def sync_jobs() -> None:
                         logged_failures += 1
                     elif logged_failures == MAX_LOGGED_JOB_FAILURES:
                         logger.error(
-                            "[job-scheduler] additional per-job failures for company=%s are suppressed",
+                            "[job-scheduler] additional per-job failures for "
+                            "company=%s are suppressed",
                             company_name,
                         )
                         logged_failures += 1
@@ -476,13 +627,15 @@ async def sync_jobs() -> None:
                         except Exception as exc:
                             # DB eligibility and hidden recommendations remain the safety net.
                             logger.warning(
-                                "[job-scheduler] Qdrant delete failed for job_id=%s: %s",
+                                "[job-scheduler] Qdrant delete failed for "
+                                "job_id=%s: %s",
                                 job_id,
                                 exc,
                             )
                 except Exception as exc:
                     logger.error(
-                        "[job-scheduler] failed to update last_synced_at for company=%s: %s",
+                        "[job-scheduler] failed to update last_synced_at for "
+                        "company=%s: %s",
                         company_name,
                         exc,
                     )
@@ -578,7 +731,8 @@ async def _sync_jobs_guarded() -> None:
     """Wrapper that prevents overlapping runs."""
     if not _scheduler_enabled():
         logger.info(
-            "[job-scheduler] job_id=job_sync skipped because JOB_SCHEDULER_ENABLED=false"
+            "[job-scheduler] job_id=job_sync skipped because "
+            "JOB_SCHEDULER_ENABLED=false"
         )
         return
     if _sync_lock is None:
@@ -635,7 +789,8 @@ async def retry_pending_metadata_extraction() -> int:
             ats_type = str(row.get("ats_type") or "").strip().casefold()
             if not provider_enabled(ats_type):
                 logger.info(
-                    "[job-scheduler] skipping metadata retry for disabled provider=%s job_id=%s",
+                    "[job-scheduler] skipping metadata retry for disabled "
+                    "provider=%s job_id=%s",
                     ats_type,
                     row.get("id"),
                 )
@@ -696,30 +851,48 @@ async def sync_fantastic_jobs() -> dict:
     per_feed = {}
     accepted = []
     seen_ids, seen_urls, seen_fingerprints = set(), set(), set()
-    for feed_name, fetch in feeds:
-        feed_stats = {
+
+    def _feed_stats(endpoint: str, *, capture_current: bool = True) -> dict:
+        stats = {
+            "endpoint": endpoint,
             "fetched": 0,
-            "accepted_india": 0,
-            "rejected_country": 0,
-            "rejected_expired": 0,
-            "duplicates": 0,
             "pages_requested": 0,
             "requests_made": 0,
+            "success": True,
+            "partial": False,
+            "budget_exhausted": False,
+            "stop_reason": None,
+            "error": None,
         }
+        if capture_current:
+            current = getattr(client, "last_fetch_stats", None)
+            if isinstance(current, dict) and current.get("endpoint") == endpoint:
+                stats.update(current)
+        stats.update(
+            {
+                "accepted_india": 0,
+                "rejected_country": 0,
+                "rejected_expired": 0,
+                "duplicates": 0,
+            }
+        )
+        return stats
+
+    for feed_name, fetch in feeds:
+        feed_stats = _feed_stats(feed_name, capture_current=False)
         try:
             raw_jobs = await fetch()
-            feed_stats.update(
-                {
-                    key: value
-                    for key, value in getattr(client, "last_fetch_stats", {}).items()
-                    if key in {"fetched", "pages_requested", "requests_made"}
-                }
-            )
         except Exception as exc:
             logger.error("[fantastic] %s fetch failed: %s", feed_name, exc)
+            feed_stats = _feed_stats(feed_name)
+            feed_stats["success"] = False
+            feed_stats["partial"] = True
+            feed_stats["stop_reason"] = feed_stats.get("stop_reason") or "request_error"
+            feed_stats["error"] = feed_stats.get("error") or "request_error"
             feed_stats["failed"] = 1
             per_feed[feed_name] = feed_stats
             continue
+        feed_stats = _feed_stats(feed_name)
         for raw in raw_jobs:
             job = normalize_fantastic(raw)
             job.setdefault("structured_data", {})["fantastic_feed"] = feed_name
@@ -756,19 +929,35 @@ async def sync_fantastic_jobs() -> dict:
             accepted.append((feed_name, job))
         per_feed[feed_name] = feed_stats
 
+    accepted_india = sum(s["accepted_india"] for s in per_feed.values())
+    rejected_country = sum(s["rejected_country"] for s in per_feed.values())
+    rejected_expired = sum(s["rejected_expired"] for s in per_feed.values())
+    failed_feeds = sum(s.get("failed", 0) for s in per_feed.values())
     stats = {
         "fetched": sum(s["fetched"] for s in per_feed.values()),
-        "accepted": sum(s["accepted_india"] for s in per_feed.values()),
-        "rejected": sum(s["rejected_country"] for s in per_feed.values()),
+        "accepted_india": accepted_india,
+        "accepted": accepted_india,
+        "rejected_country": rejected_country,
+        "rejected": rejected_country,
+        "rejected_expired": rejected_expired,
         "duplicates": sum(s["duplicates"] for s in per_feed.values()),
         "inserted": 0,
         "updated": 0,
         "skipped": 0,
-        "failed": sum(s.get("failed", 0) for s in per_feed.values()),
+        "failed": failed_feeds,
+        "failed_feeds": failed_feeds,
         "pages_requested": sum(s["pages_requested"] for s in per_feed.values()),
         "requests_made": sum(s["requests_made"] for s in per_feed.values()),
+        "requests_budget": client.config.max_requests_per_run,
+        "requests_remaining": max(
+            0, client.config.max_requests_per_run - client._requests_used
+        ),
+        "budget_exhausted": any(s["budget_exhausted"] for s in per_feed.values()),
+        "partial": any(s["partial"] for s in per_feed.values()),
+        "success": all(s["success"] for s in per_feed.values()),
     }
     SessionLocal = _get_session_local()
+    persistence_failed = False
     async with SessionLocal() as db:
         for feed_name, job in accepted:
             if not job["ats_job_id"] or not job["title"] or not job["job_url"]:
@@ -795,10 +984,36 @@ async def sync_fantastic_jobs() -> dict:
                 stats["updated" if existing_job else "inserted"] += 1
             except Exception as exc:
                 stats["failed"] += 1
+                persistence_failed = True
                 _log_fantastic_upsert_error(exc, job)
                 await db.rollback()
+    if persistence_failed:
+        stats["success"] = False
+        stats["partial"] = True
     for feed_name, feed_stats in per_feed.items():
         logger.info("[fantastic] feed=%s stats=%s", feed_name, feed_stats)
+    logger.info(
+        "[fantastic] active sync fetched=%d accepted_india=%d rejected_country=%d "
+        "rejected_expired=%d duplicates=%d inserted=%d updated=%d skipped=%d "
+        "failed=%d failed_feeds=%d requests_made=%d requests_budget=%d "
+        "requests_remaining=%d budget_exhausted=%s partial=%s success=%s",
+        stats["fetched"],
+        stats["accepted_india"],
+        stats["rejected_country"],
+        stats["rejected_expired"],
+        stats["duplicates"],
+        stats["inserted"],
+        stats["updated"],
+        stats["skipped"],
+        stats["failed"],
+        stats["failed_feeds"],
+        stats["requests_made"],
+        stats["requests_budget"],
+        stats["requests_remaining"],
+        stats["budget_exhausted"],
+        stats["partial"],
+        stats["success"],
+    )
     logger.info(
         "[job-lifecycle] provider=fantastic snapshot_status=bounded_non_snapshot "
         "pages_fetched=%d jobs_seen=%d jobs_closed=0 jobs_reactivated=0 jobs_skipped=%d "
@@ -882,7 +1097,8 @@ async def sync_theirstack_jobs() -> dict[str, int]:
                 await db.rollback()
     logger.info(
         "[job-lifecycle] provider=theirstack snapshot_status=bounded_search_non_snapshot "
-        "pages_fetched=unknown jobs_seen=%d jobs_closed=0 jobs_reactivated=0 jobs_skipped=%d "
+        "pages_fetched=unknown jobs_seen=%d jobs_closed=0 jobs_reactivated=0 "
+        "jobs_skipped=%d "
         "reason=search_response_is_not_proven_complete",
         stats["fetched"],
         stats["skipped"],
@@ -894,7 +1110,8 @@ async def sync_theirstack_jobs() -> dict[str, int]:
 async def _sync_theirstack_guarded() -> None:
     if not _scheduler_enabled():
         logger.info(
-            "[job-scheduler] job_id=theirstack_job_sync skipped because JOB_SCHEDULER_ENABLED=false"
+            "[job-scheduler] job_id=theirstack_job_sync skipped because "
+            "JOB_SCHEDULER_ENABLED=false"
         )
         return
     logger.info("[job-scheduler] job_id=theirstack_job_sync started")
@@ -915,7 +1132,7 @@ def _log_fantastic_upsert_error(exc: Exception, job: dict) -> None:
     limited to its public identity fields; ``structured_data`` can contain the
     provider's complete response and must never be logged here.
     """
-    database_error = exc
+    database_error: object | None = exc
     seen: set[int] = set()
     while database_error is not None and id(database_error) not in seen:
         seen.add(id(database_error))
@@ -946,7 +1163,8 @@ def _log_fantastic_upsert_error(exc: Exception, job: dict) -> None:
 async def _sync_fantastic_guarded() -> None:
     if not _scheduler_enabled():
         logger.info(
-            "[job-scheduler] job_id=fantastic_job_sync skipped because JOB_SCHEDULER_ENABLED=false"
+            "[job-scheduler] job_id=fantastic_job_sync skipped because "
+            "JOB_SCHEDULER_ENABLED=false"
         )
         return
     logger.info("[job-scheduler] job_id=fantastic_job_sync started")
@@ -961,7 +1179,8 @@ async def _sync_fantastic_guarded() -> None:
 async def _cleanup_fantastic_expired_jobs_guarded() -> None:
     if not _scheduler_enabled():
         logger.info(
-            "[job-scheduler] job_id=fantastic_expiration_cleanup skipped because JOB_SCHEDULER_ENABLED=false"
+            "[job-scheduler] job_id=fantastic_expiration_cleanup skipped because "
+            "JOB_SCHEDULER_ENABLED=false"
         )
         return
     logger.info("[job-scheduler] job_id=fantastic_expiration_cleanup started")
@@ -976,7 +1195,8 @@ async def _cleanup_fantastic_expired_jobs_guarded() -> None:
 async def _cleanup_theirstack_closed_jobs_guarded() -> None:
     if not _scheduler_enabled():
         logger.info(
-            "[job-scheduler] job_id=theirstack_expiration_cleanup skipped because JOB_SCHEDULER_ENABLED=false"
+            "[job-scheduler] job_id=theirstack_expiration_cleanup skipped because "
+            "JOB_SCHEDULER_ENABLED=false"
         )
         return
     logger.info("[job-scheduler] job_id=theirstack_expiration_cleanup started")
@@ -1005,8 +1225,8 @@ def _ats_sync_trigger() -> CronTrigger:
 
 
 def _fantastic_sync_trigger() -> CronTrigger:
-    """Return the Fantastic sync schedule aligned with the ATS schedule in IST."""
-    return CronTrigger(hour=SYNC_HOURS_IST, minute=0, second=0, timezone=IST)
+    """Return the daily Fantastic active-feed schedule at 07:00 IST."""
+    return CronTrigger(hour=7, minute=0, second=0, timezone=IST)
 
 
 def start_scheduler() -> None:
@@ -1024,7 +1244,8 @@ def start_scheduler() -> None:
 
     if _scheduler is not None and _scheduler.running:
         logger.info(
-            "[job-scheduler] scheduler already running in this process; skipping duplicate startup"
+            "[job-scheduler] scheduler already running in this process; "
+            "skipping duplicate startup"
         )
         return
 
