@@ -36,10 +36,13 @@ export default function useVapi({ publicKey, assistantId, assistantOverrides }) 
   const [transcript, setTranscript] = React.useState([]); // { role, text, final }[]
   const [error, setError] = React.useState(null);
   const [terminationReason, setTerminationReason] = React.useState(null);
+  const [localVolumeLevel, setLocalVolumeLevel] = React.useState(0);
   const callIdRef = React.useRef(null);
   // Always hold the latest overrides so startCall never uses a stale closure value
   const assistantOverridesRef = React.useRef(assistantOverrides);
-  React.useEffect(() => { assistantOverridesRef.current = assistantOverrides; }, [assistantOverrides]);
+  React.useEffect(() => {
+    assistantOverridesRef.current = assistantOverrides;
+  }, [assistantOverrides]);
 
   // Deduplicate / merge partial transcript turns
   const upsertTurn = React.useCallback((role, text, isFinal) => {
@@ -50,7 +53,7 @@ export default function useVapi({ publicKey, assistantId, assistantOverrides }) 
         const updated = [...prev.slice(0, -1), { role, text, final: isFinal }];
         return updated;
       }
-      return [...prev, { role, text, final: isFinal }];   
+      return [...prev, { role, text, final: isFinal }];
     });
   }, []);
 
@@ -65,6 +68,7 @@ export default function useVapi({ publicKey, assistantId, assistantOverrides }) 
       setCallState(VAPI_STATES.CONNECTING);
       setError(null);
       setTranscript([]);
+      setLocalVolumeLevel(0);
       setIsMuted(false);
       isMutedRef.current = false;
 
@@ -79,6 +83,12 @@ export default function useVapi({ publicKey, assistantId, assistantOverrides }) 
 
       vapi.on("speech-start", () => setCallState(VAPI_STATES.SPEAKING));
       vapi.on("speech-end", () => setCallState(VAPI_STATES.LISTENING));
+      // The SDK forwards Daily's local microphone audio level (0..1). This
+      // is activity, not speech classification; consumers must apply their
+      // own threshold/debounce before treating it as candidate speech.
+      vapi.on("local-volume-level", (level) => {
+        setLocalVolumeLevel(typeof level === "number" ? level : 0);
+      });
 
       vapi.on("message", (msg) => {
         if (msg?.type === "transcript") {
@@ -110,13 +120,15 @@ export default function useVapi({ publicKey, assistantId, assistantOverrides }) 
       setError(err?.message || "Failed to start voice call.");
       setCallState(VAPI_STATES.ERROR);
     }
-  // assistantOverrides intentionally excluded — always read via ref inside the callback
-  // eslint-disable-next-line react-hooks/exhaustive-deps
+    // assistantOverrides intentionally excluded — always read via ref inside the callback
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [publicKey, assistantId, upsertTurn]);
 
   const stopCall = React.useCallback(() => {
     if (vapiRef.current) {
-      try { vapiRef.current.stop(); } catch (_) {}
+      try {
+        vapiRef.current.stop();
+      } catch (_) {}
     }
     setCallState(VAPI_STATES.PROCESSING);
   }, []);
@@ -149,7 +161,9 @@ export default function useVapi({ publicKey, assistantId, assistantOverrides }) 
   React.useEffect(() => {
     return () => {
       if (vapiRef.current) {
-        try { vapiRef.current.stop(); } catch (_) {}
+        try {
+          vapiRef.current.stop();
+        } catch (_) {}
       }
     };
   }, []);
@@ -159,6 +173,7 @@ export default function useVapi({ publicKey, assistantId, assistantOverrides }) 
     transcript,
     error,
     terminationReason,
+    localVolumeLevel,
     callId: callIdRef,
     startCall,
     stopCall,

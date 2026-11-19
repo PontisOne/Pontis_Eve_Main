@@ -126,6 +126,7 @@ ALLOWED_PROFILE_PHOTO_CONTENT_TYPES = {
     "image/webp": ".webp",
 }
 _PRODUCTION_ENVIRONMENTS = {"production", "prod"}
+_DEVELOPMENT_ENVIRONMENTS = {"development", "dev", "local"}
 _INSECURE_CANDIDATE_SESSION_SECRETS = {
     "change-me",
     "changeme",
@@ -141,6 +142,7 @@ CANDIDATE_SESSION_SECRET = os.environ.get("CANDIDATE_SESSION_SECRET", "").strip(
 CANDIDATE_SESSION_TTL_SECONDS = 60 * 60 * 24 * 30
 GOOGLE_REGISTRATION_TTL_SECONDS = 10 * 60
 SUPPORT_EMAIL_TO = "info@pontis.one"
+LOCAL_DEV_AUTH_EMAILS_ENV = "LOCAL_DEV_AUTH_EMAILS"
 
 
 def _runtime_environment() -> str:
@@ -160,6 +162,12 @@ def _runtime_environment() -> str:
         .strip()
         .lower()
     )
+
+
+def _local_dev_auth_emails() -> set[str]:
+    """Return the explicitly configured local-development login emails."""
+    raw = os.environ.get(LOCAL_DEV_AUTH_EMAILS_ENV, "")
+    return {item.strip().casefold() for item in raw.split(",") if item.strip()}
 
 
 def _validated_candidate_session_secret(
@@ -19515,6 +19523,72 @@ def _consume_oauth_state(response: RedirectResponse, provider: str) -> None:
 async def exchange_oauth_session(exchange_code: str = Form(...)):
     return await _consume_oauth_exchange(exchange_code)
 
+
+async def _find_or_create_local_candidate(email: str) -> tuple[str, bool]:
+    """Find an allowlisted local candidate or create a pending candidate."""
+    async with SessionLocal() as db:
+        result = await db.execute(
+            text("""
+                SELECT id, name, phone, summary, parsing_status
+                FROM candidates
+                WHERE lower(email) = :email
+                LIMIT 1
+            """),
+            {"email": email},
+        )
+        existing = result.fetchone()
+        if existing:
+            if len(existing) == 1:
+                return str(existing[0]), False
+            complete = bool(
+                existing[1]
+                and existing[2]
+                and existing[3]
+                and existing[4] == "completed"
+            )
+            return str(existing[0]), not complete
+
+        candidate_id = str(uuid.uuid4())
+        await db.execute(
+            text("""
+                INSERT INTO candidates
+                    (id, email, source, created_by_source, updated_by_source,
+                     parsing_status, created_at, updated_at)
+                VALUES
+                    (:id, :email, 'eve', 'local_development',
+                     'local_development', 'pending', now(), now())
+            """),
+            {"id": candidate_id, "email": email},
+        )
+        await db.commit()
+        return candidate_id, True
+
+
+@api_router.post("/auth/local-development")
+async def local_development_login(email: str = Form(...)):
+    """Issue a normal candidate session for an explicitly allowlisted dev email."""
+    if _runtime_environment() not in _DEVELOPMENT_ENVIRONMENTS:
+        raise HTTPException(status_code=404, detail="Not found.")
+
+    normalized_email = email.strip().casefold()
+    allowed_emails = _local_dev_auth_emails()
+    if not normalized_email or normalized_email not in allowed_emails:
+        raise HTTPException(
+            status_code=403,
+            detail="Local development login is not enabled for this email.",
+        )
+
+    candidate_id, needs_onboarding = await _find_or_create_local_candidate(
+        normalized_email
+    )
+    profile = await _get_candidate_profile_payload(candidate_id)
+    profile["candidate_token"] = _issue_candidate_session_token(candidate_id)
+    return {
+        "candidate_id": candidate_id,
+        "candidate_token": profile.pop("candidate_token"),
+        "profile": profile,
+        "needs_onboarding": needs_onboarding,
+    }
 
 GOOGLE_CLIENT_ID = os.environ.get("GOOGLE_CLIENT_ID", "")
 GOOGLE_CLIENT_SECRET = os.environ.get("GOOGLE_CLIENT_SECRET", "")

@@ -75,6 +75,8 @@ CANDIDATE_SESSION_SECRET=replace-with-a-random-secret-of-at-least-32-characters
 GROQ_API_KEY_1=
 FRONTEND_URL=http://localhost:5173
 CORS_ORIGINS=http://localhost:5173
+EVE_ENVIRONMENT=development
+LOCAL_DEV_AUTH_EMAILS=developer@example.com,another@example.com
 ```
 
 ## Real-LLM integration tests
@@ -91,6 +93,13 @@ pytest -n 0 -m real_llm tests/integration/test_eve_real_llm_chat.py -s
 The command requires a non-placeholder `GROQ_API_KEY_1` (or `GROQ_API_KEY`). Missing credentials or the opt-in flag causes the suite to skip; it never silently substitutes mocks. Real PostgreSQL chat/persistence verification is intentionally not enabled until a separately verified test database and isolated Redis instance are supplied.
 
 The application loads `backend/.env` and requires `DATABASE_URL` during import. The Groq client pool accepts `GROQ_API_KEY_1` through `GROQ_API_KEY_7`; the legacy `GROQ_API_KEY` is accepted if no numbered keys are set. The candidate session secret must be non-placeholder and at least 32 characters.
+
+For local development, set `LOCAL_DEV_AUTH_EMAILS` to a comma-separated list of
+existing candidate email addresses and set the frontend
+`VITE_ENABLE_LOCAL_AUTH=true`. The login form calls the development-only endpoint
+and receives the same signed candidate session token used by the normal OAuth
+flows. This endpoint returns `404` in production and is never enabled by an
+allowlist alone.
 
 Start the API:
 
