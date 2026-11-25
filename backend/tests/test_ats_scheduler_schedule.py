@@ -1,6 +1,8 @@
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
+import pytest
+
 from app.job_ingestion import scheduler
 from app.job_ingestion.scheduler import IST, _ats_sync_trigger, _fantastic_sync_trigger
 
@@ -74,7 +76,8 @@ def test_fantastic_sync_schedule_matches_the_six_hour_ats_slots_in_ist():
     assert second_run - first_run == timedelta(hours=6)
 
 
-def test_scheduler_initialization_is_idempotent_and_does_not_sync(monkeypatch):
+@pytest.mark.asyncio
+async def test_scheduler_initialization_is_idempotent_and_does_not_sync(monkeypatch):
     """Registering cron jobs must not execute an ingestion cycle at startup."""
     calls = []
 
@@ -83,6 +86,7 @@ def test_scheduler_initialization_is_idempotent_and_does_not_sync(monkeypatch):
 
     scheduler.stop_scheduler()
     monkeypatch.setenv("JOB_SCHEDULER_ENABLED", "true")
+    monkeypatch.setenv("JOB_INDEXING_DURABLE_ENABLED", "false")
     monkeypatch.setattr(scheduler, "sync_jobs", sync_jobs)
 
     try:
@@ -104,6 +108,7 @@ def test_scheduler_initialization_is_idempotent_and_does_not_sync(monkeypatch):
 def test_disabled_scheduler_has_no_instance_or_jobs(monkeypatch):
     scheduler.stop_scheduler()
     monkeypatch.setenv("JOB_SCHEDULER_ENABLED", "false")
+    monkeypatch.setenv("JOB_INDEXING_DURABLE_ENABLED", "false")
 
     scheduler.start_scheduler()
 
@@ -111,15 +116,45 @@ def test_disabled_scheduler_has_no_instance_or_jobs(monkeypatch):
     assert scheduler._sync_lock is None
 
 
-def test_disabled_startup_stops_an_existing_scheduler(monkeypatch):
+@pytest.mark.asyncio
+async def test_disabled_startup_stops_an_existing_scheduler(monkeypatch):
     scheduler.stop_scheduler()
     monkeypatch.setenv("JOB_SCHEDULER_ENABLED", "true")
+    monkeypatch.setenv("JOB_INDEXING_DURABLE_ENABLED", "false")
     scheduler.start_scheduler()
     assert scheduler._scheduler is not None and scheduler._scheduler.running
 
     monkeypatch.setenv("JOB_SCHEDULER_ENABLED", "false")
     scheduler.start_scheduler()
 
+    assert scheduler._scheduler is None
+
+
+@pytest.mark.asyncio
+async def test_scheduler_registers_durable_worker_only_after_full_rollout(monkeypatch):
+    scheduler.stop_scheduler()
+    monkeypatch.setenv("JOB_SCHEDULER_ENABLED", "true")
+    monkeypatch.setenv("JOB_INDEXING_DURABLE_ENABLED", "true")
+    monkeypatch.setenv("JOB_INDEXING_WORKER_ENABLED", "true")
+    monkeypatch.setenv("JOB_INDEXING_LEGACY_WRITERS_DISABLED", "true")
+
+    try:
+        scheduler.start_scheduler()
+        assert scheduler._scheduler is not None
+        assert scheduler._scheduler.get_job("job_indexing_worker") is not None
+    finally:
+        scheduler.stop_scheduler()
+
+
+def test_durable_scheduler_configuration_fails_before_start(monkeypatch):
+    scheduler.stop_scheduler()
+    monkeypatch.setenv("JOB_SCHEDULER_ENABLED", "false")
+    monkeypatch.setenv("JOB_INDEXING_DURABLE_ENABLED", "true")
+    monkeypatch.setenv("JOB_INDEXING_WORKER_ENABLED", "true")
+    monkeypatch.setenv("JOB_INDEXING_LEGACY_WRITERS_DISABLED", "true")
+
+    with pytest.raises(RuntimeError, match="JOB_SCHEDULER_ENABLED=true"):
+        scheduler.start_scheduler()
     assert scheduler._scheduler is None
 
 

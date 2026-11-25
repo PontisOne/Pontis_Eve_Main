@@ -15,6 +15,10 @@ _CERTIFICATION_BOILERPLATE_WORDS = {
     "credentials",
     "training",
 }
+_CERTIFICATION_MARKER_RE = re.compile(
+    r"\b(?:cert|certificate|certificates|certification|certifications|certified|course|courses|credential|credentials|training|license|licence)\b",
+    re.I,
+)
 
 
 def _normalize_text(value: Any) -> str:
@@ -92,19 +96,8 @@ def _normalize_skills(skills: Any, certifications: Any = None) -> list[str]:
         if key in seen:
             continue
         if any(_normalize_key(cert) == key for cert in normalized_certs) and (
-            re.search(
-                r"\b(?:cert|certificate|certificates|certification|certifications|certified|course|courses|credential|credentials|training|license|licence)\b",
-                cleaned,
-                re.I,
-            )
-            or any(
-                re.search(
-                    r"\b(?:cert|certificate|certificates|certification|certifications|certified|course|courses|credential|credentials|training|license|licence)\b",
-                    cert,
-                    re.I,
-                )
-                for cert in normalized_certs
-            )
+            _CERTIFICATION_MARKER_RE.search(cleaned)
+            or any(_CERTIFICATION_MARKER_RE.search(cert) for cert in normalized_certs)
         ):
             continue
         seen.add(key)
@@ -113,17 +106,24 @@ def _normalize_skills(skills: Any, certifications: Any = None) -> list[str]:
     return normalized
 
 
+def _parse_json_value(value: Any, fallback: Any) -> Any:
+    if not isinstance(value, str):
+        return value
+    try:
+        return json.loads(value)
+    except Exception:
+        return fallback
+
+
 def build_candidate_text(candidate: dict[str, Any]) -> str:
     """
     Build structured semantic text from a candidate DB row for embedding.
     Mirrors Adam's candidate text format for compatibility with the shared vector space.
     """
-    raw_data = candidate.get("raw_data") or {}
-    if isinstance(raw_data, str):
-        try:
-            raw_data = json.loads(raw_data)
-        except Exception:
-            raw_data = {}
+    from candidate_profile_normalization import normalize_candidate_for_matching
+
+    candidate = normalize_candidate_for_matching(candidate)
+    raw_data = _parse_json_value(candidate.get("raw_data") or {}, {})
 
     parts = []
 
@@ -146,7 +146,8 @@ def build_candidate_text(candidate: dict[str, Any]) -> str:
         preferred_roles = [preferred_roles]
     if preferred_roles:
         parts.append(
-            f"Target / Preferred Roles:\n{', '.join(str(role) for role in preferred_roles if role)}"
+            "Target / Preferred Roles:\n"
+            f"{', '.join(str(role) for role in preferred_roles if role)}"
         )
 
     current_role = (candidate.get("current_role") or "").strip()
@@ -170,25 +171,19 @@ def build_candidate_text(candidate: dict[str, Any]) -> str:
             parts.append(f"Experience:\n{duration} of professional experience")
 
     skills_raw = candidate.get("skills") or []
-    if isinstance(skills_raw, str):
-        try:
-            skills_raw = json.loads(skills_raw)
-        except Exception:
-            skills_raw = []
+    skills_raw = _parse_json_value(skills_raw, [])
     certifications = _normalize_certifications(raw_data.get("certifications") or [])
     skill_names = _normalize_skills(skills_raw, certifications=certifications)
     if skill_names:
         parts.append(f"Skills:\n{', '.join(skill_names)}")
 
     work_exp = candidate.get("work_experience") or []
-    if isinstance(work_exp, str):
-        try:
-            work_exp = json.loads(work_exp)
-        except Exception:
-            work_exp = []
-    if work_exp:
+    work_exp = _parse_json_value(work_exp, [])
+    if isinstance(work_exp, list) and work_exp:
         lines = []
         for w in work_exp:
+            if not isinstance(w, dict):
+                continue
             title = w.get("title", "")
             company = w.get("company", "")
             desc = w.get("description", "")
@@ -201,11 +196,7 @@ def build_candidate_text(candidate: dict[str, Any]) -> str:
             parts.append("Work Experience:\n" + "\n".join(lines))
 
     education = candidate.get("education") or []
-    if isinstance(education, str):
-        try:
-            education = json.loads(education)
-        except Exception:
-            education = []
+    education = _parse_json_value(education, [])
     if education:
         lines = []
         for e in education:

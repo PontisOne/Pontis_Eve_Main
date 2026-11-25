@@ -11,6 +11,8 @@ _ALIASES = {
     "gcp": "Google Cloud Platform",
     "google cloud": "Google Cloud Platform",
     "google cloud platform": "Google Cloud Platform",
+    "aws": "AWS",
+    "amazon web services": "AWS",
     "js": "JavaScript",
     "javascript": "JavaScript",
     "ts": "TypeScript",
@@ -32,14 +34,26 @@ def _text(value: Any) -> str:
 
 
 def canonical_skill(value: Any) -> str:
-    """Return a display-safe canonical label only for explicitly safe aliases."""
+    """Convert known alternative skill names into standard display names."""
     text = _text(value)
     return _ALIASES.get(text.casefold(), text)
 
 
 def canonical_skill_key(value: Any) -> str:
+    """Creates normalized keys for skill comparison and duplicate detection."""
     canonical = canonical_skill(value)
     return re.sub(r"[\s._-]+", "", canonical.casefold())
+
+
+def skill_variants(value: Any) -> set[str]:
+    """Return the original, canonical, and known alias spellings."""
+    text = _text(value)
+    canonical = canonical_skill(text)
+    return {
+        alias
+        for alias, target in {**_ALIASES, canonical.casefold(): canonical}.items()
+        if target == canonical
+    } | {text.casefold(), canonical.casefold()}
 
 
 def skill_values(value: Any) -> list[str]:
@@ -73,8 +87,9 @@ def merge_skills(
 
 
 def canonical_skill_set(value: Any) -> set[str]:
-    return {
-        canonical_skill_key(item)
-        for item in skill_values(value)
-        if canonical_skill_key(item)
-    }
+    result: set[str] = set()
+    for item in skill_values(value):
+        key = canonical_skill_key(item)
+        if key:
+            result.add(key)
+    return result

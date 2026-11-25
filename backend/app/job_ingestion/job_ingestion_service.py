@@ -1,7 +1,9 @@
 import hashlib
 import json
 import logging
-from typing import Any
+import re
+import uuid
+from typing import Any, cast
 
 from sqlalchemy import text
 
@@ -26,11 +28,65 @@ _EXISTING_ATS_JOB_COLUMNS = (
     "experience_required",
     "salary_range",
     "employment_type",
+    "opportunity_type",
     "structured_data",
+    "remote_policy",
     "ats_type",
     "ats_job_id",
 )
 _EXISTING_LOOKUP_UNSET = object()
+_EMBEDDING_JOB_COLUMNS = (
+    "id",
+    "ats_job_id",
+    "ats_type",
+    "title",
+    "company_name",
+    "department",
+    "industry",
+    "responsibilities",
+    "requirements",
+    "skills_required",
+    "skills",
+    "experience_required",
+    "experience_level",
+    "employment_type",
+    "remote_policy",
+    "location",
+    "city",
+    "state",
+    "country",
+    "remote",
+    "salary_range",
+    "description",
+    "structured_data",
+    "job_url",
+)
+_PLACEHOLDER_VALUES = {
+    "",
+    "na",
+    "n/a",
+    "none",
+    "null",
+    "unknown",
+    "not disclosed",
+    "not provided",
+    "not specified",
+    "description",
+    "job description",
+    "job details",
+}
+_STRUCTURED_CONTENT_KEYS = {
+    "description",
+    "summary",
+    "requirements",
+    "responsibilities",
+    "skills",
+    "skills_required",
+    "preferred_skills",
+    "technologies",
+    "technology_slugs",
+    "tools",
+}
 
 
 def _ats_identity_state(
@@ -76,8 +132,13 @@ def _existing_ats_job(row: Any) -> dict[str, Any] | None:
     mapping = getattr(row, "_mapping", None)
     if mapping is not None:
         return {column: mapping.get(column) for column in _EXISTING_ATS_JOB_COLUMNS}
+    # Keep unit-test/legacy row projections readable while callers migrate to
+    # the richer metadata lookup projection.
+    values = list(row)
+    if len(values) == len(_EXISTING_ATS_JOB_COLUMNS) - 2:
+        values = values[:9] + [None, values[9], None] + values[10:]
     return {
-        column: row[index] if len(row) > index else None
+        column: values[index] if len(values) > index else None
         for index, column in enumerate(_EXISTING_ATS_JOB_COLUMNS)
     }
 
@@ -89,7 +150,8 @@ async def find_existing_ats_job(
     result = await db.execute(
         text("""
             SELECT id, job_url, description, requirements, skills, skills_required,
-                   experience_required, salary_range, employment_type, structured_data,
+                   experience_required, salary_range, employment_type, opportunity_type,
+                   structured_data, remote_policy,
                    ats_type, ats_job_id
             FROM job_descriptions
             WHERE ats_type = :ats_type
@@ -113,7 +175,8 @@ async def find_existing_ats_job_by_id_or_url(
     result = await db.execute(
         text("""
             SELECT id, job_url, description, requirements, skills, skills_required,
-                   experience_required, salary_range, employment_type, structured_data,
+                   experience_required, salary_range, employment_type, opportunity_type,
+                   structured_data, remote_policy,
                    ats_type, ats_job_id
             FROM job_descriptions
             WHERE (ats_type = :ats_type AND ats_job_id = :ats_job_id)
@@ -124,6 +187,131 @@ async def find_existing_ats_job_by_id_or_url(
         {"ats_type": ats_type, "ats_job_id": ats_job_id, "job_url": job_url},
     )
     return _existing_ats_job(result.first())
+
+
+async def load_persisted_job_for_embedding(db, job_id: str) -> dict[str, Any]:
+    """Load the database-authoritative job used for vector and payload writes."""
+    result = await db.execute(
+        text("""
+            SELECT id, ats_job_id, ats_type, title, company_name, department,
+                   industry, responsibilities, requirements, skills_required, skills,
+                   experience_required, experience_level, employment_type,
+                   remote_policy, location, city, state, country, remote,
+                   salary_range, description, structured_data, job_url
+            FROM job_descriptions
+            WHERE id = CAST(:id AS UUID)
+            LIMIT 1
+        """),
+        {"id": job_id},
+    )
+    row = result.first()
+    if row is None:
+        raise RuntimeError(f"Persisted ATS job was not found for embedding: {job_id}")
+    if isinstance(row, dict):
+        return {column: row.get(column) for column in _EMBEDDING_JOB_COLUMNS}
+    mapping = getattr(row, "_mapping", None)
+    if mapping is not None:
+        return {column: mapping.get(column) for column in _EMBEDDING_JOB_COLUMNS}
+    values = list(row)
+    return {
+        column: values[index] if len(values) > index else None
+        for index, column in enumerate(_EMBEDDING_JOB_COLUMNS)
+    }
+
+
+def _meaningful_index_text(value: Any) -> bool:
+    if isinstance(value, str):
+        normalized = _normalized_index_text(value)
+        if not normalized or normalized in _PLACEHOLDER_VALUES:
+            return False
+        return normalized not in {
+            "apply now",
+            "we are hiring",
+            "equal opportunity employer",
+            "competitive compensation",
+        }
+    if isinstance(value, (list, tuple, set)):
+        return any(_meaningful_index_text(item) for item in value)
+    return False
+
+
+def _normalized_index_text(value: str) -> str:
+    return " ".join(value.casefold().split()).strip(" .:;-_")
+
+
+def _structured_index_content(value: Any) -> bool:
+    if isinstance(value, dict):
+        for key, item in value.items():
+            normalized_key = str(key).casefold()
+            if normalized_key in _STRUCTURED_CONTENT_KEYS and _meaningful_index_text(
+                item
+            ):
+                return True
+            if isinstance(item, (dict, list)) and _structured_index_content(item):
+                return True
+    elif isinstance(value, list):
+        return any(_structured_index_content(item) for item in value)
+    return False
+
+
+def is_job_indexable(job: dict[str, Any]) -> bool:
+    """Return whether a final persisted job has useful candidate-search content."""
+    if not isinstance(job, dict) or _valid_http_url(job.get("job_url")) is None:
+        return False
+    title = job.get("title")
+    company = job.get("company_name")
+    if not _meaningful_index_text(title):
+        return False
+    normalized_title = _normalized_index_text(str(title))
+    if normalized_title in {"untitled ats job", "untitled"}:
+        return False
+    if not _meaningful_index_text(company):
+        return False
+    normalized_company = _normalized_index_text(str(company))
+    if normalized_company in {"unknown company", "unknown employer"}:
+        return False
+
+    for field in (
+        "description",
+        "requirements",
+        "responsibilities",
+        "skills",
+        "skills_required",
+        "skills_preferred",
+        "preferred_skills",
+        "technologies",
+    ):
+        if _meaningful_index_text(job.get(field)):
+            return True
+    return _structured_index_content(job.get("structured_data"))
+
+
+async def _sync_final_job_qdrant(
+    db, job_id: str, *, has_valid_url: bool = True
+) -> None:
+    """Index or remove the deterministic point for a committed final row."""
+    from app.job_ingestion.durable_indexing import durable_indexing_enabled
+
+    if durable_indexing_enabled():
+        # The durable work row is created inside the job mutation transaction.
+        # Do not enqueue again from this post-commit compatibility hook.
+        return
+    if not has_valid_url:
+        from app.job_ingestion.qdrant_service import delete_job_embedding
+
+        delete_job_embedding(str(job_id))
+        return
+    final_job = await load_persisted_job_for_embedding(db, job_id)
+    if not is_job_indexable(final_job):
+        from app.job_ingestion.qdrant_service import delete_job_embedding
+
+        delete_job_embedding(str(job_id))
+        return
+    from app.job_ingestion.embedding_service import generate_job_embedding
+    from app.job_ingestion.qdrant_service import ensure_collection, upsert_job_embedding
+
+    ensure_collection()
+    upsert_job_embedding(str(job_id), generate_job_embedding(final_job), final_job)
 
 
 def _merge_existing_undisclosed_markers(
@@ -180,13 +368,58 @@ async def upsert_ats_job(
     *,
     existing_job: dict[str, Any] | None | object = _EXISTING_LOOKUP_UNSET,
 ) -> str:
+    """Persist one job while serializing its durable indexing intent."""
+    from app.job_ingestion.durable_indexing import (
+        durable_indexing_enabled,
+        session_job_advisory_lock,
+    )
+
+    if not durable_indexing_enabled():
+        return await _upsert_ats_job_body(db, job, existing_job=existing_job)
+
+    inspected = existing_job
+    if inspected is _EXISTING_LOOKUP_UNSET:
+        ats_type = str(job.get("ats_type") or "").strip()
+        ats_job_id = str(job.get("ats_job_id") or "").strip()
+        inspected = await find_existing_ats_job(db, ats_type, ats_job_id)
+    inspected = cast(dict[str, Any] | None, inspected)
+    lock_job_id = str(inspected["id"]) if inspected else str(uuid.uuid4())
+    try:
+        async with session_job_advisory_lock(db, lock_job_id):
+            return await _upsert_ats_job_body(
+                db,
+                job,
+                existing_job=inspected,
+                _forced_job_id=lock_job_id,
+            )
+    except BaseException:
+        await db.rollback()
+        raise
+
+
+async def _upsert_ats_job_body(
+    db,
+    job: dict[str, Any],
+    *,
+    existing_job: dict[str, Any] | None | object = _EXISTING_LOOKUP_UNSET,
+    _forced_job_id: str | None = None,
+) -> str:
     """
     Insert or update one normalized ATS job.
 
     Returns:
         The job_descriptions.id UUID as a string.
     """
+    from app.job_ingestion.durable_indexing import (
+        durable_indexing_enabled,
+        enqueue_indexing_work,
+    )
 
+    incoming_structured = job.get("structured_data") if isinstance(job, dict) else None
+    incoming_opportunity = (
+        job.get("opportunity_type") if isinstance(job, dict) else None
+    )
+    incoming_remote_policy = job.get("remote_policy") if isinstance(job, dict) else None
     job = _persistence_safe_job(job)
     ats_type = job["ats_type"]
     ats_job_id = str(job.get("ats_job_id") or "").strip()
@@ -204,6 +437,7 @@ async def upsert_ats_job(
         if existing_job is _EXISTING_LOOKUP_UNSET
         else existing_job
     )
+    existing = cast(dict[str, Any] | None, existing)
     # A caller may supply a legacy projection without identity columns. It is
     # neither trusted as a match nor treated as a collision: verify it with a
     # stable-ID lookup. A known mismatch (such as a URL collision) is likewise
@@ -217,9 +451,20 @@ async def upsert_ats_job(
             else None
         )
 
+    if existing:
+        # The persistence boundary supplies insert defaults, but those defaults
+        # are not evidence that a provider supplied an update value.
+        if not _meaningful_structured_data(incoming_structured):
+            existing_structured = cast(dict[str, Any], existing).get("structured_data")
+            if isinstance(existing_structured, (dict, list)):
+                job["structured_data"] = existing_structured
+        if not _meaningful_opportunity_type(incoming_opportunity):
+            job["opportunity_type"] = None
+        if not _meaningful_remote_policy(incoming_remote_policy):
+            job["remote_policy"] = None
+        _merge_existing_undisclosed_markers(job, existing)
     _record_description_fingerprint(job)
     if existing:
-        _merge_existing_undisclosed_markers(job, existing)
         job_id = existing["id"]
         # Support legacy test/session rows that predate the requirements column.
         existing_job_url = existing.get("job_url")
@@ -251,6 +496,9 @@ async def upsert_ats_job(
         # ATS metadata is refreshed on every sync.  COALESCE prevents an
         # incomplete public-board response from erasing prior data, while
         # allowing historical empty rows to be backfilled.
+        update_params = _metadata_params(job)
+        update_params["opportunity_type"] = job.get("opportunity_type")
+        update_params["remote_policy"] = job.get("remote_policy")
         await db.execute(
             text("""
                 UPDATE job_descriptions
@@ -281,9 +529,13 @@ async def upsert_ats_job(
                 "description": incoming_description,
                 "is_global_provider": ats_type in {"fantastic", "theirstack"},
                 "refresh_description": refresh_description,
-                **_metadata_params(job),
+                **update_params,
             },
         )
+        if durable_indexing_enabled():
+            await enqueue_indexing_work(
+                db, str(job_id), operation="upsert", lock_held=True
+            )
         await db.commit()
         if (
             not (existing_job_url or "").strip() and incoming_job_url is not None
@@ -297,22 +549,20 @@ async def upsert_ats_job(
             )
         # Recreate a point that may have been removed while the job was closed.
         # URL-less jobs deliberately remain out of Qdrant.
-        if _valid_http_url(existing_job_url) or incoming_job_url:
-            try:
-                from app.job_ingestion.embedding_service import generate_job_embedding
-                from app.job_ingestion.qdrant_service import (
-                    ensure_collection,
-                    upsert_job_embedding,
-                )
-
-                ensure_collection()
-                upsert_job_embedding(str(job_id), generate_job_embedding(job), job)
-            except Exception as exc:
-                logger.error(
-                    "Qdrant embedding upsert failed for reactivated job_id=%s: %s",
-                    job_id,
-                    exc,
-                )
+        try:
+            await _sync_final_job_qdrant(
+                db,
+                job_id,
+                has_valid_url=bool(
+                    _valid_http_url(existing_job_url) or incoming_job_url
+                ),
+            )
+        except Exception as exc:
+            logger.error(
+                "Qdrant embedding upsert failed for reactivated job_id=%s: %s",
+                job_id,
+                exc,
+            )
         return str(job_id)
 
     # Fantastic is a global provider: it intentionally has neither a
@@ -410,7 +660,7 @@ async def upsert_ats_job(
                 'active',
                 COALESCE(:created_at, NOW()),
                 NOW(),
-                gen_random_uuid(),
+                CAST(:id AS UUID),
                 :agency_id,
                 :company_registry_id,
                 'PONTIS',
@@ -431,6 +681,7 @@ async def upsert_ats_job(
             RETURNING id
         """),
         {
+            "id": _forced_job_id or str(uuid.uuid4()),
             "title": job["title"],
             "company_name": job["company_name"],
             "department": job.get("department"),
@@ -459,23 +710,17 @@ async def upsert_ats_job(
 
     new_id = result.scalar_one()
 
+    if durable_indexing_enabled():
+        await enqueue_indexing_work(db, str(new_id), operation="upsert", lock_held=True)
     await db.commit()
 
     # A malformed/no-URL ATS job is retained for audit but never indexed.
-    if _valid_http_url(job.get("job_url")):
-        try:
-            from app.job_ingestion.embedding_service import generate_job_embedding
-            from app.job_ingestion.qdrant_service import (
-                ensure_collection,
-                upsert_job_embedding,
-            )
-
-            ensure_collection()
-            upsert_job_embedding(str(new_id), generate_job_embedding(job), job)
-        except Exception as exc:
-            logger.error(
-                "Qdrant embedding upsert failed for job_id=%s: %s", new_id, exc
-            )
+    try:
+        await _sync_final_job_qdrant(
+            db, new_id, has_valid_url=bool(_valid_http_url(job.get("job_url")))
+        )
+    except Exception as exc:
+        logger.error("Qdrant embedding upsert failed for job_id=%s: %s", new_id, exc)
 
     return str(new_id)
 
@@ -512,6 +757,45 @@ def _metadata_params(job: dict[str, Any]) -> dict[str, Any]:
         # that stored ISO timestamps as strings.
         "created_at": parse_ats_datetime(safe.get("created_at")),
     }
+
+
+def _meaningful_structured_data(value: Any) -> bool:
+    if isinstance(value, dict):
+        markers = value.get("explicitly_undisclosed")
+        if isinstance(markers, dict) and any(
+            marker is True for marker in markers.values()
+        ):
+            return True
+        return any(_meaningful_structured_data(item) for item in value.values())
+    if isinstance(value, list):
+        return any(_meaningful_structured_data(item) for item in value)
+    if isinstance(value, str):
+        return bool(value.strip())
+    return value is not None
+
+
+def _meaningful_opportunity_type(value: Any) -> bool:
+    return bool(normalize_opportunity_type(value, default=""))
+
+
+def _meaningful_remote_policy(value: Any) -> bool:
+    if not isinstance(value, str):
+        return False
+    normalized = value.strip().casefold()
+    if normalized in {
+        "",
+        "unknown",
+        "unspecified",
+        "not specified",
+        "n/a",
+        "na",
+        "none",
+        "null",
+    }:
+        return False
+    # Match the existing job work-mode normalization: remote, hybrid, and
+    # onsite (including the provider's common hyphen/space variants).
+    return bool(re.search(r"\b(?:remote|hybrid|on[ -]?site)\b", normalized))
 
 
 def _persistence_safe_job(job: dict[str, Any]) -> dict[str, Any]:

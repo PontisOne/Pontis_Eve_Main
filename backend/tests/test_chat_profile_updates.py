@@ -12,6 +12,9 @@ Covers:
 
 import os
 import sys
+from typing import Any
+
+import pytest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
@@ -215,6 +218,41 @@ class TestChatExperienceCompletion:
 
         assert profile["experience"][0]["dates"] == "Feb 2024"
         assert "Present" not in profile["experience"][0]["dates"]
+
+    def test_start_and_end_dates_are_both_rendered(self):
+        profile = server._normalize_for_frontend(
+            {
+                "work_experience": [
+                    {"start_date": "Feb 2024", "end_date": "Sept 2024"}
+                ],
+                "raw_data": {},
+            }
+        )
+
+        dates = profile["experience"][0]["dates"]
+        assert dates.startswith("Feb 2024")
+        assert dates.endswith("Sept 2024")
+        assert "Present" not in dates
+
+    def test_missing_start_and_end_dates_render_empty_dates(self):
+        profile = server._normalize_for_frontend(
+            {"work_experience": [{}], "raw_data": {}}
+        )
+
+        assert profile["experience"][0]["dates"] == ""
+
+    @pytest.mark.parametrize("end_date", [None, ""])
+    def test_null_or_empty_end_date_is_not_rendered_as_present(self, end_date):
+        profile = server._normalize_for_frontend(
+            {
+                "work_experience": [
+                    {"start_date": "Feb 2024", "end_date": end_date}
+                ],
+                "raw_data": {},
+            }
+        )
+
+        assert profile["experience"][0]["dates"] == "Feb 2024"
 
     def test_new_incomplete_chat_experience_is_blocked(self):
         missing = server._incomplete_new_chat_experience(
@@ -914,7 +952,7 @@ class _TestMergeProfileUpdatesAdditional:
         assert result["location"] == "London"
 
     def test_profile_deletions_not_copied_from_extra(self):
-        base = {}
+        base: dict[str, Any] = {}
         extra = {"profile_deletions": {"skills": ["FastAPI"]}, "location": "Berlin"}
         result = server._merge_profile_updates(base, extra)
         assert "profile_deletions" not in result
@@ -1084,7 +1122,7 @@ class TestMergeProfileUpdates:
         assert result["location"] == "London"
 
     def test_profile_deletions_not_copied_from_extra(self):
-        base = {}
+        base: dict[str, Any] = {}
         extra = {"profile_deletions": {"skills": ["FastAPI"]}, "location": "Berlin"}
         result = server._merge_profile_updates(base, extra)
         assert "profile_deletions" not in result

@@ -7,6 +7,8 @@ Covers all 12 required test scenarios plus structural validation.
 import os
 import sys
 
+import pytest
+
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 import candidate_job_matching_service as matcher
@@ -189,6 +191,41 @@ class TestMissingRequiredSkill:
         strong_text = " ".join(expl["strong"]).lower()
         assert "python" in strong_text
         assert "fastapi" in strong_text
+        assert components["match_explanation"]["missing"] == ["PostgreSQL"]
+
+    def test_explanation_lists_multiple_missing_skills(self):
+        signals = {
+            "target_roles": ["Backend Engineer"],
+            "skills": ["Python"],
+            "past_roles": ["Backend Engineer"],
+        }
+        _, components = _score(
+            signals,
+            "Backend Engineer",
+            "Requires Python, FastAPI, PostgreSQL, and Redis.",
+            semantic=0.8,
+            intel=_intel(ev_level=3),
+        )
+        assert components["match_explanation"]["missing"] == [
+            "FastAPI",
+            "PostgreSQL",
+            "Redis",
+        ]
+
+    def test_explanation_has_no_missing_skills_for_full_coverage(self):
+        signals = {
+            "target_roles": ["Backend Engineer"],
+            "skills": ["Python", "FastAPI", "PostgreSQL"],
+            "past_roles": ["Backend Engineer"],
+        }
+        _, components = _score(
+            signals,
+            "Backend Engineer",
+            "Requires Python, FastAPI, PostgreSQL.",
+            semantic=0.8,
+            intel=_intel(ev_level=3),
+        )
+        assert components["match_explanation"]["missing"] == []
 
 
 # ---------------------------------------------------------------------------
@@ -304,6 +341,42 @@ class TestDemonstratedVsClaimed:
             intel=intel_demonstrated,
         )
         assert _confidence(comp_demo)["score"] > _confidence(comp_claimed)["score"]
+        assert _confidence(comp_claimed)["confidence_caps"] == ["evidence_quality"]
+        assert "evidence_quality" not in _confidence(comp_demo)["confidence_caps"]
+
+    def test_confidence_cap_metadata_reports_only_caps_that_limited_score(self):
+        signals = {
+            "target_roles": ["Backend Engineer"],
+            "skills": ["Python"],
+            "past_roles": ["Backend Engineer"],
+        }
+        components = {
+            "evidence_availability": {
+                "experience_fit": False,
+                "preferences": False,
+                "responsibility": False,
+                "semantic": True,
+            },
+            "missing_required_skills": ["Python", "PostgreSQL"],
+            "incompatibilities": ["candidate_remote_only_job_requires_onsite"],
+        }
+        components.update(
+            matcher._compute_job_specific_confidence(
+                signals,
+                "Backend Engineer",
+                "Requires Python, PostgreSQL.",
+                1.0,
+                components,
+                _intel(ev_level=1, work_mode="hard_remote_only"),
+            )
+        )
+        confidence = components["recommendation_confidence"]
+        assert isinstance(confidence, dict)
+        assert confidence["confidence_caps"] == [
+            "evidence_quality",
+            "missing_required_skills",
+            "hard_constraint",
+        ]
 
     def test_demonstrated_skill_appears_in_strong(self):
         signals = {
@@ -410,6 +483,108 @@ class TestUnclearTargetRole:
 
 
 class TestHighSeverityContradiction:
+    def test_relevant_skill_contradiction_applies_high_penalty(self):
+        signals = {
+            "target_roles": ["Backend Engineer"],
+            "skills": ["Python"],
+            "past_roles": ["Backend Engineer"],
+        }
+        contradiction = [{"field": "skill:Python", "severity": "high"}]
+        _, components = _score(
+            signals,
+            "Backend Engineer",
+            "Build Python backend services.",
+            intel=_intel(inconsistencies=contradiction),
+        )
+        assert _confidence(components)["contradiction_penalty"] == 12
+
+    def test_skill_contradiction_is_not_relevant_when_skill_is_absent(self):
+        signals = {
+            "target_roles": ["Backend Engineer"],
+            "skills": ["Python"],
+            "past_roles": ["Backend Engineer"],
+        }
+        contradiction = [{"field": "skill:Python", "severity": "high"}]
+        _, components = _score(
+            signals,
+            "Backend Engineer",
+            "Build Java backend services.",
+            intel=_intel(inconsistencies=contradiction),
+        )
+        assert _confidence(components)["contradiction_penalty"] == 0
+
+    def test_work_mode_contradiction_requires_confirmed_conflict(self):
+        signals = {
+            "target_roles": ["Backend Engineer"],
+            "skills": ["Python"],
+            "past_roles": ["Backend Engineer"],
+        }
+        contradiction = [{"field": "work_mode_preference", "severity": "high"}]
+        _, onsite = _score(
+            signals,
+            "Backend Engineer",
+            "Python backend engineer. Must work onsite every day.",
+            intel=_intel(
+                work_mode="hard_remote_only", inconsistencies=contradiction
+            ),
+        )
+        _, unknown = _score(
+            signals,
+            "Backend Engineer",
+            "Python backend engineer. Work mode is not specified.",
+            intel=_intel(inconsistencies=contradiction),
+        )
+        assert _confidence(onsite)["contradiction_penalty"] == 12
+        assert _confidence(unknown)["contradiction_penalty"] == 0
+
+    def test_employment_timeline_requires_explicit_experience_requirement(self):
+        signals = {
+            "target_roles": ["Backend Engineer"],
+            "skills": ["Python"],
+            "past_roles": ["Backend Engineer"],
+        }
+        contradiction = [{"field": "employment_timeline", "severity": "high"}]
+        _, explicit = _score(
+            signals,
+            "Backend Engineer",
+            "Python backend engineer requiring 5 years of experience.",
+            intel=_intel(inconsistencies=contradiction),
+        )
+        _, unspecified = _score(
+            signals,
+            "Backend Engineer",
+            "Python backend engineer.",
+            intel=_intel(inconsistencies=contradiction),
+        )
+        assert _confidence(explicit)["contradiction_penalty"] == 12
+        assert _confidence(unspecified)["contradiction_penalty"] == 0
+
+    def test_unknown_contradiction_field_is_diagnostic_only(self):
+        signals = {
+            "target_roles": ["Backend Engineer"],
+            "skills": ["Python"],
+            "past_roles": ["Backend Engineer"],
+        }
+        contradiction = [{
+            "field": "unknown_profile_signal",
+            "severity": "high",
+            "description": "Unmapped contradiction",
+        }]
+        _, components = _score(
+            signals,
+            "Backend Engineer",
+            "Python backend engineer.",
+            intel=_intel(inconsistencies=contradiction),
+        )
+        confidence = _confidence(components)
+        assert confidence["contradiction_penalty"] == 0
+        assert confidence["contradiction_diagnostics"] == [{
+            "field": "unknown_profile_signal",
+            "severity": "high",
+            "relevance": "unknown_or_unrelated",
+            "applied": False,
+        }]
+
     def test_contradiction_reduces_confidence(self):
         signals = {
             "target_roles": ["Backend Engineer"],
@@ -430,18 +605,77 @@ class TestHighSeverityContradiction:
         _, comp_clean = _score(
             signals,
             "Backend Engineer",
-            "Python FastAPI backend.",
+            "Python FastAPI backend requiring 5 years of experience.",
             semantic=0.85,
             intel=intel_clean,
         )
         _, comp_conflict = _score(
             signals,
             "Backend Engineer",
-            "Python FastAPI backend.",
+            "Python FastAPI backend requiring 5 years of experience.",
             semantic=0.85,
             intel=intel_conflict,
         )
         assert _confidence(comp_conflict)["score"] < _confidence(comp_clean)["score"]
+
+    def test_unrelated_high_severity_contradiction_does_not_reduce_confidence(self):
+        signals = {
+            "target_roles": ["Backend Engineer"],
+            "skills": ["Python", "FastAPI"],
+            "past_roles": ["Backend Engineer"],
+        }
+        contradiction = [{
+            "field": "skill:Salesforce",
+            "type": "hard_contradiction",
+            "severity": "high",
+            "description": "Resume claims Salesforce but voice suggests beginner",
+        }]
+        _, clean = _score(signals, "Backend Engineer", "Python FastAPI backend.", intel=_intel())
+        _, unrelated = _score(
+            signals,
+            "Backend Engineer",
+            "Python FastAPI backend.",
+            intel=_intel(inconsistencies=contradiction),
+        )
+        assert _confidence(unrelated)["score"] == _confidence(clean)["score"]
+        assert _confidence(unrelated)["contradiction_penalty"] == 0
+
+    def test_relevant_medium_contradiction_keeps_existing_penalty(self):
+        signals = {
+            "target_roles": ["Backend Engineer"],
+            "skills": ["Python"],
+            "past_roles": ["Backend Engineer"],
+        }
+        contradiction = [{
+            "field": "experience_years",
+            "type": "hard_contradiction",
+            "severity": "medium",
+            "description": "Resume claims 8 years but voice suggests 1 year",
+        }]
+        _, components = _score(
+            signals,
+            "Backend Engineer",
+            "Python backend requiring 5 years of experience.",
+            intel=_intel(inconsistencies=contradiction),
+        )
+        assert _confidence(components)["contradiction_penalty"] == 4
+
+    def test_malformed_contradiction_metadata_is_diagnostic_only(self):
+        signals = {
+            "target_roles": ["Backend Engineer"],
+            "skills": ["Python"],
+            "past_roles": ["Backend Engineer"],
+        }
+        malformed = [None, {"severity": "high"}, "not-a-record"]
+        _, components = _score(
+            signals,
+            "Backend Engineer",
+            "Python backend.",
+            intel=_intel(inconsistencies=malformed),
+        )
+        confidence = _confidence(components)
+        assert confidence["contradiction_penalty"] == 0
+        assert len(confidence["contradiction_diagnostics"]) == 3
 
     def test_contradiction_appears_in_concerns(self):
         signals = {
@@ -538,6 +772,19 @@ class TestFresherCandidate:
 
 
 class TestOutputStructure:
+    @pytest.mark.parametrize(
+        ("semantic_score", "available"),
+        [(0.8, True), (None, False), (0.0, True)],
+    )
+    def test_semantic_evidence_availability_distinguishes_missing_and_zero(
+        self, semantic_score, available
+    ):
+        signals = {"target_roles": ["Engineer"], "skills": ["Python"], "past_roles": []}
+        _, components = matcher._hybrid_score(
+            signals, "Engineer", "Python engineer.", "", [], semantic_score
+        )
+        assert components["evidence_availability"]["semantic"] is available
+
     def test_recommendation_confidence_present_in_components(self):
         signals = {"target_roles": ["Engineer"], "skills": ["Python"], "past_roles": []}
         intel = _intel()
@@ -579,6 +826,15 @@ class TestOutputStructure:
         _, components = _score(signals, "Engineer", "Python engineer.", intel=None)
         assert "recommendation_confidence" in components
         assert "match_explanation" in components
+
+    def test_confidence_preserves_evidence_provenance(self):
+        signals = {"target_roles": ["Engineer"], "skills": ["Python"], "past_roles": []}
+        _, components = _score(signals, "Engineer", "Python engineer.", intel=_intel())
+        confidence = components["recommendation_confidence"]
+        assert confidence["evidence_availability"] == components["evidence_availability"]
+        assert confidence["unavailable_evidence"] == ["experience_fit", "preferences", "responsibility"]
+        assert confidence["confidence_caps"] == []
+        assert confidence["contradiction_penalty"] == 0
 
     def test_three_levels_are_distinct(self):
         """Profile Strength, Recommendation Readiness, and Job-Specific Confidence are separate."""

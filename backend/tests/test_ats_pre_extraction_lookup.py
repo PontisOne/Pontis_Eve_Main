@@ -196,7 +196,9 @@ def test_global_id_or_url_lookup_returns_metadata_and_collision_identity():
         "experience_required": "5 years",
         "salary_range": "$100k-$120k",
         "employment_type": "Full-time",
+        "opportunity_type": None,
         "structured_data": {"metadata_extraction_status": "complete"},
+        "remote_policy": None,
         "ats_type": "fantastic",
         "ats_job_id": "f-1",
     }
