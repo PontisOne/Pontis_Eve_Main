@@ -2,6 +2,7 @@
 
 import os
 import sys
+from typing import cast
 
 import pytest
 
@@ -27,14 +28,14 @@ INDIA_CANDIDATE = {
         ({"country": "United States"}, False),
         ({"country": "United Kingdom"}, False),
         ({"country": "", "remote_policy": "global"}, True),
-        ({"country": ""}, False),
+        ({"country": ""}, True),
     ],
 )
 def test_country_boundary_matrix(job, eligible):
     assert country_eligible(INDIA_CANDIDATE, job) is eligible
 
 
-def test_city_only_never_infers_country_and_fails_closed():
+def test_city_only_never_infers_country_but_remains_unknown():
     candidate = {"location": "Hyderabad", "raw_data": {}}
     assert candidate_location(candidate) == {
         "country_code": "",
@@ -42,7 +43,7 @@ def test_city_only_never_infers_country_and_fails_closed():
         "state": "",
         "preferred": "",
     }
-    assert not country_eligible(candidate, {"country": "India"})
+    assert country_eligible(candidate, {"country": "India"})
 
 
 @pytest.mark.parametrize(
@@ -158,13 +159,170 @@ def test_remote_only_does_not_bypass_country_and_rejects_onsite_or_hybrid():
 
 def test_relevance_gate_skill_or_role():
     signals = {"skills": ["Python"], "target_roles": ["Backend Engineer"]}
-    assert matcher._job_passes_skills_or_role(signals, "Unrelated", "Python services")
+    assert not matcher._job_passes_skills_or_role(
+        signals, "Unrelated", "Python services"
+    )
     assert matcher._job_passes_skills_or_role(
         signals, "Backend Engineer", "No matching technology"
     )
     assert not matcher._job_passes_skills_or_role(
         signals, "Data Analyst", "SQL reporting"
     )
+
+
+def test_stored_recommendation_relevance_uses_current_candidate_profile():
+    candidate = {
+        "current_role": "Python Backend Engineer",
+        "skills": ["Python", "FastAPI"],
+        "raw_data": {"country": "India"},
+    }
+    irrelevant = matcher.stored_recommendation_relevance(
+        candidate,
+        {
+            "title": "Product Manager",
+            "description": "Works with backend engineers.",
+            "country": "India",
+        },
+    )
+    relevant = matcher.stored_recommendation_relevance(
+        candidate,
+        {
+            "title": "Python Backend Engineer",
+            "description": "Build APIs with Python and FastAPI.",
+            "country": "India",
+        },
+    )
+
+    assert irrelevant["eligible"] is False
+    assert relevant["eligible"] is True
+
+
+def test_stored_recommendation_relevance_preserves_unknown_experience():
+    result = matcher.stored_recommendation_relevance(
+        {
+            "current_role": "Python Backend Engineer",
+            "skills": ["Python", "FastAPI"],
+            "raw_data": {"country": "India"},
+        },
+        {
+            "title": "Python Backend Engineer",
+            "description": "Build APIs with Python and FastAPI.",
+            "country": "India",
+        },
+    )
+
+    assert result["eligible"] is True
+    assert result["experience_reconciliation_status"] == "unknown"
+
+
+@pytest.mark.parametrize(
+    ("candidate_role", "title", "description", "expected"),
+    [
+        ("Backend Engineer", "Product Manager", "Works with backend engineers", False),
+        ("Python Backend Engineer", "Frontend Developer", "Build Python services", False),
+        ("Python Backend Engineer", "Python Developer", "Build APIs", True),
+        ("Backend Engineer", "Software Engineer", "Build backend APIs with Python and FastAPI", True),
+        ("Python Developer", "Product Manager", "Owns roadmap for Python platform", False),
+    ],
+)
+def test_title_led_relevance_matrix(candidate_role, title, description, expected):
+    signals = {"skills": ["Python", "FastAPI"], "target_roles": [candidate_role]}
+    assert matcher._job_passes_skills_or_role(
+        signals, title, f"{title}\n{description}"
+    ) is expected
+
+
+def test_explicit_required_skills_are_hard_filter_but_preferred_skills_are_not():
+    signals = {"skills": ["Python", "FastAPI"], "target_roles": ["Backend Engineer"]}
+    assert matcher._job_passes_skills_or_role(
+        signals,
+        "Backend Engineer",
+        "Backend Engineer\nRequired Skills:\nPython, FastAPI",
+        ["Python", "FastAPI"],
+    )
+    assert not matcher._job_passes_skills_or_role(
+        signals,
+        "Backend Engineer",
+        "Backend Engineer\nRequired Skills:\nPython, Java, Spring Boot",
+        ["Python", "Java", "Spring Boot"],
+    )
+    assert matcher._job_passes_skills_or_role(
+        signals, "Backend Engineer", "Backend Engineer\nPreferred: Kafka"
+    )
+
+
+def test_structured_required_skill_aliases_are_normalized():
+    signals = {"skills": ["Postgres", "JS"], "target_roles": []}
+    required = cast(list[str], [{"name": "PostgreSQL"}, {"skill": "JavaScript"}])
+
+    assert matcher._job_passes_skills_or_role(
+        signals,
+        "Postgres JavaScript Engineer",
+        "Postgres JavaScript Engineer",
+        required,
+    )
+
+
+@pytest.mark.parametrize(
+    ("candidate_skill", "required_skill"),
+    [
+        ("AWS", "Amazon Web Services"),
+        ("Amazon Web Services", "AWS"),
+        ("  aws  ", " amazon   web services "),
+    ],
+)
+def test_aws_skill_alias_matches_in_mandatory_requirements(
+    candidate_skill, required_skill
+):
+    signals = {"skills": [candidate_skill], "target_roles": []}
+
+    assert matcher._job_passes_skills_or_role(
+        signals,
+        "AWS Engineer",
+        "AWS Engineer",
+        [required_skill],
+    )
+
+
+def test_malformed_structured_mandatory_skills_are_unknown_not_literal_values():
+    signals = {"skills": ["Python"], "target_roles": []}
+    malformed = [None, 42, True, {"unexpected": "value"}, "   "]
+
+    assert matcher._normalize_structured_required_skills(malformed) == []
+    assert matcher._job_passes_skills_or_role(
+        signals, "Python Engineer", "Python Engineer", []
+    )
+
+
+def test_mixed_structured_mandatory_skills_ignore_malformed_entries():
+    signals = {"skills": ["AWS"], "target_roles": []}
+    required = [None, {"name": "Amazon Web Services"}, 42, {"unexpected": "Java"}]
+
+    assert matcher._normalize_structured_required_skills(required) == [
+        "Amazon Web Services"
+    ]
+    assert matcher._job_passes_skills_or_role(
+        signals, "Cloud Engineer", "Cloud Engineer AWS",
+        matcher._normalize_structured_required_skills(required),
+    )
+
+
+def test_all_malformed_stored_requirements_do_not_reject_relevant_job():
+    result = matcher.stored_recommendation_relevance(
+        {
+            "current_role": "Python Backend Engineer",
+            "skills": ["Python", "FastAPI"],
+            "raw_data": {"country": "India"},
+        },
+        {
+            "title": "Python Backend Engineer",
+            "description": "Build APIs with Python and FastAPI.",
+            "skills_required": [None, 42, {"unexpected": "Java"}],
+            "country": "India",
+        },
+    )
+
+    assert result["eligible"] is True
 
 
 def test_relevant_history_requires_complete_role_phrase():

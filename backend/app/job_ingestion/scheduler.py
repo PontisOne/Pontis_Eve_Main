@@ -4,14 +4,14 @@ import os
 import sys
 from datetime import datetime
 from pathlib import Path
+from typing import Any, cast
 from zoneinfo import ZoneInfo
 
+from app.job_ingestion.feature_flags import provider_enabled
 from apscheduler.events import EVENT_JOB_ERROR, EVENT_JOB_EXECUTED
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
 from sqlalchemy import text
-
-from app.job_ingestion.feature_flags import provider_enabled
 
 logger = logging.getLogger(__name__)
 
@@ -60,14 +60,17 @@ async def reconcile_missing_ats_jobs(
         "workable",
     } and not provider_enabled(ats_type):
         logger.info(
-            "[job-lifecycle] provider=%s reconciliation skipped because provider is disabled",
+            "[job-lifecycle] provider=%s reconciliation skipped because "
+            "provider is disabled",
             ats_type,
         )
         return []
     if ats_type not in {"ashby", "lever", "greenhouse", "workable"}:
         logger.info(
-            "[job-lifecycle] provider=%s snapshot_status=unsupported_for_reconciliation "
-            "pages_fetched=0 jobs_seen=%d jobs_closed=0 jobs_reactivated=0 jobs_skipped=0 "
+            "[job-lifecycle] provider=%s snapshot_status=unsupported_for_"
+            "reconciliation "
+            "pages_fetched=0 jobs_seen=%d jobs_closed=0 jobs_reactivated=0 "
+            "jobs_skipped=0 "
             "reason=provider_response_is_not_a_complete_board_snapshot",
             ats_type,
             len(current_ats_ids),
@@ -96,17 +99,35 @@ async def reconcile_missing_ats_jobs(
             len(current_ats_ids),
         )
         return []
-    await db.execute(
-        text("""
-        UPDATE job_descriptions
-        SET is_active = FALSE, status = 'closed', job_status = 'closed', updated_at = NOW()
-        WHERE id = ANY(CAST(:job_ids AS uuid[]))
-    """),
-        {"job_ids": missing},
+    from app.job_ingestion.durable_indexing import (
+        durable_indexing_enabled,
+        session_job_advisory_lock,
     )
+
+    for job_id in missing:
+        if durable_indexing_enabled():
+            async with session_job_advisory_lock(db, job_id):
+                await db.execute(text("""
+                    UPDATE job_descriptions
+                    SET is_active = FALSE, status = 'closed', job_status = 'closed', """
+                "updated_at = NOW()\n"
+                """                    WHERE id = CAST(:job_id AS UUID)
+                """), {"job_id": job_id})
+                from app.job_ingestion.durable_indexing import enqueue_indexing_work
+                await enqueue_indexing_work(
+                    db, job_id, operation="delete", lock_held=True
+                )
+        else:
+            await db.execute(text("""
+                UPDATE job_descriptions
+                SET is_active = FALSE, status = 'closed', job_status = 'closed', """
+            "updated_at = NOW()\n"
+            """                WHERE id = CAST(:job_id AS UUID)
+            """), {"job_id": job_id})
     logger.info(
         "[job-lifecycle] provider=%s snapshot_status=complete pages_fetched=1 "
-        "jobs_seen=%d jobs_closed=%d jobs_reactivated=0 jobs_skipped=0 reason=missing_from_complete_board",
+        "jobs_seen=%d jobs_closed=%d jobs_reactivated=0 jobs_skipped=0 "
+        "reason=missing_from_complete_board",
         ats_type,
         len(current_ats_ids),
         len(missing),
@@ -143,22 +164,41 @@ async def _close_confirmed_jobs(
     db_ids = [str(row[0]) for row in result.fetchall()]
     if not db_ids:
         return []
-    await db.execute(
-        text("""
-        UPDATE job_descriptions
-        SET is_active = FALSE, status = 'closed', job_status = 'closed', updated_at = NOW()
-        WHERE id = ANY(CAST(:job_ids AS uuid[]))
-    """),
-        {"job_ids": db_ids},
+    from app.job_ingestion.durable_indexing import (
+        durable_indexing_enabled,
+        session_job_advisory_lock,
     )
-    await db.execute(
-        text("""
-        UPDATE candidate_job_recommendations
-        SET hidden_at = COALESCE(hidden_at, NOW())
-        WHERE job_id = ANY(CAST(:job_ids AS uuid[]))
-    """),
-        {"job_ids": db_ids},
-    )
+
+    for job_id in db_ids:
+        if durable_indexing_enabled():
+            async with session_job_advisory_lock(db, job_id):
+                await db.execute(text("""
+                    UPDATE job_descriptions
+                    SET is_active = FALSE, status = 'closed', job_status = 'closed', """
+                "updated_at = NOW()\n"
+                """                    WHERE id = CAST(:job_id AS UUID)
+                """), {"job_id": job_id})
+                await db.execute(text("""
+                    UPDATE candidate_job_recommendations
+                    SET hidden_at = COALESCE(hidden_at, NOW())
+                    WHERE job_id = CAST(:job_id AS UUID)
+                """), {"job_id": job_id})
+                from app.job_ingestion.durable_indexing import enqueue_indexing_work
+                await enqueue_indexing_work(
+                    db, job_id, operation="delete", lock_held=True
+                )
+        else:
+            await db.execute(text("""
+                UPDATE job_descriptions
+                SET is_active = FALSE, status = 'closed', job_status = 'closed', """
+            "updated_at = NOW()\n"
+            """                WHERE id = CAST(:job_id AS UUID)
+            """), {"job_id": job_id})
+            await db.execute(text("""
+                UPDATE candidate_job_recommendations
+                SET hidden_at = COALESCE(hidden_at, NOW())
+                WHERE job_id = CAST(:job_id AS UUID)
+            """), {"job_id": job_id})
     return db_ids
 
 
@@ -180,6 +220,8 @@ async def cleanup_fantastic_expired_jobs() -> dict[str, int]:
             unresolved = max(0, checked - confirmed)
             for job_id in closed_db_ids:
                 try:
+                    if os.getenv("JOB_INDEXING_DURABLE_ENABLED", "false").strip().lower() in {"1", "true", "yes", "on"}:
+                        continue
                     from app.job_ingestion.qdrant_service import delete_job_embedding
 
                     delete_job_embedding(job_id)
@@ -257,6 +299,8 @@ async def cleanup_theirstack_closed_jobs() -> dict[str, int]:
                     confirmed += len(closed_db_ids)
                     for job_id in closed_db_ids:
                         try:
+                            if os.getenv("JOB_INDEXING_DURABLE_ENABLED", "false").strip().lower() in {"1", "true", "yes", "on"}:
+                                continue
                             from app.job_ingestion.qdrant_service import (
                                 delete_job_embedding,
                             )
@@ -468,6 +512,8 @@ async def sync_jobs() -> None:
                     synced_at_updated = True
                     for job_id in missing_ids:
                         try:
+                            if os.getenv("JOB_INDEXING_DURABLE_ENABLED", "false").strip().lower() in {"1", "true", "yes", "on"}:
+                                continue
                             from app.job_ingestion.qdrant_service import (
                                 delete_job_embedding,
                             )
@@ -756,7 +802,7 @@ async def sync_fantastic_jobs() -> dict:
             accepted.append((feed_name, job))
         per_feed[feed_name] = feed_stats
 
-    stats = {
+    stats: dict[str, Any] = {
         "fetched": sum(s["fetched"] for s in per_feed.values()),
         "accepted": sum(s["accepted_india"] for s in per_feed.values()),
         "rejected": sum(s["rejected_country"] for s in per_feed.values()),
@@ -915,7 +961,7 @@ def _log_fantastic_upsert_error(exc: Exception, job: dict) -> None:
     limited to its public identity fields; ``structured_data`` can contain the
     provider's complete response and must never be logged here.
     """
-    database_error = exc
+    database_error: Exception | None = exc
     seen: set[int] = set()
     while database_error is not None and id(database_error) not in seen:
         seen.add(id(database_error))
@@ -924,10 +970,11 @@ def _log_fantastic_upsert_error(exc: Exception, job: dict) -> None:
             for name in ("sqlstate", "constraint_name", "column_name")
         ):
             break
-        database_error = (
+        database_error = cast(
+            Exception | None,
             getattr(database_error, "orig", None)
             or getattr(database_error, "__cause__", None)
-            or getattr(database_error, "__context__", None)
+            or getattr(database_error, "__context__", None),
         )
 
     logger.warning(
@@ -1009,9 +1056,19 @@ def _fantastic_sync_trigger() -> CronTrigger:
     return CronTrigger(hour=SYNC_HOURS_IST, minute=0, second=0, timezone=IST)
 
 
+async def _durable_indexing_worker_tick() -> None:
+    from app.job_ingestion.durable_indexing import run_worker_once
+
+    await run_worker_once(_get_session_local())
+
+
 def start_scheduler() -> None:
     """Start the APScheduler. Safe to call from FastAPI startup."""
     global _scheduler, _sync_lock
+
+    from app.job_ingestion.durable_indexing import validate_rollout_configuration
+
+    validate_rollout_configuration(scheduler_enabled=_scheduler_enabled())
 
     if not _scheduler_enabled():
         # A lifecycle restart can reuse this module in-process. Ensure a
@@ -1047,6 +1104,18 @@ def start_scheduler() -> None:
         _scheduler = None
         _sync_lock = None
         raise
+    from app.job_ingestion.durable_indexing import worker_enabled
+
+    if worker_enabled():
+        _scheduler.add_job(
+            _durable_indexing_worker_tick,
+            trigger="interval",
+            seconds=10,
+            id="job_indexing_worker",
+            replace_existing=True,
+            max_instances=1,
+            coalesce=True,
+        )
     if provider_enabled("fantastic"):
         fantastic_job = _scheduler.add_job(
             _sync_fantastic_guarded,

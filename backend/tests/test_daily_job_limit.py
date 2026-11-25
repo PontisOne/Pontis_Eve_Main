@@ -2,7 +2,8 @@
 
 import asyncio
 import os
-from datetime import date
+from datetime import UTC, date, datetime
+from typing import Any
 
 import pytest
 
@@ -47,11 +48,35 @@ class _DailyAccessSession:
         if "SELECT cjr.id" in query:
             # All historic access is excluded: tomorrow receives new recommendations.
             claimed = {rec_id for _, rec_id, _ in self.state["access"]}
+            jobs = self.state.get("jobs", {})
             visible = [
                 rec_id
                 for rec_id, hidden in self.state["recommendations"]
                 if not hidden and rec_id not in claimed
+                and rec_id in params["eligible_ids"]
+                and (job := jobs.get(rec_id, {
+                    "hidden": hidden,
+                    "active": True,
+                    "status": "active",
+                    "job_status": "active",
+                    "job_url": "https://example.com/job",
+                    "opportunity_type": "jobs",
+                }))
+                and not job["hidden"]
+                and job["active"]
+                and job["status"] in {"active", "open", "published"}
+                and job["job_status"] in {"active", "open", "published"}
+                and job["job_url"].startswith(("http://", "https://"))
+                and (job["opportunity_type"] or "jobs") == params["opportunity_type"]
             ]
+            assert "eligible_ids" in params
+            assert "cjr.id = ANY(CAST(:eligible_ids AS uuid[]))" in query
+            assert "COALESCE(jd.opportunity_type, 'jobs') = :opportunity_type" in query
+            assert "is_active IS TRUE" in query
+            assert "cjr.candidate_id = :cid" in query
+            assert "cjr.hidden_at IS NULL" in query
+            assert "NOT EXISTS" in query
+            assert params["opportunity_type"] == "jobs"
             return _Result([(rec_id,) for rec_id in visible[: params["slots"]]])
         if "INSERT INTO candidate_daily_job_access" in query:
             self.state["access"].add(
@@ -76,6 +101,9 @@ class _EndpointResult(_Result):
     def mappings(self):
         return self
 
+    def fetchone(self):
+        return self._rows[0] if self._rows else None
+
 
 class _JobsEndpointSession:
     """In-memory SQL seam for the GET /jobs allocation path."""
@@ -91,6 +119,16 @@ class _JobsEndpointSession:
 
     async def execute(self, statement, params=None):
         query, params = str(statement), params or {}
+        if "FROM candidates" in query and "last_full_recommendation_refresh_at" in query:
+            return _EndpointResult(
+                rows=[
+                    {
+                        "last_full_recommendation_refresh_at": datetime.now(UTC),
+                        "matching_profile_revision": 0,
+                        "last_full_recommendation_revision": 0,
+                    }
+                ]
+            )
         if (
             "FROM candidate_job_recommendations cjr" in query
             and "SELECT COUNT(*)" in query
@@ -112,6 +150,33 @@ class _JobsEndpointSession:
             ]
             return _EndpointResult(scalar_value=len(used))
         if "SELECT cjr.id" in query and "candidate_job_recommendations cjr" in query:
+            if "jd.title, jd.description" in query:
+                return _EndpointResult(
+                    rows=[
+                        {
+                            0: rec_id,
+                            "id": rec_id,
+                            "title": "Job",
+                            "description": "A software engineering role",
+                            "requirements": "Software engineering experience",
+                            "skills": ["Python"],
+                            "skills_required": [],
+                            "experience_required": None,
+                            "location": "Remote",
+                            "city": None,
+                            "state": None,
+                            "country": None,
+                            "remote": True,
+                            "remote_policy": "remote",
+                            "employment_type": "Full-time",
+                            "industry": None,
+                            "structured_data": {},
+                            "responsibilities": None,
+                        }
+                        for rec_id, hidden in self.state["recommendations"]
+                        if not hidden
+                    ]
+                )
             historical = {rec_id for _, rec_id, _ in self.state["access"]}
             available = [
                 rec_id
@@ -119,8 +184,34 @@ class _JobsEndpointSession:
                 if not hidden and rec_id not in historical
             ]
             return _EndpointResult(
-                [(rec_id,) for rec_id in available[: params["slots"]]]
+                [(rec_id,) for rec_id in available[: params.get("slots", len(available))]]
             )
+        if "SELECT cjr.match_reason, jd.title" in query:
+            return _EndpointResult(
+                rows=[
+                    {
+                        "match_reason": None,
+                        "title": "Job",
+                        "description": "A software engineering role",
+                        "requirements": "Software engineering",
+                        "skills": [],
+                        "skills_required": [],
+                        "experience_required": None,
+                        "location": "Remote",
+                        "employment_type": "Full-time",
+                        "remote": True,
+                        "remote_policy": "remote",
+                        "industry": None,
+                        "salary_range": None,
+                        "city": None,
+                        "state": None,
+                        "country": None,
+                        "structured_data": {},
+                    }
+                ]
+            )
+        if "UPDATE candidate_job_recommendations" in query:
+            return _EndpointResult()
         if "INSERT INTO candidate_daily_job_access" in query:
             self.state["access"].add(
                 (params["cid"], params["rid"], params["access_date"])
@@ -155,11 +246,18 @@ class _JobsEndpointSession:
                     "company_name": "Company",
                     "location": "Remote",
                     "salary_range": None,
-                    "description": None,
-                    "requirements": None,
-                    "skills": [],
+                    "employment_type": "Full-time",
+                    "remote_policy": "remote",
+                    "experience_level": None,
+                    "experience_required": None,
+                    "created_at": None,
+                    "skills_required": [],
+                    "description": "A software engineering role building web applications.",
+                    "requirements": "Software engineering experience",
+                    "skills": ["Python"],
                     "company_logo_url": None,
-                    "job_url": None,
+                    "job_url": "https://example.com/job",
+                    "opportunity_type": "jobs",
                 }
                 for index, (rec_id, hidden) in enumerate(
                     self.state["recommendations"], start=1
@@ -188,11 +286,27 @@ def _state():
     }
 
 
-def _claim(monkeypatch, state, day, request_more=False, candidate=None):
+def _claim(
+    monkeypatch,
+    state,
+    day,
+    request_more=False,
+    candidate=None,
+    eligible_ids=None,
+    opportunity_type="jobs",
+):
     monkeypatch.setattr(server, "_product_current_date", lambda: day)
     monkeypatch.setattr(server, "SessionLocal", _DailyAccessSessionFactory(state))
     return asyncio.run(
-        server._claim_daily_job_access("candidate", candidate or {}, request_more)
+        server._claim_daily_job_access(
+            "candidate",
+            candidate or {},
+            request_more,
+            eligible_ids=eligible_ids
+            if eligible_ids is not None
+            else [rec_id for rec_id, _hidden in state["recommendations"]],
+            opportunity_type=opportunity_type,
+        )
     )
 
 
@@ -256,6 +370,62 @@ def test_hidden_recommendations_are_never_claimed(monkeypatch):
     assert _day_accesses(state, date(2026, 9, 15)) == {"rec-1", "rec-2", "rec-3"}
 
 
+def _eligibility_fixture(**job_overrides):
+    state = _state()
+    state["jobs"] = {
+        "rec-0": {
+            "hidden": False,
+            "active": True,
+            "status": "active",
+            "job_status": "active",
+            "job_url": "https://example.com/job",
+            "opportunity_type": "jobs",
+            **job_overrides,
+        }
+    }
+    return state
+
+
+def test_hidden_recommendation_cannot_consume_daily_access(monkeypatch):
+    state = _eligibility_fixture(hidden=True)
+    _claim(monkeypatch, state, date(2026, 9, 15), eligible_ids=["rec-0"])
+    assert _day_accesses(state, date(2026, 9, 15)) == set()
+
+
+@pytest.mark.parametrize(
+    "job_overrides",
+    [
+        {"active": False},
+        {"job_url": "not-a-url"},
+    ],
+    ids=["inactive", "invalid-url"],
+)
+def test_inactive_or_invisible_recommendation_cannot_consume_daily_access(
+    monkeypatch, job_overrides
+):
+    state = _eligibility_fixture(**job_overrides)
+    _claim(monkeypatch, state, date(2026, 9, 15), eligible_ids=["rec-0"])
+    assert _day_accesses(state, date(2026, 9, 15)) == set()
+
+
+def test_wrong_opportunity_type_cannot_consume_daily_access(monkeypatch):
+    state = _eligibility_fixture(opportunity_type="intern")
+    _claim(monkeypatch, state, date(2026, 9, 15), eligible_ids=["rec-0"])
+    assert _day_accesses(state, date(2026, 9, 15)) == set()
+
+
+def test_recommendation_excluded_from_eligible_ids_cannot_consume_daily_access(monkeypatch):
+    state = _eligibility_fixture()
+    _claim(monkeypatch, state, date(2026, 9, 15), eligible_ids=[])
+    assert _day_accesses(state, date(2026, 9, 15)) == set()
+
+
+def test_valid_visible_eligible_recommendation_consumes_daily_access(monkeypatch):
+    state = _eligibility_fixture()
+    _claim(monkeypatch, state, date(2026, 9, 15), eligible_ids=["rec-0"])
+    assert _day_accesses(state, date(2026, 9, 15)) == {"rec-0"}
+
+
 def test_schema_uses_product_calendar_date():
     assert "access_date" in server.CREATE_DAILY_JOB_ACCESS_TABLE
     assert "CURRENT_DATE" not in str(server._claim_daily_job_access.__code__.co_consts)
@@ -263,8 +433,13 @@ def test_schema_uses_product_calendar_date():
 
 
 def _get_jobs(monkeypatch, state, day, refresh, candidate=None, response=None):
+    completed_candidate = {
+        "current_role": "Software Engineer",
+        "raw_data": {"voice_intake": {"status": "completed"}},
+    }
+
     async def candidate_row(_candidate_id):
-        return candidate or {}
+        return {**completed_candidate, **(candidate or {})}
 
     async def strength(*_args):
         return 90
@@ -275,7 +450,16 @@ def _get_jobs(monkeypatch, state, day, refresh, candidate=None, response=None):
     monkeypatch.setattr(server, "SessionLocal", _JobsEndpointSessionFactory(state))
     import candidate_job_matching_service as matcher
 
+    async def refresh_stale_scores(*_args, **_kwargs):
+        pass
+
     monkeypatch.setattr(matcher, "refresh_candidate_job_matches", refresh)
+    monkeypatch.setattr(matcher, "refresh_stale_candidate_job_scores", refresh_stale_scores)
+    monkeypatch.setattr(
+        matcher,
+        "stored_recommendation_relevance",
+        lambda *_args, **_kwargs: {"eligible": True},
+    )
     return asyncio.run(
         server.get_candidate_jobs(
             "candidate",
@@ -306,7 +490,7 @@ def test_jobs_exposes_all_matches_and_redacts_locked_free_jobs(monkeypatch):
 def test_jobs_refreshes_when_only_visible_recommendation_was_accessed_before_today(
     monkeypatch,
 ):
-    state = {
+    state: dict[str, Any] = {
         "recommendations": [("old", False)],
         "access": {("candidate", "old", date(2026, 9, 16))},
     }

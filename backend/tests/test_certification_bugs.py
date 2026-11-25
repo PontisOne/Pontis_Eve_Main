@@ -28,7 +28,7 @@ import server
 
 
 def _make_candidate(certifications=None, **overrides):
-    base = {
+    base: dict[str, object] = {
         "id": "cand-cert-bug-test",
         "name": "Test Candidate",
         "email": "test@example.com",
@@ -52,8 +52,9 @@ def _run_apply(candidate_state, updates):
     """Run _apply_profile_updates against a fake DB state and return updated state."""
 
     class FakeResult:
-        def __init__(self, rows=None):
+        def __init__(self, rows=None, rowcount=0):
             self._rows = rows or []
+            self.rowcount = rowcount
 
         def mappings(self):
             return self
@@ -93,7 +94,7 @@ def _run_apply(candidate_state, updates):
                     candidate_state["parsed_resume_json"] = json.loads(
                         params["parsed_resume_json"]
                     )
-                return FakeResult()
+                return FakeResult(rowcount=1)
             if (
                 "INSERT INTO candidate_preferences" in sql
                 or "UPDATE candidate_preferences" in sql
@@ -198,6 +199,30 @@ class TestBug1AnyNotAddedAsCertification:
             ]
         )
         assert result == ["professional", "A Discipline Black Belt"]
+
+    def test_normalize_certifications_keeps_java_full_stack_credential_name(self):
+        assert server._normalize_certifications(["Java Full Stack"]) == [
+            "Java Full Stack"
+        ]
+
+    def test_normalize_certifications_rejects_bare_technology_names(self):
+        assert server._normalize_certifications(
+            ["AWS", "Java", "Python", "Google Cloud"]
+        ) == []
+
+    def test_normalize_certifications_rejects_narrative_learning_statement(self):
+        assert server._normalize_certifications(
+            ["I am learning Java and strengthening my skills"]
+        ) == []
+
+    def test_normalize_certifications_rejects_broad_professional_phrases(self):
+        assert server._normalize_certifications(
+            [
+                "Professional Python Developer",
+                "Professional AWS Developer",
+                "Black Belt Instructor",
+            ]
+        ) == []
 
 
 # ---------------------------------------------------------------------------

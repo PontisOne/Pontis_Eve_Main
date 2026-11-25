@@ -3,7 +3,10 @@
 import asyncio
 import json
 import os
+import sys
 from datetime import UTC, date, datetime
+from types import ModuleType
+from typing import Any
 
 import pytest
 
@@ -13,11 +16,19 @@ os.environ.setdefault(
 
 import candidate_job_matching_service
 import server
+from app.job_ingestion.embedding_service import build_canonical_job_representation
 from app.job_ingestion.job_ingestion_service import (
     _metadata_params,
     _persistence_safe_job,
+    is_job_indexable,
+    load_persisted_job_for_embedding,
     upsert_ats_job,
 )
+
+
+def _record_embedding(target, job):
+    target.append(job)
+    return [0.0] * 384
 from app.job_ingestion.normalize import (
     normalize_ashby,
     normalize_greenhouse,
@@ -426,7 +437,9 @@ class _Session:
                         None,
                         None,
                         None,
+                        "jobs",
                         {},
+                        "unknown",
                         "ashby",
                         "a",
                     )
@@ -457,6 +470,7 @@ def test_existing_sync_writes_normalized_metadata(monkeypatch):
         "app.job_ingestion.job_ingestion_service._valid_http_url", lambda value: value
     )
     asyncio.run(upsert_ats_job(session, job))
+    assert session.params is not None
     assert session.params["employment_type"] == "Full-time"
     assert session.params["remote_policy"] == "Remote"
     assert session.params["skills_required"] == '["Python", "SQL"]'
@@ -464,14 +478,436 @@ def test_existing_sync_writes_normalized_metadata(monkeypatch):
 
 class _ExistingUpdateSession:
     def __init__(self):
-        self.params = None
+        self.params: dict[str, Any] = {}
 
     async def execute(self, _statement, params=None):
+        assert params is not None
         self.params = params
         return _Result()
 
     async def commit(self):
         pass
+
+
+def test_final_persisted_job_loader_maps_database_values_without_changes():
+    final_row = {
+        "id": "persisted-job",
+        "ats_job_id": "provider-job",
+        "ats_type": "greenhouse",
+        "title": "Engineer",
+        "company_name": "Acme",
+        "department": "Platform",
+        "industry": "Software",
+        "responsibilities": "Build APIs",
+        "requirements": "Python",
+        "skills_required": ["Python"],
+        "skills": ["FastAPI"],
+        "experience_required": "5 years",
+        "experience_level": "Senior",
+        "employment_type": "Full-time",
+        "remote_policy": "Remote",
+        "location": "Remote",
+        "city": None,
+        "state": None,
+        "country": "India",
+        "remote": True,
+        "salary_range": "$100k",
+        "description": "Complete description",
+        "structured_data": {
+            "source": "postgres",
+            "summary": "Build reliable platform services",
+            "preferred_skills": ["AWS"],
+            "technologies": ["Kubernetes"],
+            "seniority": "Staff",
+        },
+        "job_url": "https://jobs.example/provider-job",
+    }
+
+    class Result:
+        def first(self):
+            return final_row
+
+    class Session:
+        async def execute(self, statement, params):
+            assert "FROM job_descriptions" in str(statement)
+            assert params == {"id": "persisted-job"}
+            return Result()
+
+    loaded = asyncio.run(load_persisted_job_for_embedding(Session(), "persisted-job"))
+    assert loaded == final_row
+    representation = build_canonical_job_representation(loaded)
+    assert representation["summary"] == "Build reliable platform services"
+    assert representation["preferred_skills"] == ["AWS"]
+    assert representation["technologies"] == ["Kubernetes"]
+    assert representation["seniority"] == "Staff"
+
+
+@pytest.mark.parametrize(
+    "overrides",
+    [
+        {"description": "Build resilient APIs."},
+        {"description": "", "requirements": "Python and SQL."},
+        {"description": "", "responsibilities": "Operate production services."},
+        {"description": "", "skills_required": ["Python"]},
+        {"description": "", "skills": ["Python"]},
+        {
+            "description": "",
+            "structured_data": {"summary": "Build reliable platform services"},
+        },
+    ],
+)
+def test_indexability_accepts_any_substantive_candidate_content(overrides):
+    job = {
+        "title": "Backend Engineer",
+        "company_name": "Acme",
+        "job_url": "https://jobs.example/backend",
+        "description": "",
+        "requirements": "",
+        "responsibilities": "",
+        "skills_required": [],
+        "structured_data": {},
+    }
+    job.update(overrides)
+    assert is_job_indexable(job)
+
+
+@pytest.mark.parametrize(
+    "overrides",
+    [
+        {"description": ""},
+        {"description": "   ", "requirements": "N/A"},
+        {"description": "Job description", "responsibilities": ""},
+        {"description": "", "skills_required": [], "structured_data": {}},
+        {"description": "", "skills": []},
+        {"description": "Apply now", "requirements": ""},
+        {"description": "We are hiring", "requirements": ""},
+        {"description": "Equal opportunity employer", "requirements": ""},
+        {"description": "Competitive compensation", "requirements": ""},
+        {"title": "Untitled ATS job.", "description": "Build APIs."},
+        {"company_name": "Unknown company.", "description": "Build APIs."},
+        {"company_name": "Unknown employer.", "description": "Build APIs."},
+        {"title": "Untitled.", "description": "Build APIs."},
+        {"company_name": "", "description": "Build APIs."},
+        {"description": "", "location": "Remote", "salary_range": "$100k"},
+    ],
+)
+def test_indexability_rejects_placeholder_or_non_content_jobs(overrides):
+    job = {
+        "title": "Backend Engineer",
+        "company_name": "Acme",
+        "job_url": "https://jobs.example/backend",
+        "description": "",
+        "requirements": "",
+        "responsibilities": "",
+        "skills_required": [],
+        "structured_data": {},
+    }
+    job.update(overrides)
+    assert not is_job_indexable(job)
+
+
+def test_indexability_allows_meaningful_confidential_employer_label():
+    assert is_job_indexable(
+        {
+            "title": "Backend Engineer",
+            "company_name": "Confidential fintech employer",
+            "job_url": "https://jobs.example/backend",
+            "description": "Build resilient APIs.",
+        }
+    )
+
+
+@pytest.mark.parametrize(
+    "structured_data",
+    [
+        {"seniority": "Senior"},
+        {"experience_required": "5 years"},
+    ],
+)
+def test_structured_supporting_metadata_alone_does_not_qualify_job(structured_data):
+    assert not is_job_indexable(
+        {
+            "title": "Backend Engineer",
+            "company_name": "Acme",
+            "job_url": "https://jobs.example/backend",
+            "structured_data": structured_data,
+        }
+    )
+
+
+@pytest.mark.parametrize(
+    "structured_data",
+    [
+        {"description": "Build resilient APIs."},
+        {"skills": ["Python", "FastAPI"]},
+        {"technologies": ["Kubernetes"]},
+    ],
+)
+def test_structured_substantive_content_qualifies_job(structured_data):
+    assert is_job_indexable(
+        {
+            "title": "Backend Engineer",
+            "company_name": "Acme",
+            "job_url": "https://jobs.example/backend",
+            "structured_data": structured_data,
+        }
+    )
+
+
+def test_existing_update_uses_one_final_persisted_record_for_embedding_and_qdrant(
+    monkeypatch,
+):
+    final_job = {
+        "id": "existing-marker-job",
+        "ats_job_id": "marker-job",
+        "ats_type": "greenhouse",
+        "title": "Engineer",
+        "company_name": "Acme",
+        "description": "Complete persisted description",
+        "requirements": "Persisted requirements",
+        "skills_required": ["Python"],
+        "skills": ["FastAPI"],
+        "experience_level": "Senior",
+        "employment_type": "Full-time",
+        "remote_policy": "Remote",
+        "location": "Remote",
+        "country": "India",
+        "structured_data": {"source": "postgres"},
+        "job_url": "https://jobs.example/marker-job",
+    }
+    generated_from: list[dict[str, Any]] = []
+    upserted = []
+    embedding = ModuleType("app.job_ingestion.embedding_service")
+    qdrant = ModuleType("app.job_ingestion.qdrant_service")
+    embedding.__dict__["generate_job_embedding"] = lambda job: _record_embedding(generated_from, job)
+    qdrant.__dict__["ensure_collection"] = lambda: None
+    qdrant.__dict__["upsert_job_embedding"] = lambda job_id, vector, job: upserted.append((job_id, vector, job))
+    monkeypatch.setitem(sys.modules, "app.job_ingestion.embedding_service", embedding)
+    monkeypatch.setitem(sys.modules, "app.job_ingestion.qdrant_service", qdrant)
+    monkeypatch.setattr(
+        "app.job_ingestion.job_ingestion_service.load_persisted_job_for_embedding",
+        lambda *_args: _async_value(final_job),
+    )
+    session = _ExistingUpdateSession()
+    existing = _existing_for_marker_update(
+        job_url="https://jobs.example/marker-job",
+        description="Complete persisted description",
+    )
+
+    asyncio.run(
+        upsert_ats_job(
+            session,
+            _incoming_for_marker_update(
+                description="short provider description",
+                job_url="https://jobs.example/marker-job",
+            ),
+            existing_job=existing,
+        )
+    )
+
+    assert generated_from == [final_job]
+    assert upserted == [("existing-marker-job", [0.0] * 384, final_job)]
+    assert generated_from[0] is upserted[0][2]
+
+
+def test_sparse_incoming_url_preserves_valid_final_url_and_upserts_qdrant(monkeypatch):
+    final_job = {
+        "id": "existing-marker-job",
+        "ats_job_id": "marker-job",
+        "ats_type": "greenhouse",
+        "title": "Engineer",
+        "company_name": "Acme",
+        "description": "Complete persisted description",
+        "skills_required": ["Python"],
+        "structured_data": {},
+        "job_url": "https://jobs.example/marker-job",
+    }
+    generated_from: list[dict[str, Any]] = []
+    upserted, deleted = [], []
+    embedding = ModuleType("app.job_ingestion.embedding_service")
+    qdrant = ModuleType("app.job_ingestion.qdrant_service")
+    embedding.__dict__["generate_job_embedding"] = lambda job: _record_embedding(generated_from, job)
+    qdrant.__dict__["ensure_collection"] = lambda: None
+    qdrant.__dict__["upsert_job_embedding"] = lambda job_id, vector, job: upserted.append((job_id, vector, job))
+    qdrant.__dict__["delete_job_embedding"] = lambda job_id: deleted.append(job_id)
+    monkeypatch.setitem(sys.modules, "app.job_ingestion.embedding_service", embedding)
+    monkeypatch.setitem(sys.modules, "app.job_ingestion.qdrant_service", qdrant)
+    monkeypatch.setattr(
+        "app.job_ingestion.job_ingestion_service.load_persisted_job_for_embedding",
+        lambda *_args: _async_value(final_job),
+    )
+
+    asyncio.run(
+        upsert_ats_job(
+            _ExistingUpdateSession(),
+            _incoming_for_marker_update(job_url=None),
+            existing_job=_existing_for_marker_update(
+                job_url="https://jobs.example/marker-job"
+            ),
+        )
+    )
+
+    assert generated_from == [final_job]
+    assert upserted[0][0] == "existing-marker-job"
+    assert upserted[0][2] is final_job
+    assert deleted == []
+
+
+def test_existing_ineligible_final_job_deletes_its_qdrant_point(monkeypatch):
+    deleted = []
+    final_job = {
+        "id": "existing-marker-job",
+        "ats_job_id": "marker-job",
+        "ats_type": "greenhouse",
+        "title": "Backend Engineer",
+        "company_name": "Acme",
+        "job_url": "not-a-url",
+        "description": "",
+        "requirements": "",
+        "responsibilities": "",
+        "skills_required": [],
+        "structured_data": {},
+    }
+    qdrant = ModuleType("app.job_ingestion.qdrant_service")
+    qdrant.__dict__["delete_job_embedding"] = lambda job_id: deleted.append(job_id)
+    monkeypatch.setitem(sys.modules, "app.job_ingestion.qdrant_service", qdrant)
+    monkeypatch.setattr(
+        "app.job_ingestion.job_ingestion_service.load_persisted_job_for_embedding",
+        lambda *_args: _async_value(final_job),
+    )
+
+    asyncio.run(
+        upsert_ats_job(
+            _ExistingUpdateSession(),
+            _incoming_for_marker_update(job_url=None),
+            existing_job=_existing_for_marker_update(
+                job_url="https://jobs.example/marker-job"
+            ),
+        )
+    )
+
+    assert deleted == ["existing-marker-job"]
+
+
+def test_new_insert_uses_final_persisted_record_for_embedding(monkeypatch):
+    final_job = {
+        "id": "new-job",
+        "ats_job_id": "new-provider-job",
+        "ats_type": "fantastic",
+        "title": "Engineer",
+        "company_name": "Acme",
+        "description": "Persisted description",
+        "requirements": "Persisted requirements",
+        "skills_required": ["Python"],
+        "skills": ["Python"],
+        "experience_level": "Not specified",
+        "opportunity_type": "jobs",
+        "remote_policy": "unknown",
+        "structured_data": {"source": "postgres"},
+        "job_url": "https://jobs.example/new-provider-job",
+    }
+    generated_from: list[dict[str, Any]] = []
+    upserted = []
+    embedding = ModuleType("app.job_ingestion.embedding_service")
+    qdrant = ModuleType("app.job_ingestion.qdrant_service")
+    embedding.__dict__["generate_job_embedding"] = lambda job: _record_embedding(generated_from, job)
+    qdrant.__dict__["ensure_collection"] = lambda: None
+    qdrant.__dict__["upsert_job_embedding"] = lambda job_id, vector, job: upserted.append((job_id, vector, job))
+    monkeypatch.setitem(sys.modules, "app.job_ingestion.embedding_service", embedding)
+    monkeypatch.setitem(sys.modules, "app.job_ingestion.qdrant_service", qdrant)
+    monkeypatch.setattr(
+        "app.job_ingestion.job_ingestion_service.load_persisted_job_for_embedding",
+        lambda *_args: _async_value(final_job),
+    )
+
+    class Result:
+        def scalar_one(self):
+            return "new-job"
+
+    class Session:
+        async def execute(self, statement, params=None):
+            sql = str(statement)
+            if "INSERT INTO job_descriptions" in sql:
+                return Result()
+            if "FROM company_registry" in sql:
+                return _Result([("company-id",)])
+            return _Result()
+
+        async def commit(self):
+            pass
+
+    async def agency_id(*_args):
+        return "agency-id"
+
+    monkeypatch.setattr(
+        "app.job_ingestion.job_ingestion_service.get_or_create_ats_agency", agency_id
+    )
+    job = normalize_ashby(
+        {
+            "id": "new-provider-job",
+            "title": "Engineer",
+            "jobUrl": "https://jobs.example/new-provider-job",
+        },
+        "Acme",
+    )
+
+    assert asyncio.run(upsert_ats_job(Session(), job)) == "new-job"
+    assert generated_from == [final_job]
+    assert upserted[0][2] is generated_from[0]
+    assert final_job["opportunity_type"] == "jobs"
+    assert final_job["remote_policy"] == "unknown"
+
+
+@pytest.mark.parametrize("failure_stage", ["embedding", "qdrant"])
+def test_postgres_commit_survives_post_commit_embedding_or_qdrant_failure(
+    monkeypatch, failure_stage
+):
+    committed = []
+    session = _ExistingUpdateSession()
+
+    async def commit():
+        committed.append(True)
+
+    monkeypatch.setattr(session, "commit", commit)
+    final_job = {
+        "id": "existing-marker-job",
+        "ats_job_id": "marker-job",
+        "ats_type": "greenhouse",
+        "title": "Engineer",
+        "company_name": "Acme",
+        "description": "Complete description",
+        "skills_required": ["Python"],
+        "skills": ["Python"],
+        "structured_data": {"source": "postgres"},
+        "job_url": "https://jobs.example/marker-job",
+    }
+    monkeypatch.setattr(
+        "app.job_ingestion.job_ingestion_service.load_persisted_job_for_embedding",
+        lambda *_args: _async_value(final_job),
+    )
+    embedding = ModuleType("app.job_ingestion.embedding_service")
+    qdrant = ModuleType("app.job_ingestion.qdrant_service")
+    embedding.__dict__["generate_job_embedding"] = lambda _job: (_ for _ in ()).throw(RuntimeError("embedding failed")) if failure_stage == "embedding" else [0.0] * 384
+    qdrant.__dict__["ensure_collection"] = lambda: None
+    qdrant.__dict__["upsert_job_embedding"] = lambda *_args: (_ for _ in ()).throw(RuntimeError("qdrant failed")) if failure_stage == "qdrant" else None
+    monkeypatch.setitem(sys.modules, "app.job_ingestion.embedding_service", embedding)
+    monkeypatch.setitem(sys.modules, "app.job_ingestion.qdrant_service", qdrant)
+
+    asyncio.run(
+        upsert_ats_job(
+            session,
+            _incoming_for_marker_update(job_url="https://jobs.example/marker-job"),
+            existing_job=_existing_for_marker_update(
+                job_url="https://jobs.example/marker-job"
+            ),
+        )
+    )
+
+    assert committed == [True]
+
+
+async def _async_value(value):
+    return value
 
 
 def _existing_for_marker_update(**overrides):
@@ -579,6 +1015,178 @@ def test_existing_marker_merge_keeps_existing_values_skills_and_stable_id():
     assert json.loads(session.params["skills_required"]) == ["Python", "Docker"]
 
 
+@pytest.mark.parametrize(
+    "incoming",
+    [
+        {},
+        {"structured_data": None},
+        {"structured_data": {}},
+        {"structured_data": {"source": None}},
+        {"structured_data": {"source": ""}},
+        {"structured_data": {"metadata": {}}},
+        {"structured_data": [None]},
+        {"structured_data": [""]},
+    ],
+)
+def test_existing_structured_data_is_preserved_for_sparse_provider_update(incoming):
+    existing = _existing_for_marker_update(
+        structured_data={"source": "existing", "provider_metadata": {"level": 1}}
+    )
+    session = _ExistingUpdateSession()
+    job = _incoming_for_marker_update(**incoming)
+    if not incoming:
+        job.pop("structured_data")
+
+    asyncio.run(upsert_ats_job(session, job, existing_job=existing))
+
+    persisted = json.loads(session.params["structured_data"])
+    assert persisted["source"] == "existing"
+    assert persisted["provider_metadata"] == {"level": 1}
+
+
+def test_existing_structured_data_marker_is_meaningful_and_preserved():
+    existing = _existing_for_marker_update(
+        structured_data={"source": "existing", "provider_metadata": {"level": 1}}
+    )
+    session = _ExistingUpdateSession()
+
+    asyncio.run(
+        upsert_ats_job(
+            session,
+            _incoming_for_marker_update(
+                structured_data={"explicitly_undisclosed": {"salary_range": True}}
+            ),
+            existing_job=existing,
+        )
+    )
+
+    persisted = json.loads(session.params["structured_data"])
+    assert persisted["explicitly_undisclosed"] == {"salary_range": True}
+
+
+def test_existing_structured_data_is_replaced_by_meaningful_provider_update():
+    existing = _existing_for_marker_update(
+        structured_data={"source": "existing", "stale": True}
+    )
+    session = _ExistingUpdateSession()
+
+    asyncio.run(
+        upsert_ats_job(
+            session,
+            _incoming_for_marker_update(structured_data={"source": "incoming"}),
+            existing_job=existing,
+        )
+    )
+
+    assert json.loads(session.params["structured_data"])["source"] == "incoming"
+    assert "stale" not in json.loads(session.params["structured_data"])
+
+
+@pytest.mark.parametrize("existing_value", ["intern", "jobs"])
+def test_existing_opportunity_type_is_preserved_when_provider_omits_it(existing_value):
+    existing = _existing_for_marker_update(opportunity_type=existing_value)
+    session = _ExistingUpdateSession()
+
+    asyncio.run(
+        upsert_ats_job(session, _incoming_for_marker_update(), existing_job=existing)
+    )
+
+    assert session.params["opportunity_type"] is None
+
+
+def test_explicit_opportunity_type_updates_existing_job():
+    existing = _existing_for_marker_update(opportunity_type="jobs")
+    session = _ExistingUpdateSession()
+
+    asyncio.run(
+        upsert_ats_job(
+            session,
+            _incoming_for_marker_update(opportunity_type="intern"),
+            existing_job=existing,
+        )
+    )
+
+    assert session.params["opportunity_type"] == "intern"
+
+
+@pytest.mark.parametrize("incoming_value", [None, "", "unknown", "not-a-type"])
+def test_invalid_opportunity_type_does_not_update_existing_job(incoming_value):
+    existing = _existing_for_marker_update(opportunity_type="intern")
+    session = _ExistingUpdateSession()
+
+    asyncio.run(
+        upsert_ats_job(
+            session,
+            _incoming_for_marker_update(opportunity_type=incoming_value),
+            existing_job=existing,
+        )
+    )
+
+    assert session.params["opportunity_type"] is None
+
+
+@pytest.mark.parametrize("existing_value", ["remote", "hybrid"])
+def test_existing_remote_policy_is_preserved_when_provider_omits_it(existing_value):
+    existing = _existing_for_marker_update(remote_policy=existing_value)
+    session = _ExistingUpdateSession()
+
+    asyncio.run(
+        upsert_ats_job(session, _incoming_for_marker_update(), existing_job=existing)
+    )
+
+    assert session.params["remote_policy"] is None
+
+
+def test_explicit_remote_policy_updates_existing_job():
+    existing = _existing_for_marker_update(remote_policy="remote")
+    session = _ExistingUpdateSession()
+
+    asyncio.run(
+        upsert_ats_job(
+            session,
+            _incoming_for_marker_update(remote_policy="hybrid"),
+            existing_job=existing,
+        )
+    )
+
+    assert session.params["remote_policy"] == "hybrid"
+
+
+@pytest.mark.parametrize(
+    "incoming_value",
+    [None, "", "unknown", "flexible", "work from anywhere"],
+)
+def test_invalid_remote_policy_does_not_update_existing_job(incoming_value):
+    existing = _existing_for_marker_update(remote_policy="remote")
+    session = _ExistingUpdateSession()
+
+    asyncio.run(
+        upsert_ats_job(
+            session,
+            _incoming_for_marker_update(remote_policy=incoming_value),
+            existing_job=existing,
+        )
+    )
+
+    assert session.params["remote_policy"] is None
+
+
+@pytest.mark.parametrize("incoming_value", ["Remote", "hybrid", "on-site", "onsite"])
+def test_supported_remote_policy_updates_existing_job(incoming_value):
+    existing = _existing_for_marker_update(remote_policy="remote")
+    session = _ExistingUpdateSession()
+
+    asyncio.run(
+        upsert_ats_job(
+            session,
+            _incoming_for_marker_update(remote_policy=incoming_value),
+            existing_job=existing,
+        )
+    )
+
+    assert session.params["remote_policy"] == incoming_value
+
+
 def test_persistence_guard_never_binds_null_skills_required_for_legacy_normalized_jobs():
     assert _metadata_params({"skills_required": None})["skills_required"] == "[]"
 
@@ -634,6 +1242,7 @@ def test_each_provider_final_insert_values_are_non_null_for_required_ats_contrac
         for key in ("experience_level", "skills_required", "skills", "structured_data")
     )
     assert params["remote_policy"] == "unknown"
+    assert params["opportunity_type"] == "jobs"
 
 
 @pytest.mark.parametrize(
@@ -685,7 +1294,7 @@ def test_eligible_normalized_job_insert_binds_non_null_skills_required(monkeypat
 
     class NewJobSession:
         def __init__(self):
-            self.insert_params = None
+            self.insert_params: dict[str, Any] = {}
 
         async def execute(self, statement, params=None):
             sql = str(statement)
@@ -694,6 +1303,7 @@ def test_eligible_normalized_job_insert_binds_non_null_skills_required(monkeypat
             if "FROM company_registry" in sql:
                 return _Result([("company-id",)])
             if "INSERT INTO job_descriptions" in sql:
+                assert params is not None
                 self.insert_params = params
                 return InsertResult()
             raise AssertionError(f"Unexpected SQL: {sql}")
@@ -777,8 +1387,10 @@ def test_candidate_jobs_serializes_normalized_metadata_without_changing_matching
     row = Row(row)
 
     class Result:
-        def __init__(self, scalar=None):
+        def __init__(self, scalar=None, mapping=None, rows=None):
             self.scalar_value = scalar
+            self.mapping_value = mapping
+            self.rows = [row] if rows is None else rows
 
         def scalar(self):
             return self.scalar_value
@@ -786,8 +1398,11 @@ def test_candidate_jobs_serializes_normalized_metadata_without_changing_matching
         def mappings(self):
             return self
 
+        def fetchone(self):
+            return self.mapping_value
+
         def fetchall(self):
-            return [row]
+            return self.rows
 
     class Session:
         async def __aenter__(self):
@@ -797,6 +1412,17 @@ def test_candidate_jobs_serializes_normalized_metadata_without_changing_matching
             return False
 
         async def execute(self, statement, params=None):
+            if "last_full_recommendation_refresh_at" in str(statement):
+                from datetime import UTC, datetime
+
+                now = datetime.now(UTC)
+                return Result(
+                    mapping={
+                        "last_full_recommendation_refresh_at": now,
+                        "matching_profile_revision": 0,
+                        "last_full_recommendation_revision": 0,
+                    }
+                )
             return Result(1) if "COUNT(*)" in str(statement) else Result()
 
     async def candidate(_):
@@ -811,7 +1437,7 @@ def test_candidate_jobs_serializes_normalized_metadata_without_changing_matching
     monkeypatch.setattr(server, "_voice_intake_completed_for_matching", lambda _: True)
     monkeypatch.setattr(
         candidate_job_matching_service,
-        "stored_recommendation_experience_eligibility",
+        "stored_recommendation_relevance",
         lambda *_: {"eligible": True},
     )
     candidate_id = "c"
@@ -824,3 +1450,74 @@ def test_candidate_jobs_serializes_normalized_metadata_without_changing_matching
         and response[0]["skills_required"] == ["Python"]
         and response[0]["posted_at"] == "2026-01-01T00:00:00+00:00"
     )
+
+
+def test_stored_recommendation_validation_job_converts_mapping_row():
+    class MappingRow:
+        _mapping = {
+            "title": "Engineer",
+            "description": "Build systems",
+            "requirements": "Python",
+            "skills": ["Python"],
+            "skills_required": ["Python"],
+            "experience_required": "3 years",
+            "location": "Remote",
+            "city": "",
+            "state": "",
+            "country": "IN",
+            "remote": True,
+            "remote_policy": "Remote",
+            "employment_type": "Full-time",
+            "industry": "Software",
+            "structured_data": {"source": "ats"},
+            "responsibilities": ["Build APIs"],
+        }
+
+    payload = server._stored_recommendation_validation_job(MappingRow())
+
+    assert payload["title"] == "Engineer"
+    assert payload["skills_required"] == ["Python"]
+    assert payload["structured_data"] == {"source": "ats"}
+    assert payload["responsibilities"] == ["Build APIs"]
+
+
+def test_stored_recommendation_validation_job_converts_tuple_row():
+    row = (
+        "rec-1",
+        "Analyst",
+        "Analyze data",
+        "SQL",
+        ["SQL"],
+        ["SQL"],
+        "2 years",
+        "Bengaluru",
+        "Bengaluru",
+        "KA",
+        "IN",
+        False,
+        "On-site",
+        "Full-time",
+        "Finance",
+        {"team": "data"},
+        ["Analyze reports"],
+    )
+
+    payload = server._stored_recommendation_validation_job(row)
+
+    assert payload["title"] == "Analyst"
+    assert payload["experience_required"] == "2 years"
+    assert payload["remote"] is False
+    assert payload["responsibilities"] == ["Analyze reports"]
+
+
+def test_stored_recommendation_validation_job_preserves_missing_optional_values():
+    class PartialRow(dict):
+        _mapping = {"title": "Coordinator", "description": None}
+
+    payload = server._stored_recommendation_validation_job(PartialRow())
+
+    assert payload["title"] == "Coordinator"
+    assert payload["description"] is None
+    assert payload["requirements"] is None
+    assert payload["remote"] is None
+    assert payload["responsibilities"] is None
