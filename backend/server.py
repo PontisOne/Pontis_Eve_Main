@@ -22,21 +22,12 @@ from datetime import UTC, datetime, timedelta
 from importlib.metadata import PackageNotFoundError
 from importlib.metadata import version as package_version
 from pathlib import Path
-from typing import Any, Literal, cast
+from typing import Any, Literal
 from zoneinfo import ZoneInfo
 
 import httpx
 import jwt as pyjwt
-import profile_cache
 import pypdf
-from app.job_ingestion.lifecycle import candidate_visible_where
-from candidate_profile_normalization import (
-    TECHNOLOGY_ONLY,
-    normalize_experience_value,
-    normalize_profile_fields,
-    valid_location,
-    valid_role,
-)
 from dotenv import load_dotenv
 from fastapi import (
     APIRouter,
@@ -49,24 +40,24 @@ from fastapi import (
     UploadFile,
 )
 from fastapi.responses import FileResponse, JSONResponse, RedirectResponse, Response
-from groq_client import AllKeysRateLimitedError, GroqClientPool
 from jose import JWTError, jwt
-from location_matching import country_code, country_eligible
 from openai import BadRequestError
 from openai import RateLimitError as OpenAIRateLimitError
-from profile_extraction_schemas import ExtractionResult
-from profile_extraction_service import extract_profile_field
 from pydantic import BaseModel, Field
-from skill_normalization import canonical_skill_key
-from skill_normalization import merge_skills as merge_canonical_skills
 from sqlalchemy import text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from starlette.middleware.cors import CORSMiddleware
 from starlette.requests import Request as StarletteRequest
-from vapi_config import vapi_configuration_status
 
-_RESPONSE_DEFAULT = cast(Response, None)
+import profile_cache
+from app.job_ingestion.lifecycle import candidate_visible_where
+from groq_client import AllKeysRateLimitedError, GroqClientPool
+from location_matching import country_code, country_eligible
+from profile_extraction_schemas import ExtractionResult
+from profile_extraction_service import extract_profile_field
+from skill_normalization import canonical_skill_key
+from vapi_config import vapi_configuration_status
 
 try:  # pragma: no cover - optional dependency
     from reportlab.lib import colors
@@ -103,7 +94,7 @@ try:
 except (
     ImportError
 ):  # pragma: no cover - exercised in environments without the SDK installed
-    resend = cast(Any, None)
+    resend = None
 
 ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / ".env")
@@ -135,6 +126,7 @@ ALLOWED_PROFILE_PHOTO_CONTENT_TYPES = {
     "image/webp": ".webp",
 }
 _PRODUCTION_ENVIRONMENTS = {"production", "prod"}
+_DEVELOPMENT_ENVIRONMENTS = {"development", "dev", "local"}
 _INSECURE_CANDIDATE_SESSION_SECRETS = {
     "change-me",
     "changeme",
@@ -150,6 +142,7 @@ CANDIDATE_SESSION_SECRET = os.environ.get("CANDIDATE_SESSION_SECRET", "").strip(
 CANDIDATE_SESSION_TTL_SECONDS = 60 * 60 * 24 * 30
 GOOGLE_REGISTRATION_TTL_SECONDS = 10 * 60
 SUPPORT_EMAIL_TO = "info@pontis.one"
+LOCAL_DEV_AUTH_EMAILS_ENV = "LOCAL_DEV_AUTH_EMAILS"
 
 
 def _runtime_environment() -> str:
@@ -169,6 +162,12 @@ def _runtime_environment() -> str:
         .strip()
         .lower()
     )
+
+
+def _local_dev_auth_emails() -> set[str]:
+    """Return the explicitly configured local-development login emails."""
+    raw = os.environ.get(LOCAL_DEV_AUTH_EMAILS_ENV, "")
+    return {item.strip().casefold() for item in raw.split(",") if item.strip()}
 
 
 def _validated_candidate_session_secret(
@@ -214,145 +213,6 @@ api_router = APIRouter(prefix="/api")
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 logger = logging.getLogger(__name__)
-
-MATCHING_SHUTDOWN_TIMEOUT_SECONDS = float(
-    os.environ.get("MATCHING_SHUTDOWN_TIMEOUT_SECONDS", "30")
-)
-_MATCHING_TASKS: set[asyncio.Task] = set()
-_MATCHING_SHUTTING_DOWN = False
-
-
-def _matching_task_done(task: asyncio.Task) -> None:
-    _MATCHING_TASKS.discard(task)
-    if task.cancelled():
-        logger.warning("[matching] background matching task cancelled")
-        return
-    exception = task.exception()
-    if exception is not None:
-        logger.error(
-            "[matching] unexpected background task failure",
-            exc_info=(type(exception), exception, exception.__traceback__),
-        )
-
-
-def _schedule_matching(candidate_id: str) -> asyncio.Task | None:
-    if _MATCHING_SHUTTING_DOWN:
-        logger.warning(
-            "[matching] rejected background task during shutdown candidate=%s",
-            candidate_id,
-        )
-        return None
-    task = asyncio.ensure_future(_trigger_matching(candidate_id))
-    _MATCHING_TASKS.add(task)
-    task.add_done_callback(_matching_task_done)
-    return task
-
-
-async def _shutdown_matching_tasks() -> None:
-    global _MATCHING_SHUTTING_DOWN
-    _MATCHING_SHUTTING_DOWN = True
-    tasks = list(_MATCHING_TASKS)
-    if not tasks:
-        return
-    _done, pending = await asyncio.wait(
-        tasks, timeout=MATCHING_SHUTDOWN_TIMEOUT_SECONDS
-    )
-    if not pending:
-        return
-    logger.warning(
-        "[matching] shutdown timeout; cancelling %d pending task(s)", len(pending)
-    )
-    for task in pending:
-        task.cancel()
-    await asyncio.gather(*pending, return_exceptions=True)
-    logger.info("[matching] cancelled %d pending task(s) during shutdown", len(pending))
-
-# Candidate-level freshness is authoritative; recommendation generated_at is
-# intentionally row-level and must not be used as a full-refresh marker.
-RECOMMENDATION_FRESHNESS = timedelta(hours=24)
-
-
-def _recommendation_timestamp_is_stale(
-    generated_at: datetime | None, *, now: datetime | None = None
-) -> bool:
-    """Return whether a stored recommendation timestamp exceeds the freshness window."""
-    if generated_at is None:
-        return True
-    if generated_at.tzinfo is None:
-        generated_at = generated_at.replace(tzinfo=UTC)
-    current = now or datetime.now(UTC)
-    return generated_at < current - RECOMMENDATION_FRESHNESS
-
-
-async def _candidate_recommendations_are_stale(db, candidate_id: str) -> bool:
-    """Use the candidate-wide refresh marker for all recommendation entry points."""
-    result = await db.execute(
-        text("""
-            SELECT last_full_recommendation_refresh_at,
-                   matching_profile_revision,
-                   last_full_recommendation_revision
-            FROM candidates
-            WHERE id = :cid
-            LIMIT 1
-        """),
-        {"cid": candidate_id},
-    )
-    row = result.mappings().fetchone()
-    if not row:
-        return True
-    timestamp = row["last_full_recommendation_refresh_at"]
-    matching_revision = row["matching_profile_revision"]
-    recommendation_revision = row["last_full_recommendation_revision"]
-    if matching_revision != recommendation_revision:
-        return True
-    if timestamp is not None and timestamp.tzinfo is None:
-        logger.warning(
-            "[matching] Naive candidate refresh timestamp for %s; treating as stale",
-            candidate_id,
-        )
-        return True
-    if timestamp is not None and timestamp > datetime.now(UTC):
-        logger.warning(
-            "[matching] Future candidate refresh timestamp for %s; treating as stale",
-            candidate_id,
-        )
-        return True
-    return _recommendation_timestamp_is_stale(timestamp)
-
-
-async def _increment_matching_profile_revision(db, candidate_id: str) -> None:
-    """Atomically invalidate recommendation freshness for a matching input change."""
-    await db.execute(
-        text("""
-            UPDATE candidates
-            SET matching_profile_revision = COALESCE(matching_profile_revision, 0) + 1,
-                last_full_recommendation_refresh_at = NULL,
-                last_full_recommendation_revision = NULL
-            WHERE id = :cid
-        """),
-        {"cid": candidate_id},
-    )
-
-
-def _matching_raw_data_snapshot(raw_data: dict | None) -> dict:
-    """Return the normalized matching-relevant portion of legacy raw_data."""
-    raw = raw_data if isinstance(raw_data, dict) else {}
-    return {
-        "preferred_roles": _normalize_preferred_roles(raw.get("preferred_roles") or []),
-        "preferred_locations": _normalize_preference_list(
-            raw.get("preferred_locations") or raw.get("location_preferences") or []
-        ),
-        "preferred_industries": _normalize_preference_list(
-            raw.get("preferred_industries") or raw.get("target_industries") or []
-        ),
-        "employment_types": _normalize_employment_types(raw.get("employment_types") or []),
-        "remote_preference": _clean_str(raw.get("remote_preference")),
-        "willing_to_relocate": raw.get("willing_to_relocate"),
-        "notice_period": _clean_str(raw.get("notice_period") or raw.get("availability")),
-        "expected_salary": _clean_str(
-            raw.get("expected_salary") or raw.get("salary_expectation")
-        ),
-    }
 
 
 def _safe_http_error_detail(status_code: int, detail: Any = None) -> str:
@@ -616,8 +476,6 @@ class ManualProfileUpdateRequest(BaseModel):
     skills: list[str] = Field(default_factory=list)
     certifications: list[str] = Field(default_factory=list)
     preferred_roles: list[str] = Field(default_factory=list)
-    employment_types: list[str] = Field(default_factory=list)
-    willing_to_relocate: bool | None = None
     additional_information: str = ""
     hobbies: list[str] = Field(default_factory=list)
 
@@ -1076,7 +934,7 @@ async def _parse_resume_with_llm(
     endpoint: str = "/api/onboarding/parse-resume",
     request_id: str | None = None,
 ) -> dict:
-    telemetry: dict[str, Any] = {
+    telemetry = {
         "workflow": "resume_parsing",
         "function_name": "_parse_resume_with_llm",
         "candidate_id": candidate_id,
@@ -1168,48 +1026,18 @@ def _truncate_date_to_month(value) -> str:
 
 def _normalize_for_frontend(c: dict) -> dict:
     """Map DB candidate row → Eve frontend profile shape."""
-    # Profile responses are read-only projections. Normalize selected scalar
-    # values here so legacy database rows cannot expose invalid confirmed role
-    # or location values, while preserving the existing response schema.
-    def first_valid_role(*items: Any) -> str:
-        for item in items:
-            if valid_role(item):
-                return str(item).strip()
-        return ""
-
-    def first_valid_location(*items: Any) -> str:
-        for item in items:
-            if valid_location(item):
-                return str(item).strip()
-        return ""
-
-    raw_for_scalars = _parse_raw_data(c.get("raw_data"))
-    parsed_for_scalars = _parse_raw_data(c.get("parsed_resume_json"))
-    response_role = first_valid_role(
-        c.get("current_role"),
-        c.get("headline"),
-        parsed_for_scalars.get("current_role"),
-        parsed_for_scalars.get("headline"),
-    )
-    response_location = first_valid_location(
-        c.get("location"),
-        raw_for_scalars.get("location"),
-        parsed_for_scalars.get("location"),
-    )
     work_exp = _sort_experience_for_display(c.get("work_experience") or [])
     experience = []
     for i, w in enumerate(work_exp):
         _sd = _truncate_date_to_month(w.get("start_date") or w.get("startDate") or "")
         _ed_raw = w.get("end_date") or w.get("endDate") or ""
         _ed = _truncate_date_to_month(_ed_raw) if _ed_raw else ""
-        # Only an explicit open-ended marker represents an ongoing role. A
-        # missing end date is incomplete evidence and must not be rendered as
-        # "Present".
-        _is_current = _is_open_ended_experience_value(_ed_raw)
+        # A missing end date represents an ongoing role in candidate-facing
+        # profile data. Keep explicit open-ended markers supported as well.
+        _is_current = not _ed_raw or _is_open_ended_experience_value(_ed_raw)
         dates = " — ".join(filter(None, [_sd, "Present" if _is_current else _ed]))
         experience.append(
             {
-                **w,
                 "id": w.get("id", f"exp-{i}"),
                 "title": w.get("title", ""),
                 "company": w.get("company", ""),
@@ -1252,7 +1080,6 @@ def _normalize_for_frontend(c: dict) -> dict:
             )
         education.append(
             {
-                **e,
                 "id": e.get("id", f"edu-{i}"),
                 "degree": e.get("degree", ""),
                 "institution": e.get("institution", ""),
@@ -1304,8 +1131,8 @@ def _normalize_for_frontend(c: dict) -> dict:
         "phone": c.get("phone", ""),
         "opportunity_type": _public_opportunity_type(c.get("opportunity_type"))
         or "job",
-        "location": response_location,
-        "headline": response_role,
+        "location": c.get("location", ""),
+        "headline": c.get("current_role", "") or c.get("headline", ""),
         "current_company": c.get("current_company", ""),
         "bio": c.get("summary", ""),
         "experience_years": c.get("experience_years")
@@ -2626,7 +2453,7 @@ async def _send_support_email(
 
     def _deliver() -> Any:
         resend.api_key = api_key
-        return resend.Emails.send(cast(Any, params))
+        return resend.Emails.send(params)
 
     try:
         await asyncio.to_thread(_deliver)
@@ -4646,8 +4473,7 @@ def _build_voice_intake_resume(profile: dict) -> dict | None:
         )
         current_question = (
             saved_current_question
-            if not isinstance(saved_current_question, str)
-            or not _question_in_completed_turns(saved_current_question, completed_turns)
+            if not _question_in_completed_turns(saved_current_question, completed_turns)
             else None
         )
         next_question = saved_next_question
@@ -5602,12 +5428,14 @@ def _merge_resume_into_existing_profile(existing: dict, parsed: dict) -> dict:
             merged[field] = parsed[parsed_key]
 
     # experience_years: keep existing if set; fill from new resume otherwise
-    existing_experience = normalize_experience_value(merged.get("experience_years"))
-    parsed_experience = normalize_experience_value(parsed.get("experience_years"))
-    if existing_experience is None and parsed_experience is not None:
-        merged["experience_years"] = parsed_experience
-    elif existing_experience is not None:
-        merged["experience_years"] = existing_experience
+    if (
+        merged.get("experience_years") is None
+        and parsed.get("experience_years") is not None
+    ):
+        try:
+            merged["experience_years"] = float(parsed["experience_years"])
+        except (TypeError, ValueError):
+            pass
 
     # Merge lists
     merged["skills"] = _merge_skills(
@@ -5643,7 +5471,6 @@ async def _upsert_candidate(
     When force_new=True (new-candidate onboarding), always insert a fresh record.
     Returns the candidate UUID.
     """
-    parsed = normalize_profile_fields(parsed)
     normalized_certs = _normalize_certifications(parsed.get("certifications") or [])
     normalized_skills = _normalize_skills(
         parsed.get("skills") or [], certifications=normalized_certs
@@ -5671,7 +5498,6 @@ async def _upsert_candidate(
 
     async with SessionLocal() as db:
         cid = None
-        matching_data_changed = False
 
         if not force_new:
             # 1. Prefer explicit existing_id (resume replace flow)
@@ -5755,7 +5581,7 @@ async def _upsert_candidate(
                 {"cid": cid},
             )
             existing_raw_row = existing_raw.fetchone()
-            existing_raw_data: dict[str, Any] = {}
+            existing_raw_data = {}
             if existing_raw_row and existing_raw_row[0]:
                 try:
                     existing_raw_data = (
@@ -5849,26 +5675,6 @@ async def _upsert_candidate(
             )
             merged_work_exp = merged.get("work_experience") or []
             merged_edu = merged.get("education") or []
-            def _normalized_years(value):
-                try:
-                    return float(value) if value is not None else None
-                except (TypeError, ValueError):
-                    return value
-
-            matching_data_changed = any(
-                (
-                    (merged.get("current_role") or "")
-                    != (existing_dict.get("current_role") or ""),
-                    (merged.get("location") or "")
-                    != (existing_dict.get("location") or ""),
-                    _normalized_years(merged.get("experience_years"))
-                    != _normalized_years(existing_dict.get("experience_years")),
-                    _normalize_skills(merged_skills)
-                    != _normalize_skills(existing_dict.get("skills") or []),
-                    merged_work_exp != (existing_dict.get("work_experience") or []),
-                    merged_edu != (existing_dict.get("education") or []),
-                )
-            )
             existing_raw_data["certifications"] = _candidate_certification_sources(
                 {"raw_data": existing_raw_data, "parsed_resume_json": parsed}
             )
@@ -6057,8 +5863,6 @@ async def _upsert_candidate(
                 await asyncio.to_thread(shutil.rmtree, DOCS_DIR / cid, True)
                 return resolved_candidate_id
 
-        if matching_data_changed:
-            await _increment_matching_profile_revision(db, cid)
         await db.commit()
 
     await profile_cache.invalidate(cid)
@@ -6106,7 +5910,7 @@ def _voice_intake_completed_for_matching(candidate: dict) -> bool:
 def _schedule_voice_intake_matching(candidate_id: str, status: str) -> None:
     """Schedule matching only after the voice-intake workflow is complete."""
     if status == "completed":
-        _schedule_matching(candidate_id)
+        asyncio.ensure_future(_trigger_matching(candidate_id))
 
 
 # ---------- Routes ----------
@@ -6211,7 +6015,7 @@ async def parse_resume(
             google_identity=google_identity,
         )
 
-    _schedule_matching(cid)
+    asyncio.ensure_future(_trigger_matching(cid))
     asyncio.ensure_future(_seed_employment_gaps_after_parse(cid, parsed))
 
     profile = _normalize_for_frontend({**parsed, "id": cid})
@@ -6650,37 +6454,11 @@ async def update_candidate_profile(
         if item["degree"] or item["institution"]:
             education.append(item)
 
-    normalized_input = normalize_profile_fields(
-        {
-            "current_role": body.headline,
-            "location": body.location,
-            "skills": body.skills,
-            "experience_years": body.experience_years,
-        }
-    )
-    supplied_fields = body.model_fields_set
-    skills_supplied = "skills" in supplied_fields
-    work_experience_supplied = "work_experience" in supplied_fields
-    preferred_roles_supplied = "preferred_roles" in supplied_fields
-    skills = (
-        normalized_input.get("skills", [])
-        if skills_supplied
-        else list(existing.get("skills") or [])
-    )
-    if not work_experience_supplied:
-        work_experience = list(existing.get("work_experience") or [])
+    skills = clean_list(body.skills)
     certifications = clean_list(body.certifications)
-    preferred_roles = (
-        clean_list(body.preferred_roles)
-        if preferred_roles_supplied
-        else _normalize_preferred_roles(raw.get("preferred_roles") or [])
-    )
-    employment_types = _normalize_employment_types(clean_list(body.employment_types))
+    preferred_roles = clean_list(body.preferred_roles)
     hobbies = clean_list(body.hobbies)
     availability = clean_text(body.availability, 200)
-    existing_raw_preferred_roles = _normalize_preferred_roles(
-        raw.get("preferred_roles") or []
-    )
     raw.update(
         {
             "availability": availability,
@@ -6688,8 +6466,6 @@ async def update_candidate_profile(
             "expected_salary": clean_text(body.salary_expectation, 200),
             "certifications": certifications,
             "preferred_roles": preferred_roles,
-            "employment_types": employment_types,
-            "willing_to_relocate": body.willing_to_relocate,
             "additional_information": clean_text(body.additional_information),
             "hobbies": hobbies,
             "interests": hobbies,
@@ -6703,34 +6479,7 @@ async def update_candidate_profile(
             "certifications": certifications,
         }
     )
-    # A missing manual value must not erase a valid existing value.  Invalid
-    # values are rejected at the same boundary as resume and Voice Intake data.
-    years = normalized_input.get(
-        "experience_years", existing.get("experience_years")
-    )
-    existing_role = (
-        existing.get("current_role")
-        if valid_role(existing.get("current_role"))
-        else ""
-    )
-    existing_location = (
-        existing.get("location")
-        if valid_location(existing.get("location"))
-        else ""
-    )
-    headline = normalized_input.get("current_role") or existing_role
-    location = normalized_input.get("location") or existing_location
-    matching_profile_changed = any(
-        (
-            _normalize_skills(skills)
-            != _normalize_skills(existing.get("skills") or []),
-            work_experience != (existing.get("work_experience") or []),
-            years != existing.get("experience_years"),
-            location != (existing.get("location") or ""),
-            headline != (existing.get("current_role") or ""),
-            preferred_roles != existing_raw_preferred_roles,
-        )
-    )
+    years = max(0.0, min(float(body.experience_years or 0), 80.0))
     async with SessionLocal() as db:
         await db.execute(
             text(
@@ -6746,9 +6495,9 @@ async def update_candidate_profile(
             ),
             {
                 "cid": candidate_id,
-                "name": clean_text(body.name, 300) or existing.get("name") or "",
-                "headline": headline,
-                "location": location,
+                "name": clean_text(body.name, 300),
+                "headline": clean_text(body.headline, 300),
+                "location": clean_text(body.location, 300),
                 "experience_years": years,
                 "bio": clean_text(body.bio),
                 "work_experience": json.dumps(work_experience),
@@ -6758,54 +6507,8 @@ async def update_candidate_profile(
                 "parsed_resume": json.dumps(parsed),
             },
         )
-        preference_result = await db.execute(
-            text("SELECT 1 FROM candidate_preferences WHERE candidate_id = :cid LIMIT 1"),
-            {"cid": candidate_id},
-        )
-        if preference_result.first():
-            await db.execute(
-                text(
-                    "UPDATE candidate_preferences SET preferred_roles = CAST(:roles AS jsonb), "
-                    "employment_types = CAST(:types AS jsonb), willing_to_relocate = :relocate, "
-                    "updated_at = now() WHERE candidate_id = :cid"
-                ),
-                {
-                    "cid": candidate_id,
-                    "roles": json.dumps(preferred_roles),
-                    "types": json.dumps(employment_types),
-                    "relocate": body.willing_to_relocate,
-                },
-            )
-        else:
-            await db.execute(
-                text(
-                    "INSERT INTO candidate_preferences "
-                    "(id, candidate_id, preferred_roles, preferred_locations, preferred_industries, "
-                    "employment_types, remote_preference, expected_salary, willing_to_relocate, "
-                    "notice_period, created_at, updated_at) "
-                    "VALUES (:id, :cid, CAST(:roles AS jsonb), CAST(:locations AS jsonb), "
-                    "CAST(:industries AS jsonb), CAST(:types AS jsonb), :remote, :salary, "
-                    ":relocate, :notice, now(), now())"
-                ),
-                {
-                    "id": str(uuid.uuid4()),
-                    "cid": candidate_id,
-                    "roles": json.dumps(preferred_roles),
-                    "locations": json.dumps([]),
-                    "industries": json.dumps([]),
-                    "types": json.dumps(employment_types),
-                    "remote": None,
-                    "salary": None,
-                    "relocate": body.willing_to_relocate,
-                    "notice": None,
-                },
-            )
-        if matching_profile_changed:
-            await _increment_matching_profile_revision(db, candidate_id)
         await db.commit()
         await profile_cache.invalidate(candidate_id)
-    if matching_profile_changed:
-        _schedule_matching(candidate_id)
     return await _get_candidate_profile_payload(candidate_id)
 
 
@@ -6998,7 +6701,7 @@ async def view_application_resume(
         diagnostics=diagnostics,
     )
     exists = bool(path and path.exists())
-    size = path.stat().st_size if path is not None and exists and path.is_file() else None
+    size = path.stat().st_size if exists and path.is_file() else None
     logger.info(
         "[application-resume-view] candidate_id=%s application_resume_id=%s "
         "db_record_exists=true "
@@ -7130,7 +6833,7 @@ async def replace_resume(
         existing_id=candidate_id,
     )
 
-    _schedule_matching(candidate_id)
+    asyncio.ensure_future(_trigger_matching(candidate_id))
 
     profile_row = {**parsed, "id": candidate_id}
     profile_row["candidate_certificates"] = await _load_candidate_certificates(
@@ -7452,7 +7155,6 @@ async def _extract_and_merge_chat_facts(
                 existing_raw = {}
 
         raw = dict(existing_raw)
-        matching_raw_before = _matching_raw_data_snapshot(raw)
         # Merge: never overwrite non-empty values with empty ones
         for key, val in facts.items():
             if not val:
@@ -7477,9 +7179,7 @@ async def _extract_and_merge_chat_facts(
                 ),
                 {"rd": json.dumps(raw), "cid": candidate_id},
             )
-            if _matching_raw_data_snapshot(raw) != matching_raw_before:
-                await _increment_matching_profile_revision(db, candidate_id)
-            await db.commit()
+        await db.commit()
         await profile_cache.invalidate(candidate_id)
         logger.info("[chat-facts] merged facts for candidate %s", candidate_id)
     except Exception as e:
@@ -8056,8 +7756,7 @@ def _sanitize_profile_completion_claim(reply: str, strength_detail: dict | None)
     if not isinstance(reply, str) or not isinstance(strength_detail, dict):
         return reply
     try:
-        percent_value = strength_detail.get("percent")
-        percent = int(round(float(percent_value))) if percent_value is not None else 0
+        percent = int(round(float(strength_detail.get("percent"))))
     except (TypeError, ValueError):
         return reply
     if percent >= 90 or not _CONTRADICTORY_PROFILE_COMPLETION_RE.search(reply):
@@ -8356,7 +8055,7 @@ def _sanitize_profile_updates(updates: dict) -> dict:
             if cleaned:
                 sanitized[field] = cleaned
         elif field == "opportunity_type":
-            normalized = _normalize_opportunity_type(value) or ""
+            normalized = _normalize_opportunity_type(value)
             if normalized:
                 sanitized[field] = normalized
         elif value is not None:
@@ -8380,6 +8079,72 @@ _TIMELINE_ONLY_VALUE = re.compile(
     "er)?|dec(?:ember)?)\\s+\\d{4})\\s*$",
     re.IGNORECASE,
 )
+_ROLE_WORDS = frozenset(
+    {
+        "architect",
+        "analyst",
+        "associate",
+        "consultant",
+        "coordinator",
+        "designer",
+        "developer",
+        "director",
+        "engineer",
+        "executive",
+        "founder",
+        "head",
+        "intern",
+        "lead",
+        "manager",
+        "officer",
+        "partner",
+        "president",
+        "producer",
+        "professor",
+        "researcher",
+        "scientist",
+        "specialist",
+        "supervisor",
+        "technician",
+        "trainee",
+        "vice president",
+        "vp",
+    }
+)
+_TECHNOLOGY_ONLY_VALUES = frozenset(
+    {
+        "postgres",
+        "postgresql",
+        "mysql",
+        "mongodb",
+        "redis",
+        "sqlite",
+        "oracle",
+        "sql",
+        "python",
+        "java",
+        "javascript",
+        "typescript",
+        "fastapi",
+        "django",
+        "flask",
+        "react",
+        "angular",
+        "node",
+        "node.js",
+        "spring",
+        "spring boot",
+        "docker",
+        "kubernetes",
+        "aws",
+        "azure",
+        "gcp",
+        "git",
+        "linux",
+        "html",
+        "css",
+    }
+)
 
 
 def _is_timeline_only_value(value: Any) -> bool:
@@ -8388,27 +8153,39 @@ def _is_timeline_only_value(value: Any) -> bool:
 
 
 def _is_actual_job_role(value: Any) -> bool:
-    return valid_role(value)
+    text_value = _normalize_profile_text(value)
+    if not text_value or _is_timeline_only_value(text_value):
+        return False
+    lowered = text_value.casefold()
+    if lowered in _TECHNOLOGY_ONLY_VALUES:
+        return False
+    words = set(re.findall(r"[a-z]+", lowered))
+    return bool(words & _ROLE_WORDS)
 
 
 def _is_actual_location(value: Any) -> bool:
-    return valid_location(value)
+    text_value = _normalize_profile_text(value)
+    if not text_value or _is_timeline_only_value(text_value):
+        return False
+    # A lone technology/database is not a geographic location either.
+    return text_value.casefold() not in _TECHNOLOGY_ONLY_VALUES
 
 
 def _sanitize_profile_field_mapping(values: dict) -> dict:
     """Drop invalid role/location scalars and retain misclassified skills."""
-    original_role = values.get("current_role") if isinstance(values, dict) else None
-    result = normalize_profile_fields(values)
+    if not isinstance(values, dict):
+        return {}
+    result = dict(values)
     role = result.get("current_role")
-    if role is None and original_role is not None and not _is_actual_job_role(original_role):
+    if role is not None and not _is_actual_job_role(role):
         # Preserve a clearly recognizable misclassified technology as a skill;
         # never let it overwrite a job-title column.
-        role_text = _normalize_profile_text(original_role)
-        if role_text and role_text.casefold() in TECHNOLOGY_ONLY:
-            skills_value = result.get("skills")
-            skills = skills_value if isinstance(skills_value, list) else []
-            if role_text.casefold() not in {str(skill).casefold() for skill in skills}:
-                result["skills"] = [*skills, role_text]
+        role_text = _normalize_profile_text(role)
+        if role_text and role_text.casefold() in _TECHNOLOGY_ONLY_VALUES:
+            skills = (
+                result.get("skills") if isinstance(result.get("skills"), list) else []
+            )
+            result["skills"] = _merge_skills(skills, [role_text])
         result.pop("current_role", None)
     location = result.get("location")
     if location is not None and not _is_actual_location(location):
@@ -9079,7 +8856,7 @@ def _infer_profile_updates_from_message(message: str) -> dict:
             "\\b(?:set|update|change)\\s+(?:my\\s+)?(?:preferred|tar"
             "get) roles?\\s+(?:to|as)\\s+(?P<value>.+?)(?:[.!?;]|$)",
             "\\b(?:i(?:'m| am)?\\s+)?(?:targeting|looking for|seeki"
-            "ng|want(?:ing)?|open to)\\s+(?P<value>."
+            "ng|want(?:ing)?|interested in|open to)\\s+(?P<value>."
             "+?)(?:\\s+roles?\\b|\\s+positions?\\b|\\s+opportunities\\b"
             "|[.!?;]|$)",
             r"\bpreferred roles?\s*[:\-]\s*(?P<value>.+?)(?:[.!?;]|$)",
@@ -9101,18 +8878,6 @@ def _infer_profile_updates_from_message(message: str) -> dict:
             updates["preferred_locations"] = [
                 _normalize_profile_text(compound_role.group("location"))
             ]
-    if not preferred_roles:
-        interest_match = re.search(
-            r"\b(?:i(?:'m| am)?\s+)?interested\s+in\s+(?P<value>.+?)(?:[.!?;]|$)",
-            text,
-            re.IGNORECASE,
-        )
-        if interest_match:
-            interest = _normalize_profile_text(interest_match.group("value"))
-            if interest:
-                updates.setdefault("hobbies", []).extend(
-                    item.title() for item in _split_update_list(interest) if item
-                )
     # Short preference answers often arrive without an intent verb (for
     # example, ``Python developer, full-time, contract work``). Treat only
     # exact standalone employment labels as types; retain every other item as
@@ -10419,72 +10184,6 @@ def _chat_profile_preflight(
     """
     text_value = message.strip()
     lower = text_value.lower()
-
-    # Deletions are profile edits too. Resolve an explicitly named section
-    # against the cached profile before invoking the LLM. This is especially
-    # important for short requests such as "remove btech from my education";
-    # the model should only be the fallback when the cached record is not
-    # sufficient to identify the target safely.
-    deletion = _detect_deletion_intent(text_value)
-    explicit_education_delete = re.search(
-            r"\b(?:remove|delete|drop)\s+(?:the\s+)?(?P<item>.+?)\s+from\s+(?:my\s+)?education\b",
-            text_value,
-            re.I,
-        )
-    if explicit_education_delete:
-        deletion = {
-            "field": "education",
-            "item": explicit_education_delete.group("item").strip(),
-        }
-    if deletion and deletion.get("field"):
-        field = deletion["field"]
-        item = re.sub(
-            r"^(?:the|a|an|my)\s+", "", str(deletion.get("item") or ""), flags=re.I
-        ).strip()
-        if item and field == "education":
-            matches = [
-                row
-                for row in (candidate.get("education") or [])
-                if isinstance(row, dict)
-                and any(
-                    re.sub(r"[^a-z0-9]", "", _normalize_profile_key(item))
-                    in re.sub(
-                        r"[^a-z0-9]", "", _normalize_profile_key(row.get(key))
-                    )
-                    for key in ("degree", "institution", "field_of_study")
-                )
-            ]
-            if len(matches) == 1:
-                return {
-                    "reply": f"I removed {item} from your education profile.",
-                    "updates": {"profile_deletions": {field: [item]}},
-                }
-            if len(matches) > 1:
-                return {
-                    "reply": "I found more than one matching education record. Which one should I remove?",
-                    "updates": None,
-                }
-        if field in ("work_experience", "education", "projects") and item:
-            section = {
-                "work_experience": "Work Experience",
-                "education": "Education",
-                "projects": "Projects",
-            }[field]
-            matches = _profile_edit_matches(candidate, item).get(section, [])
-            if len(matches) != 1:
-                if len(matches) > 1:
-                    return {
-                        "reply": f"I found more than one matching {field.replace('_', ' ')} record. Which record should I remove?",
-                        "updates": None,
-                    }
-                return None
-        # Other explicitly scoped deletions can be persisted without asking the
-        # model; _apply_profile_updates performs the final exact match check.
-        if item:
-            return {
-                "reply": f"I removed {item} from your profile.",
-                "updates": {"profile_deletions": {field: [item]}},
-            }
     guidance_answer = _profile_guidance_answer(text_value, history)
     if guidance_answer:
         return guidance_answer
@@ -10833,7 +10532,7 @@ def _chat_profile_preflight(
                 for row in (candidate.get("education") or [])
                 if isinstance(row, dict) and _same_education_level(row, incoming)
             ),
-            cast(dict[str, Any], None),
+            None,
         )
         if existing:
             return {
@@ -11035,13 +10734,13 @@ def _chat_profile_preflight(
                 "institution": institution,
                 "end_date": completion_year.group(0)[:4],
             }
-            education_matches = [
+            matches = [
                 row
                 for row in (candidate.get("education") or [])
                 if isinstance(row, dict) and _same_education_level(row, incoming)
             ]
-            if education_matches:
-                existing = education_matches[0]
+            if matches:
+                existing = matches[0]
                 return {
                     "reply": (
                         f"I can see a {existing.get('degree') or 'bachelor'} degree already in your profile. "
@@ -11077,11 +10776,11 @@ def _chat_profile_preflight(
     )
     if deletion:
         requested = deletion.group(1).strip()
-        deletion_matches: dict[str, list[dict[str, Any]]] = _profile_edit_matches(candidate, requested)
-        total = sum(len(items) for items in deletion_matches.values())
+        matches = _profile_edit_matches(candidate, requested)
+        total = sum(len(items) for items in matches.values())
         if total > 1:
             return {
-                "reply": f"I found {requested} in {' and '.join(deletion_matches)}. Which record should I delete?",
+                "reply": f"I found {requested} in {' and '.join(matches)}. Which record should I delete?",
                 "updates": None,
             }
 
@@ -11102,10 +10801,22 @@ def _chat_profile_preflight(
             explicit_target.group("old").strip(),
             explicit_target.group("new").strip(),
         )
-        explicit_matches: dict[str, list[dict[str, Any]]] = _profile_edit_matches(candidate, old)
-        explicit_matches = {section: items for section, items in explicit_matches.items() if items}
-        if sum(map(len, explicit_matches.values())) == 1:
-            section, items = next(iter(explicit_matches.items()))
+        matches = _profile_edit_matches(candidate, old)
+        target = _normalize_profile_key(explicit_target.group("target")).replace(
+            "'", ""
+        )
+        matches = {
+            section: [
+                item
+                for item in items
+                if target
+                in _normalize_profile_key(json.dumps(item["record"])).replace("'", "")
+            ]
+            for section, items in matches.items()
+        }
+        matches = {section: items for section, items in matches.items() if items}
+        if sum(map(len, matches.values())) == 1:
+            section, items = next(iter(matches.items()))
             return {
                 "reply": f"Updated {old} to {new} in {section}.",
                 "updates": _replacement_update(section, old, new, items),
@@ -11114,9 +10825,9 @@ def _chat_profile_preflight(
         old, new = replacement.group(1).strip(), replacement.group(2).strip()
         explicit_both = bool(re.search(r"\s+in\s+both\b", new, re.I))
         new = re.sub(r"\s+in\s+both\b.*$", "", new, flags=re.I).strip()
-        replacement_matches: dict[str, list[dict[str, Any]]] = _profile_edit_matches(candidate, old)
-        sections = list(replacement_matches)
-        total = sum(len(items) for items in replacement_matches.values())
+        matches = _profile_edit_matches(candidate, old)
+        sections = list(matches)
+        total = sum(len(items) for items in matches.values())
         if explicit_both and total:
             return {
                 "reply": f"Updated {old} to {new} in all matching records.",
@@ -11125,18 +10836,18 @@ def _chat_profile_preflight(
                         _replacement_update(section, old, new, items, all_matches=True)[
                             "profile_record_replacements"
                         ][0]
-                        for section, items in replacement_matches.items()
+                        for section, items in matches.items()
                     ]
                 },
             }
         if total > 1:
-            return {"reply": _replacement_clarification(old, replacement_matches), "updates": None}
+            return {"reply": _replacement_clarification(old, matches), "updates": None}
         if total == 1:
             section = sections[0]
             if section in ("Education", "Work Experience"):
                 return {
                     "reply": f"Updated {old} to {new} in {section}.",
-                    "updates": _replacement_update(section, old, new, replacement_matches[section]),
+                    "updates": _replacement_update(section, old, new, matches[section]),
                 }
 
     # Explicit, fully targeted profile commands should not depend on the LLM
@@ -11207,11 +10918,7 @@ def _chat_cache_decision(
     updates, input_problems = _validate_chat_profile_updates(
         preflight.get("updates") if isinstance(preflight, dict) else None
     )
-    topic_fields = [
-        key for key in (updates or {}) if not key.startswith("profile_")
-    ]
-    if (updates or {}).get("profile_deletions"):
-        topic_fields.append("profile_deletions")
+    topic_fields = [key for key in (updates or {}) if not key.startswith("profile_")]
     topic = authoritative_topic or (topic_fields[0] if len(topic_fields) == 1 else None)
     if (
         updates
@@ -11443,8 +11150,6 @@ async def _extract_multi_field_updates_from_answer(
     """
     if not candidate_message or not missing_fields:
         return {}
-
-
     try:
         resp = await openai_client.chat.completions.create(
             model=GROQ_MODEL,
@@ -11476,52 +11181,6 @@ async def _extract_multi_field_updates_from_answer(
         )
     except Exception as e:
         logger.warning("[chat-multi-field] extraction failed: %s", e)
-        return {}
-
-
-_CHAT_PROFILE_MUTATION_SYSTEM = """
-You extract one explicit candidate profile mutation from the user's message.
-Return ONLY JSON in this shape:
-{"action":"add|update|replace", "profile_updates": {}}
-Choose exactly one supported profile field and include only the clean value
-explicitly stated by the candidate. Never copy conversational sentences into a
-field. Choose preferred_roles for desired job roles, certifications only for
-named credentials/certificates, skills only for named skills, education only
-for degrees and institutions, and additional_information only when explicitly
-labelled as such. Return an empty profile_updates object when no explicit
-profile fact is present.
-"""
-
-
-async def _extract_single_chat_profile_mutation(
-    candidate_message: str,
-    candidate_id: str | None = None,
-    session_id: str | None = None,
-) -> dict:
-    """Make the single allowed LLM extraction call for a profile mutation."""
-    try:
-        response = await openai_client.chat.completions.create(
-            model=GROQ_MODEL,
-            messages=[
-                {"role": "system", "content": _CHAT_PROFILE_MUTATION_SYSTEM},
-                {"role": "user", "content": candidate_message[:2000]},
-            ],
-            temperature=0,
-            response_format={"type": "json_object"},
-            _telemetry={
-                "workflow": "chat_profile_extraction",
-                "function_name": "_extract_single_chat_profile_mutation",
-                "candidate_id": candidate_id,
-                "endpoint": "/api/chat",
-                "session_id": session_id,
-            },
-        )
-        raw = json.loads(response.choices[0].message.content or "{}")
-        updates = _sanitize_profile_updates(raw.get("profile_updates") or {})
-        updates = _validate_chat_profile_updates(updates)[0]
-        return {"action": raw.get("action") or "add", "profile_updates": updates}
-    except Exception:
-        logger.warning("[chat-profile-mutation] LLM extraction failed", exc_info=True)
         return {}
 
 
@@ -11702,7 +11361,6 @@ async def _apply_profile_updates_in_transaction(
     # Fetch existing candidate row for merging lists
     existing = await _get_candidate_row_for_update(db, candidate_id)
     existing_raw = _parse_raw_data(existing.get("raw_data"))
-    matching_raw_before = _matching_raw_data_snapshot(existing_raw)
 
     set_clauses = []
     params: dict = {"cid": candidate_id}
@@ -11742,19 +11400,16 @@ async def _apply_profile_updates_in_transaction(
                     for part in (section, old, new)
                 ):
                     continue
-                section_name = cast(str, section)
-                old_value = cast(str, old)
-                new_value = cast(str, new)
                 # Re-query the persisted record at write time.  A stale chat turn
                 # can never replace a value that is no longer uniquely targeted.
-                matches: dict[str, list[dict[str, Any]]] = _profile_edit_matches(existing, old_value)
+                matches = _profile_edit_matches(existing, old)
                 if (
-                    not matches.get(section_name)
+                    not matches.get(section)
                     or not isinstance(record_indexes, list)
                     or not record_indexes
                 ):
                     continue
-                matching_indexes = {match["index"] for match in matches[section_name]}
+                matching_indexes = {match["index"] for match in matches[section]}
                 selected_indexes = set(record_indexes)
                 if not selected_indexes.issubset(matching_indexes):
                     continue
@@ -11762,27 +11417,27 @@ async def _apply_profile_updates_in_transaction(
                 # an implicit fan-out to records the user did not select.
                 if all_matches and selected_indexes != matching_indexes:
                     continue
-                if section_name == "Education":
+                if section == "Education":
                     records = list(existing.get("education") or [])
                     for index in record_indexes:
                         record = dict(records[index])
                         for key, record_value in record.items():
-                            if old_value.lower() in str(record_value).lower():
+                            if old.lower() in str(record_value).lower():
                                 record[key] = re.sub(
-                                    re.escape(old_value), new_value, str(record_value), flags=re.I
+                                    re.escape(old), new, str(record_value), flags=re.I
                                 )
                         records[index] = record
                     set_clauses.append("education = CAST(:education AS json)")
                     params["education"] = json.dumps(records)
                     existing["education"] = records
-                elif section_name == "Work Experience":
+                elif section == "Work Experience":
                     records = list(existing.get("work_experience") or [])
                     for index in record_indexes:
                         record = dict(records[index])
                         for key, record_value in record.items():
-                            if old_value.lower() in str(record_value).lower():
+                            if old.lower() in str(record_value).lower():
                                 record[key] = re.sub(
-                                    re.escape(old_value), new_value, str(record_value), flags=re.I
+                                    re.escape(old), new, str(record_value), flags=re.I
                                 )
                         records[index] = record
                     set_clauses.append(
@@ -12301,45 +11956,8 @@ async def _apply_profile_updates_in_transaction(
         or existing_raw.get("salary_expectation"),
         "willing_to_relocate": existing_raw.get("willing_to_relocate"),
     }
-    preference_changed = False
     if any(value not in (None, "", []) for value in preference_payload.values()):
-        preference_changed = await _upsert_candidate_preferences(
-            candidate_id, preference_payload, db=db, bump_revision=False
-        )
-
-    def _json_update_value(name: str, fallback: Any) -> Any:
-        value = params.get(name, fallback)
-        if isinstance(value, str) and name in {"skills", "work_experience", "education"}:
-            try:
-                return json.loads(value)
-            except (TypeError, ValueError):
-                return fallback
-        return value
-
-    matching_column_changed = any(
-        (
-            (_json_update_value("current_role", existing.get("current_role")) or "")
-            != (existing.get("current_role") or ""),
-            (_json_update_value("location", existing.get("location")) or "")
-            != (existing.get("location") or ""),
-            _json_update_value("experience_years", existing.get("experience_years"))
-            != existing.get("experience_years"),
-            _normalize_skills(_json_update_value("skills", existing.get("skills") or []))
-            != _normalize_skills(existing.get("skills") or []),
-            _json_update_value("work_experience", existing.get("work_experience") or [])
-            != (existing.get("work_experience") or []),
-            _json_update_value("education", existing.get("education") or [])
-            != (existing.get("education") or []),
-        )
-    )
-    matching_raw_changed = (
-        _matching_raw_data_snapshot(existing_raw) != matching_raw_before
-    )
-    matching_fields_changed = (
-        matching_column_changed or matching_raw_changed or preference_changed
-    )
-    if matching_fields_changed:
-        await _increment_matching_profile_revision(db, candidate_id)
+        await _upsert_candidate_preferences(candidate_id, preference_payload, db=db)
 
     # A successful response is contingent on a fresh canonical read after the
     # database write, not merely on commit completing without an exception.
@@ -12483,7 +12101,7 @@ async def _update_preferred_roles(candidate_id: str, new_roles: list[str]) -> No
             {"cid": candidate_id},
         )
         result = row.fetchone()
-    raw: dict[str, Any] = {}
+    raw = {}
     if result and result[0]:
         try:
             raw = result[0] if isinstance(result[0], dict) else json.loads(result[0])
@@ -12579,7 +12197,7 @@ async def _persist_chat_profile_update_background(
             return
         await _sync_profile_updates_to_ledger(candidate_id, updates, "chat")
         await profile_cache.invalidate(candidate_id)
-        _schedule_matching(candidate_id)
+        asyncio.ensure_future(_trigger_matching(candidate_id))
         logger.info(
             "[chat-update] background persistence completed for candidate=%s",
             candidate_id,
@@ -12589,45 +12207,6 @@ async def _persist_chat_profile_update_background(
             "[chat-update] background persistence failed for candidate=%s", candidate_id
         )
         raise
-
-
-def _profile_message_has_mutation_intent(message: str) -> bool:
-    """Recognize messages worth sending to the profile extractor.
-
-    This is routing only; it never chooses a destination or value.
-    """
-    return bool(
-        re.search(
-            r"\b(?:add|include|save|update|change|replace|remove|delete|"
-            r"interested\s+in|looking\s+for|seeking|targeting|worked\s+with|"
-            r"have\s+(?:a|an)|completed|graduated|certification|skills?|"
-            r"education|degree|role|position|job)\b",
-            message or "",
-            re.IGNORECASE,
-        )
-    )
-
-
-def _cached_profile_match_in_message(message: str, candidate: dict) -> tuple[str, str] | None:
-    """Return an existing profile value explicitly named in the message."""
-    normalized_message = _normalize_profile_key(message)
-    if not normalized_message:
-        return None
-    raw = _parse_raw_data(candidate.get("raw_data"))
-    candidates = [
-        ("preferred roles", "preferred_roles", candidate.get("preferred_roles") or raw.get("preferred_roles")),
-        ("employment types", "employment_types", raw.get("employment_types")),
-        ("skills", "skills", candidate.get("skills")),
-        ("certifications", "certifications", raw.get("certifications")),
-    ]
-    for label, _field, values in candidates:
-        for value in values or []:
-            if isinstance(value, dict):
-                continue
-            clean = _normalize_profile_text(value)
-            if clean and _normalize_profile_key(clean) in normalized_message:
-                return label, clean
-    return None
 
 
 @api_router.post("/chat", response_model=ChatResponse)
@@ -12741,62 +12320,6 @@ async def chat(request: ChatRequest, authorization: str | None = Header(default=
         ] + incoming
     else:
         combined = incoming
-
-    # Profile mutations use one dedicated extraction call. The deterministic
-    # result is only a cache/duplicate hint and fallback; it is never merged
-    # with a general conversational response, which prevents unrelated prose
-    # from being written to certifications or preferred roles.
-    mutation_hint = _infer_profile_updates_from_message(last_user.content)
-    mutation_hint.pop("profile_deletions", None)
-    if (
-        request.candidate_id
-        and candidate_row_for_edit
-        and _profile_message_has_mutation_intent(last_user.content)
-    ):
-        cached_match = _cached_profile_match_in_message(
-            last_user.content, candidate_row_for_edit
-        )
-        duplicate = cached_match
-        if duplicate:
-            section, existing_value = duplicate
-            reply = (
-                f"{existing_value} is already in your {section}. "
-                "Would you like to update or replace it?"
-            )
-            await _save_chat_window(
-                request.candidate_id,
-                request.session_id,
-                combined + [{"role": "assistant", "content": reply}],
-            )
-            return ChatResponse(reply=reply, session_id=request.session_id)
-
-        extracted = await _extract_single_chat_profile_mutation(
-            last_user.content, request.candidate_id, request.session_id
-        )
-        profile_updates = extracted.get("profile_updates") or mutation_hint
-        profile_updates, input_problems = _validate_chat_profile_updates(
-            profile_updates
-        )
-        if profile_updates and not input_problems:
-            try:
-                await _persist_chat_profile_update_background(
-                    request.candidate_id, profile_updates
-                )
-                reply = "I’ve added that to the correct section of your profile."
-            except Exception:
-                logger.exception("[chat-profile-mutation] persistence failed")
-                reply = "I couldn’t save that profile update yet. Please try again."
-            await _save_chat_window(
-                request.candidate_id,
-                request.session_id,
-                combined + [{"role": "assistant", "content": reply}],
-            )
-            return ChatResponse(
-                reply=reply,
-                session_id=request.session_id,
-                profile_updates=profile_updates,
-            )
-
     authoritative_topic = _authoritative_chat_topic(combined, voice_resume)
     authoritative_updates = _route_authoritative_chat_answer(
         authoritative_topic,
@@ -13064,21 +12587,6 @@ async def chat(request: ChatRequest, authorization: str | None = Header(default=
             else:
                 candidate_row = await _get_candidate_row(request.candidate_id)
 
-            # Keep Chat aligned with the Candidate Jobs API: the persisted
-            # candidate preference is authoritative, and missing job values
-            # default to the ``jobs`` category in the SQL predicates below.
-            from profile_strength_service import get_canonical_preferences
-
-            opportunity_type = (
-                _normalize_opportunity_type(
-                    candidate_row.get("opportunity_type")
-                    or get_canonical_preferences(
-                        candidate_row, candidate_row.get("_prefs_row")
-                    ).get("opportunity_type")
-                )
-                or "jobs"
-            )
-
             if (
                 await _effective_profile_strength_percent(
                     request.candidate_id, candidate_row
@@ -13091,7 +12599,7 @@ async def chat(request: ChatRequest, authorization: str | None = Header(default=
                     detail="Profile Strength below job visibility threshold",
                 )
 
-            # Ensure recommendations exist and are candidate-wide fresh.
+            # Ensure recommendations exist (runs matching if none yet)
             async with SessionLocal() as db:
                 count_row = await db.execute(
                     text(
@@ -13101,34 +12609,15 @@ async def chat(request: ChatRequest, authorization: str | None = Header(default=
                     {"cid": request.candidate_id},
                 )
                 rec_count = count_row.scalar() or 0
-                recommendations_stale = await _candidate_recommendations_are_stale(
-                    db, request.candidate_id
-                )
-            refresh_requested = rec_count == 0 or recommendations_stale
-            if refresh_requested:
+            if rec_count == 0:
                 from candidate_job_matching_service import refresh_candidate_job_matches
 
-                refresh_completed = await refresh_candidate_job_matches(
+                await refresh_candidate_job_matches(
                     request.candidate_id, candidate_row, SessionLocal
                 )
-                if not refresh_completed:
-                    raise RuntimeError(
-                        "Recommendation refresh did not complete; skipping chat injection"
-                    )
             # Fetch top recommendations joined with job details
-            # This query intentionally runs after a successful refresh so chat
-            # injects the newly persisted recommendation rows, not a pre-refresh
-            # snapshot.
             from candidate_job_matching_service import (
-                refresh_stale_candidate_job_scores,
-                stored_recommendation_relevance,
-            )
-
-            await refresh_stale_candidate_job_scores(
-                request.candidate_id,
-                candidate_row,
-                SessionLocal,
-                opportunity_type=opportunity_type,
+                stored_recommendation_experience_eligibility,
             )
 
             async with SessionLocal() as db:
@@ -13147,26 +12636,36 @@ async def chat(request: ChatRequest, authorization: str | None = Header(default=
                           AND cjr.hidden_at IS NULL
                           AND cjr.id = ANY(CAST(:eligible_ids AS uuid[]))
                           AND {candidate_visible_where("jd")}
-                          AND COALESCE(jd.opportunity_type, 'jobs') = :opportunity_type
                         ORDER BY cjr.recommendation_rank ASC NULLS LAST, cjr.match_score DESC NULLS LAST
                         LIMIT 10
                     """),
                     {
                         "cid": request.candidate_id,
-                        "opportunity_type": opportunity_type,
                         "eligible_ids": [
                             str(row[0])
                             for row in (
-                                await _load_stored_recommendation_validation_rows(
-                                    db,
-                                    request.candidate_id,
-                                    opportunity_type,
-                                    include_visibility=True,
+                                await db.execute(
+                                    text(f"""
+                            SELECT cjr.id, jd.title, jd.description, jd.requirements,
+                                   jd.skills, jd.skills_required, jd.experience_required
+                            FROM candidate_job_recommendations cjr
+                            JOIN job_descriptions jd ON jd.id = cjr.job_id
+                            WHERE cjr.candidate_id = :cid AND cjr.hidden_at IS NULL
+                              AND {candidate_visible_where("jd")}
+                        """),
+                                    {"cid": request.candidate_id},
                                 )
                             ).fetchall()
-                            if stored_recommendation_relevance(
+                            if stored_recommendation_experience_eligibility(
                                 candidate_row,
-                                _stored_recommendation_validation_job(row),
+                                {
+                                    "title": row[1],
+                                    "description": row[2],
+                                    "requirements": row[3],
+                                    "skills": row[4],
+                                    "skills_required": row[5],
+                                    "experience_required": row[6],
+                                },
                             )["eligible"]
                         ],
                     },
@@ -13755,8 +13254,6 @@ async def _ensure_schema():
 
 @app.on_event("startup")
 async def on_startup():
-    global _MATCHING_SHUTTING_DOWN
-    _MATCHING_SHUTTING_DOWN = False
     _validated_candidate_session_secret()
     await _ensure_schema()
     asyncio.ensure_future(_retry_worker())
@@ -13767,22 +13264,9 @@ async def on_startup():
 
 @app.on_event("shutdown")
 async def on_shutdown():
-    from app.job_ingestion.durable_indexing import shutdown_qdrant_executor
     from app.job_ingestion.scheduler import stop_scheduler
 
-    try:
-        await _shutdown_matching_tasks()
-    except Exception:
-        logger.exception("[shutdown] matching task cleanup failed")
-    try:
-        stop_scheduler()
-    except Exception:
-        logger.exception("[shutdown] scheduler shutdown failed")
-    finally:
-        try:
-            await asyncio.to_thread(shutdown_qdrant_executor)
-        except Exception:
-            logger.exception("[shutdown] Qdrant executor shutdown failed")
+    stop_scheduler()
 
 
 # ---------- Voice extraction prompt ----------
@@ -14004,30 +13488,15 @@ def _is_actual_certification(value: Any) -> bool:
         re.I,
     ):
         return False
-    # Credentials normally carry a cert marker or a recognised designation.
-    # Keep technology-only names (for example, bare "AWS") out of the
-    # certification field; a vendor becomes credential evidence only when the
-    # surrounding name supplies a certification marker or designation.
-    if _looks_like_certification(cleaned):
-        return True
-    if re.fullmatch(r"(?:pmp|cissp|scrum master|professional)", cleaned, re.I):
-        return True
+    # Credentials normally carry a cert marker, a recognised designation, or
+    # a vendor credential name.  This prevents prose from becoming a cert.
     return bool(
-        re.fullmatch(
-            r"(?:java|python|javascript|\.net|dotnet|node(?:\.js)?)\s+full\s+stack",
+        _looks_like_certification(cleaned)
+        or re.search(
+            "\\b(?:pmp|cissp|scrum master|aws|azure|google cloud|o"
+            "racle|salesforce|comptia)\\b",
             cleaned,
             re.I,
-        )
-        or re.fullmatch(r"n8n\s+workflow\s+automation\s+engineer", cleaned, re.I)
-        or re.fullmatch(
-            r"(?:aws|azure|google cloud|oracle|salesforce|comptia)\s+"
-            r"(?:associate|professional|fundamentals|developer|administrator|"
-            r"architect|engineer|specialist|expert)(?:\s+[A-Za-z0-9.+#/-]+){0,3}",
-            cleaned,
-            re.I,
-        )
-        or re.fullmatch(
-            r"(?:[A-Za-z][A-Za-z0-9.&+/-]*\s+){1,4}black\s+belt", cleaned, re.I
         )
     )
 
@@ -14080,23 +13549,10 @@ def _normalize_certifications(certifications: Any) -> list[str]:
             cleaned,
             flags=re.IGNORECASE,
         )
-        black_belt_in_field = re.fullmatch(
-            r"(?:a|an)\s+black\s+belt\s+in\s+(?:a|an)\s+"
-            r"(?P<field>[A-Za-z][A-Za-z0-9 &'/-]*?)(?:\s+after\b.*)?",
-            cleaned,
-            flags=re.IGNORECASE,
-        )
-        if black_belt_in_field:
-            cleaned = f"{black_belt_in_field.group('field').strip()} Black Belt".title()
-            rank_in_field = None
         if rank_in_field and re.search(
             r"\b(?:belt|level|dan|grade|rank)\b", rank_in_field.group("rank"), re.I
         ):
             cleaned = f"{rank_in_field.group('field').strip()} {rank_in_field.group('rank').strip()}"
-        if re.search(r"\bblack\s+belt\b", cleaned, re.I) and re.search(
-            r"\bdiscipline\b", cleaned, re.I
-        ):
-            cleaned = "A Discipline Black Belt"
         # LLMs and fallback extraction can return the candidate's whole
         # sentence (including a typo such as "ahve") instead of the named
         # credential. Persist only the credential name.
@@ -14123,18 +13579,12 @@ def _normalize_certifications(certifications: Any) -> list[str]:
             cleaned,
             flags=re.IGNORECASE,
         ).strip()
-        if not re.fullmatch(
-            r"(?:aws|azure|google cloud|oracle|salesforce|comptia)\s+"
-            r"(?:certification|certificate|credential)",
+        cleaned = re.sub(
+            r"\s+(?:certification|certificate|credential)\s*$",
+            "",
             cleaned,
             flags=re.IGNORECASE,
-        ):
-            cleaned = re.sub(
-                r"\s+(?:certification|certificate|credential)\s*$",
-                "",
-                cleaned,
-                flags=re.IGNORECASE,
-            ).strip(" .,:;-\t")
+        ).strip(" .,:;-\t")
         if not cleaned:
             continue
         # Drop bare conversational filler words (e.g. "any", "yes", "some")
@@ -14144,8 +13594,6 @@ def _normalize_certifications(certifications: Any) -> list[str]:
             "na",
             "not applicable",
         }:
-            continue
-        if not _is_actual_certification(cleaned):
             continue
         strict_key = _normalize_profile_key(cleaned)
         relaxed_key = _certification_relaxed_key(cleaned)
@@ -14418,8 +13866,7 @@ def _merge_skills(
     existing: Any, new_items: Any, certifications: Any = None
 ) -> list[str]:
     """Merge skill lists with normalized, case-insensitive deduplication."""
-    canonical = merge_canonical_skills(existing, new_items, canonical_display=True)
-    return _normalize_skills(canonical, certifications=certifications)
+    return _normalize_skills([existing, new_items], certifications=certifications)
 
 
 _EXPERIENCE_TITLE_STOPWORDS = {
@@ -14912,9 +14359,6 @@ def _normalize_projects(items: Any) -> list[dict]:
                 else []
             )
             record = {"title": title} if title else {}
-            project_name = _normalize_profile_text(item.get("project_name"))
-            if project_name:
-                record["project_name"] = project_name
             if role:
                 record["role"] = role
             if description:
@@ -14927,8 +14371,7 @@ def _normalize_projects(items: Any) -> list[dict]:
                 record["technologies"] = list(dict.fromkeys(technologies))
         else:
             continue
-        title_value = record.get("title", "")
-        title = " ".join(title_value) if isinstance(title_value, (list, tuple)) else str(title_value)
+        title = record.get("title", "")
         if not title:
             continue
         key = _normalize_profile_key(title)
@@ -14939,8 +14382,6 @@ def _normalize_projects(items: Any) -> list[dict]:
             for field in ("role", "description"):
                 if not existing.get(field) and record.get(field):
                     existing[field] = record[field]
-            if record.get("project_name") and not existing.get("project_name"):
-                existing["project_name"] = record["project_name"]
             for field in ("technologies", "responsibilities", "outcomes"):
                 if record.get(field):
                     existing[field] = list(
@@ -15515,38 +14956,35 @@ def _merge_voice_into_profile(existing: dict, voice: dict) -> dict:
     # This is deliberately limited to the pair: other profile fields retain their
     # existing merge behavior.
     voice_role = (voice.get("current_role") or "").strip()
-    valid_voice_role = voice_role if valid_role(voice_role) else ""
     voice_company = (voice.get("current_company") or "").strip()
     existing_role = (merged.get("current_role") or "").strip()
-    if valid_voice_role and voice_company:
-        merged["current_role"] = valid_voice_role
+    if voice_role and voice_company:
+        merged["current_role"] = voice_role
         merged["current_company"] = voice_company
     else:
         # Fill missing scalar fields when Voice Intake does not supply an explicit
         # current-job pair.
-        if voice_company and not merged.get("current_company"):
-            merged["current_company"] = voice_company
-        if valid_location(voice.get("location")) and not merged.get("location"):
-            merged["location"] = voice["location"].strip()
+        for key in ("current_company", "location"):
+            if voice.get(key) and not merged.get(key):
+                merged[key] = voice[key]
 
     # Without a company, retain the conservative historical role behavior.
-    if valid_voice_role and not voice_company:
+    if voice_role and not voice_company:
         if not existing_role:
-            merged["current_role"] = valid_voice_role
-        elif _is_more_specific_role(existing_role, valid_voice_role):
-            merged["current_role"] = valid_voice_role
+            merged["current_role"] = voice_role
+        elif _is_more_specific_role(existing_role, voice_role):
+            merged["current_role"] = voice_role
 
     # Location is independent from current employment and can still fill a gap.
-    if valid_location(voice.get("location")) and not merged.get("location"):
-        merged["location"] = voice["location"].strip()
+    if voice.get("location") and not merged.get("location"):
+        merged["location"] = voice["location"]
 
     # experience_years: fill if missing
-    existing_experience = normalize_experience_value(merged.get("experience_years"))
-    voice_experience = normalize_experience_value(voice.get("experience_years"))
-    if existing_experience is None and voice_experience is not None:
-        merged["experience_years"] = voice_experience
-    elif existing_experience is not None:
-        merged["experience_years"] = existing_experience
+    if voice.get("experience_years") and not merged.get("experience_years"):
+        try:
+            merged["experience_years"] = float(voice["experience_years"])
+        except (TypeError, ValueError):
+            pass
 
     # Store voice-only fields in raw_data (no new DB columns needed)
     existing_raw = merged.get("raw_data") or {}
@@ -15731,9 +15169,7 @@ async def _upsert_candidate_preferences(
     candidate_id: str,
     voice: dict,
     db: Any = None,
-    *,
-    bump_revision: bool = True,
-) -> bool:
+) -> None:
     """
     Persist voice-derived preferences into the existing candidate_preferences table.
 
@@ -15767,7 +15203,7 @@ async def _upsert_candidate_preferences(
             willing_to_relocate is not None,
         )
     ):
-        return False
+        return
 
     async with _preference_session(db) as db:
         row = await db.execute(
@@ -15831,7 +15267,7 @@ async def _upsert_candidate_preferences(
             set_parts.append("willing_to_relocate = :willing_to_relocate")
             params["willing_to_relocate"] = bool(willing_to_relocate)
         if not set_parts:
-            return False
+            return
         set_parts.append("updated_at = now()")
         async with _preference_session(db) as db:
             await db.execute(
@@ -15840,9 +15276,7 @@ async def _upsert_candidate_preferences(
                 ),
                 params,
             )
-            if bump_revision:
-                await _increment_matching_profile_revision(db, candidate_id)
-        return True
+        return
 
     insert_params = {
         "id": str(uuid.uuid4()),
@@ -15874,9 +15308,6 @@ async def _upsert_candidate_preferences(
             ),
             insert_params,
         )
-        if bump_revision:
-            await _increment_matching_profile_revision(db, candidate_id)
-    return True
 
 
 async def _persist_voice_intake_profile_state(
@@ -15896,17 +15327,6 @@ async def _persist_voice_intake_profile_state(
     candidate = candidate if isinstance(candidate, dict) else {}
     voice_data = _sanitize_profile_field_mapping(voice_data)
     merged = _merge_voice_into_profile(candidate, voice_data)
-    candidate_matching_before = {
-        "current_role": candidate.get("current_role") or "",
-        "location": candidate.get("location") or "",
-        "experience_years": candidate.get("experience_years"),
-        "skills": _normalize_skills(candidate.get("skills") or []),
-        "work_experience": candidate.get("work_experience") or [],
-        "education": candidate.get("education") or [],
-        "raw_data": _matching_raw_data_snapshot(
-            _parse_raw_data(candidate.get("raw_data"))
-        ),
-    }
 
     update_params: dict[str, Any] = {"cid": candidate_id}
     set_clauses: list[str] = []
@@ -15963,15 +15383,6 @@ async def _persist_voice_intake_profile_state(
     merged_raw = _append_demonstrated_skill_evidence(
         merged_raw, candidate.get("skills") or [], voice_usage_text, "eve_voice"
     )
-    candidate_matching_after = {
-        "current_role": merged.get("current_role") or "",
-        "location": merged.get("location") or "",
-        "experience_years": merged.get("experience_years"),
-        "skills": _normalize_skills(merged.get("skills") or []),
-        "work_experience": merged.get("work_experience") or [],
-        "education": merged.get("education") or [],
-        "raw_data": _matching_raw_data_snapshot(merged_raw),
-    }
     set_clauses.append("raw_data = CAST(:raw_data AS jsonb)")
     update_params["raw_data"] = json.dumps(merged_raw)
 
@@ -15982,15 +15393,11 @@ async def _persist_voice_intake_profile_state(
             text(f"UPDATE candidates SET {', '.join(set_clauses)} WHERE id = :cid"),
             update_params,
         )
-        preference_changed = await _upsert_candidate_preferences(
-            candidate_id, voice_data, db=db, bump_revision=False
-        )
-        if candidate_matching_after != candidate_matching_before or preference_changed:
-            await _increment_matching_profile_revision(db, candidate_id)
         await db.commit()
 
     await profile_cache.invalidate(candidate_id)
 
+    await _upsert_candidate_preferences(candidate_id, voice_data)
     return merged
 
 
@@ -16178,7 +15585,7 @@ async def download_updated_resume(
         if isinstance(stored_path, str) and stored_path
         else None
     )
-    if file_path is None or not _is_candidate_resume_path(candidate_id, file_path) or not file_path.exists():
+    if not _is_candidate_resume_path(candidate_id, file_path) or not file_path.exists():
         raise HTTPException(status_code=404, detail="Updated resume PDF not found.")
     from profile_strength_service import _backfill_demonstrated_skill_evidence
 
@@ -16227,8 +15634,7 @@ async def download_application_resume(
     source = raw_data.get("updated_resume_file_path")
     source_path = Path(source).resolve() if isinstance(source, str) and source else None
     if (
-        source_path is None
-        or not _is_candidate_resume_path(candidate_id, source_path)
+        not _is_candidate_resume_path(candidate_id, source_path)
         or not source_path.exists()
     ):
         raise HTTPException(status_code=404, detail="Updated resume PDF not found.")
@@ -16366,7 +15772,7 @@ def _voice_intake_timing(
     """Emit fixed, metadata-only Voice Intake timing fields."""
     if event not in _VOICE_TIMING_EVENTS or endpoint not in _VOICE_TIMING_ENDPOINTS:
         return
-    fields: dict[str, Any] = {
+    fields = {
         "event": event,
         "request_id": _safe_voice_request_id(request_id),
         "endpoint": endpoint,
@@ -16619,7 +16025,7 @@ async def candidate_voice_intake(
     )
 
     if voice_intake_state["status"] == "completed":
-        _schedule_matching(request.candidate_id)
+        asyncio.ensure_future(_trigger_matching(request.candidate_id))
 
     # Return updated profile so dashboard can refresh immediately
     updated_candidate = await _get_candidate_row(request.candidate_id)
@@ -16717,7 +16123,7 @@ async def candidate_voice_intake_progress(
         incoming_revision = None
     try:
         stored_revision = (
-            int(cast(Any, existing_vi.get("transcript_revision")))
+            int(existing_vi.get("transcript_revision"))
             if existing_vi.get("transcript_revision") is not None
             else -1
         )
@@ -16845,7 +16251,7 @@ async def candidate_voice_intake_progress(
             "[voice-intake] persisted progress status=%s; matching refresh deferred",
             resume_status,
         )
-        _schedule_voice_intake_matching(request.candidate_id, cast(str, resume_status))
+    _schedule_voice_intake_matching(request.candidate_id, resume_status)
     _voice_intake_timing(
         "request_finished",
         request_id=request_id,
@@ -17207,7 +16613,7 @@ async def _claim_resume_fix_credits(
             ),
             {"cid": candidate_id, "usage_date": usage_date},
         )
-        claim_id = cast(str, inserted.scalar())
+        claim_id = inserted.scalar()
         await db.commit()
     return {
         "claim_id": str(claim_id),
@@ -17679,26 +17085,25 @@ async def get_candidate_billing(
             .mappings()
             .fetchall()
         )
-    subscription = cast(dict[str, Any] | None, sub)
     active = bool(
-        subscription
-        and subscription["status"] == "active"
-        and subscription["expires_at"]
-        and subscription["expires_at"] > datetime.now(UTC)
+        sub
+        and sub["status"] == "active"
+        and sub["expires_at"]
+        and sub["expires_at"] > datetime.now(UTC)
     )
     return {
         "status": "Active" if active else "Free",
         "plan": "₹3,000 / 3 months" if active else "Free",
-        "subscription_start": subscription["starts_at"].isoformat()
-        if active and subscription and subscription["starts_at"]
+        "subscription_start": sub["starts_at"].isoformat()
+        if active and sub["starts_at"]
         else None,
-        "subscription_expiry": subscription["expires_at"].isoformat()
-        if active and subscription and subscription["expires_at"]
+        "subscription_expiry": sub["expires_at"].isoformat()
+        if active and sub["expires_at"]
         else None,
         "payment_status": "paid"
         if active
-        else (subscription["status"] if subscription else "not_started"),
-        "payment_id": subscription["razorpay_payment_id"] if subscription else None,
+        else (sub["status"] if sub else "not_started"),
+        "payment_id": sub["razorpay_payment_id"] if sub else None,
         "history": [dict(row) for row in history],
     }
 
@@ -18064,13 +17469,7 @@ async def get_resume_fix_credit_balance(
 
 
 async def _claim_daily_job_access(
-    candidate_id: str,
-    candidate: dict,
-    request_more: bool = False,
-    access_date=None,
-    *,
-    eligible_ids: list[str],
-    opportunity_type: str,
+    candidate_id: str, candidate: dict, request_more: bool = False, access_date=None
 ) -> bool:
     """Persist and enforce the free daily job allowance. Returns whether it applies."""
     if _has_active_subscription(candidate):
@@ -18104,15 +17503,10 @@ async def _claim_daily_job_access(
         slots = max(0, FREE_DAILY_JOB_LIMIT - used)
         if slots:
             candidates = await db.execute(
-                text(f"""
+                text("""
                 SELECT cjr.id
                 FROM candidate_job_recommendations cjr
-                JOIN job_descriptions jd ON jd.id = cjr.job_id
-                WHERE cjr.candidate_id = :cid
-                  AND cjr.hidden_at IS NULL
-                  AND cjr.id = ANY(CAST(:eligible_ids AS uuid[]))
-                  AND {candidate_visible_where("jd")}
-                  AND COALESCE(jd.opportunity_type, 'jobs') = :opportunity_type
+                WHERE cjr.candidate_id = :cid AND cjr.hidden_at IS NULL
                   AND NOT EXISTS (
                     SELECT 1 FROM candidate_daily_job_access access
                     WHERE access.candidate_id = cjr.candidate_id
@@ -18122,12 +17516,7 @@ async def _claim_daily_job_access(
                          cjr.match_score DESC NULLS LAST
                 LIMIT :slots
             """),
-                {
-                    "cid": candidate_id,
-                    "eligible_ids": eligible_ids,
-                    "opportunity_type": opportunity_type,
-                    "slots": slots,
-                },
+                {"cid": candidate_id, "slots": slots},
             )
             for row in candidates.fetchall():
                 await db.execute(
@@ -18149,140 +17538,12 @@ async def _claim_daily_job_access(
     return True
 
 
-def _stored_recommendation_validation_job(row) -> dict[str, Any]:
-    """Convert a stored-recommendation validation row for the matcher."""
-    mapping = getattr(row, "_mapping", row)
-
-    def value(index: int, key: str):
-        try:
-            if key in mapping:
-                return mapping[key]
-        except (TypeError, KeyError):
-            pass
-        try:
-            return row[index]
-        except (IndexError, KeyError, TypeError):
-            return None
-
-    return {
-        "title": value(1, "title"),
-        "description": value(2, "description"),
-        "requirements": value(3, "requirements"),
-        "skills": value(4, "skills"),
-        "skills_required": value(5, "skills_required"),
-        "experience_required": value(6, "experience_required"),
-        "location": value(7, "location"),
-        "city": value(8, "city"),
-        "state": value(9, "state"),
-        "country": value(10, "country"),
-        "remote": value(11, "remote"),
-        "remote_policy": value(12, "remote_policy"),
-        "employment_type": value(13, "employment_type"),
-        "industry": value(14, "industry"),
-        "structured_data": value(15, "structured_data"),
-        "responsibilities": value(16, "responsibilities"),
-    }
-
-
-async def _load_stored_recommendation_validation_rows(
-    db,
-    candidate_id: str,
-    opportunity_type: str,
-    *,
-    include_visibility: bool,
-):
-    """Load stored recommendations for current relevance validation."""
-    visibility = (
-        f" AND {candidate_visible_where('jd')}" if include_visibility else ""
-    )
-    result = await db.execute(
-        text(f"""
-            SELECT cjr.id, jd.title, jd.description, jd.requirements,
-                   jd.skills, jd.skills_required, jd.experience_required,
-                   jd.location, jd.city, jd.state, jd.country,
-                   jd.remote, jd.remote_policy, jd.employment_type,
-                   jd.industry, jd.structured_data,
-                   jd.responsibilities
-            FROM candidate_job_recommendations cjr
-            JOIN job_descriptions jd ON jd.id = cjr.job_id
-            WHERE cjr.candidate_id = :cid
-              AND cjr.hidden_at IS NULL
-              AND COALESCE(jd.opportunity_type, 'jobs') = :opportunity_type
-              {visibility}
-        """),
-        {"cid": candidate_id, "opportunity_type": opportunity_type},
-    )
-    return result
-
-
-def _authoritative_candidate_opportunity_type(candidate: dict) -> str:
-    """Return the candidate's stored opportunity type with the API default."""
-    from profile_strength_service import get_canonical_preferences
-
-    return (
-        _normalize_opportunity_type(
-            candidate.get("opportunity_type")
-            or get_canonical_preferences(candidate, candidate.get("_prefs_row")).get(
-                "opportunity_type"
-            )
-        )
-        or "jobs"
-    )
-
-
-async def _load_currently_valid_recommendation(
-    candidate_id: str, rec_id: str, candidate: dict | None = None
-) -> dict:
-    """Load one owned recommendation only when it is currently candidate-eligible."""
-    candidate = candidate or await _get_candidate_row(candidate_id)
-    opportunity_type = _authoritative_candidate_opportunity_type(candidate)
-    from candidate_job_matching_service import (
-        refresh_stale_candidate_job_scores,
-        stored_recommendation_relevance,
-    )
-
-    await refresh_stale_candidate_job_scores(
-        candidate_id,
-        candidate,
-        SessionLocal,
-        recommendation_id=rec_id,
-        opportunity_type=opportunity_type,
-    )
-
-    async with SessionLocal() as db:
-        result = await db.execute(
-            text(f"""
-                SELECT cjr.match_score, cjr.hidden_at, jd.*
-                FROM candidate_job_recommendations cjr
-                JOIN job_descriptions jd ON jd.id = cjr.job_id
-                WHERE cjr.id = :rid
-                  AND cjr.candidate_id = :cid
-                  AND cjr.hidden_at IS NULL
-                  AND {candidate_visible_where("jd")}
-                  AND COALESCE(jd.opportunity_type, 'jobs') = :opportunity_type
-                LIMIT 1
-            """),
-            {
-                "rid": rec_id,
-                "cid": candidate_id,
-                "opportunity_type": opportunity_type,
-            },
-        )
-        row = result.mappings().fetchone()
-    if not row:
-        raise HTTPException(status_code=404, detail="Recommendation not found.")
-    row_dict: dict[str, Any] = dict(row)
-    if not stored_recommendation_relevance(candidate, row_dict)["eligible"]:
-        raise HTTPException(status_code=404, detail="Recommendation not found.")
-    return row_dict
-
-
 @api_router.get("/candidate/{candidate_id}/jobs")
 async def get_candidate_jobs(
     candidate_id: str,
     request_more: bool = False,
     type: str | None = None,
-    response: Response = _RESPONSE_DEFAULT,
+    response: Response = None,
     authorization: str | None = Header(default=None),
 ):
     _authorize_candidate(candidate_id, authorization)
@@ -18320,28 +17581,34 @@ async def get_candidate_jobs(
         )
 
     from candidate_job_matching_service import (
-        refresh_stale_candidate_job_scores,
-        stored_recommendation_relevance,
-    )
-
-    await refresh_stale_candidate_job_scores(
-        candidate_id, candidate, SessionLocal, opportunity_type=opportunity_type
+        stored_recommendation_experience_eligibility,
     )
 
     async def eligible_recommendation_ids(db):
-        rows = await _load_stored_recommendation_validation_rows(
-            db,
-            candidate_id,
-            opportunity_type,
-            include_visibility=False,
+        rows = await db.execute(
+            text("""
+            SELECT cjr.id, jd.title, jd.description, jd.requirements,
+                   jd.skills, jd.skills_required, jd.experience_required
+            FROM candidate_job_recommendations cjr
+            JOIN job_descriptions jd ON jd.id = cjr.job_id
+            WHERE cjr.candidate_id = :cid AND cjr.hidden_at IS NULL
+              AND COALESCE(jd.opportunity_type, 'jobs') = :opportunity_type
+        """),
+            {"cid": candidate_id, "opportunity_type": opportunity_type},
         )
-
         return [
             str(row[0])
             for row in rows.fetchall()
-            if stored_recommendation_relevance(
+            if stored_recommendation_experience_eligibility(
                 candidate,
-                _stored_recommendation_validation_job(row),
+                {
+                    "title": row[1],
+                    "description": row[2],
+                    "requirements": row[3],
+                    "skills": row[4],
+                    "skills_required": row[5],
+                    "experience_required": row[6],
+                },
             )["eligible"]
         ]
 
@@ -18349,10 +17616,6 @@ async def get_candidate_jobs(
         eligible_ids = await eligible_recommendation_ids(db)
     eligible_clause = "cjr.id = ANY(CAST(:eligible_ids AS uuid[]))"
     eligible_params = {"eligible_ids": eligible_ids}
-
-    async def stored_recommendations_are_stale(db) -> bool:
-        """Check the authoritative candidate-wide refresh completion marker."""
-        return await _candidate_recommendations_are_stale(db, candidate_id)
 
     # A free candidate only needs a new match run after exhausting every visible
     # recommendation.  Historical daily-access rows deliberately make a
@@ -18383,27 +17646,18 @@ async def get_candidate_jobs(
         )
         unaccessed_visible_count = available_row.scalar() or 0
 
-        recommendations_stale = await stored_recommendations_are_stale(db)
-
     # A stale ineligible row must not cause a refresh solely because it was
     # filtered.  Refresh remains available when there are eligible stored
     # recommendations whose access has been exhausted.
-    refresh_requested = recommendations_stale or (
+    if (
         not _has_active_subscription(candidate)
         and unaccessed_visible_count == 0
-        and bool(eligible_ids)
-    )
-    if refresh_requested:
+        and eligible_ids
+    ):
         try:
             from candidate_job_matching_service import refresh_candidate_job_matches
 
-            refresh_completed = await refresh_candidate_job_matches(
-                candidate_id, candidate, SessionLocal
-            )
-            if refresh_completed:
-                async with SessionLocal() as db:
-                    eligible_ids = await eligible_recommendation_ids(db)
-                eligible_params = {"eligible_ids": eligible_ids}
+            await refresh_candidate_job_matches(candidate_id, candidate, SessionLocal)
         except Exception as e:
             logger.warning(
                 "[matching] On-demand matching failed for %s: %s", candidate_id, e
@@ -18433,12 +17687,7 @@ async def get_candidate_jobs(
     # product-calendar date for both its claim and response.
     access_date = _product_current_date()
     limited = await _claim_daily_job_access(
-        candidate_id,
-        candidate,
-        request_more,
-        access_date,
-        eligible_ids=eligible_ids,
-        opportunity_type=opportunity_type,
+        candidate_id, candidate, request_more, access_date
     )
 
     async with SessionLocal() as db:
@@ -18878,11 +18127,24 @@ def _job_missing_requirements(
     }
 
 
-async def _get_job_match_improvement_row(
-    candidate_id: str, rec_id: str, candidate: dict | None = None
-) -> dict:
-    """Load the selected recommendation after current eligibility validation."""
-    return await _load_currently_valid_recommendation(candidate_id, rec_id, candidate)
+async def _get_job_match_improvement_row(candidate_id: str, rec_id: str) -> dict:
+    """Load the selected recommendation's job context after verifying ownership."""
+    async with SessionLocal() as db:
+        result = await db.execute(
+            text(f"""
+            SELECT cjr.match_score, jd.*
+            FROM candidate_job_recommendations cjr
+            JOIN job_descriptions jd ON jd.id = cjr.job_id
+            WHERE cjr.id = :rid AND cjr.candidate_id = :cid
+              AND {candidate_visible_where("jd")}
+            LIMIT 1
+        """),
+            {"rid": rec_id, "cid": candidate_id},
+        )
+        row = result.mappings().fetchone()
+    if not row:
+        raise HTTPException(status_code=404, detail="Recommendation not found.")
+    return dict(row)
 
 
 def _resume_editor_payload(candidate: dict) -> dict:
@@ -19021,17 +18283,16 @@ async def _save_resume_editor_updates(candidate_id: str, updates: dict) -> dict:
         next_values["certifications"]
     )
     next_values["projects"] = _normalize_projects(next_values["projects"])
-    existing_experience = normalize_experience_value(
-        existing_values.get("experience_years")
-    )
-    supplied_experience = normalize_experience_value(
-        supplied.get("experience_years")
-    )
-    next_values["experience_years"] = (
-        supplied_experience
-        if "experience_years" in supplied and supplied_experience is not None
-        else existing_experience
-    )
+    try:
+        next_values["experience_years"] = (
+            float(next_values["experience_years"])
+            if next_values["experience_years"] not in (None, "")
+            else None
+        )
+    except (TypeError, ValueError):
+        raise HTTPException(
+            status_code=422, detail="experience_years must be numeric."
+        ) from None
     parsed.update(
         {
             "name": next_values["name"],
@@ -19059,7 +18320,7 @@ async def _save_resume_editor_updates(candidate_id: str, updates: dict) -> dict:
         certifications=raw["certifications"],
     )
     raw["work_experience"] = _merge_work_experience(
-        raw.get("work_experience") or [], next_values["work_experience"]
+        raw.get("work_experience"), next_values["work_experience"]
     )
     raw["education"] = _merge_education(raw.get("education"), next_values["education"])
     # Persist the generated bytes through the same candidate-owned resume
@@ -19173,18 +18434,6 @@ async def _save_resume_editor_updates(candidate_id: str, updates: dict) -> dict:
                             "fingerprint": fingerprint,
                         },
                     )
-                if any(
-                    field in changed
-                    for field in (
-                        "headline",
-                        "location",
-                        "experience_years",
-                        "skills",
-                        "work_experience",
-                        "education",
-                    )
-                ):
-                    await _increment_matching_profile_revision(db, candidate_id)
                 await db.commit()
             except Exception:
                 await db.rollback()
@@ -19432,17 +18681,7 @@ async def get_tracked_jobs(
 ):
     _authorize_candidate(candidate_id, authorization)
     """Return only jobs the candidate has explicitly tracked."""
-    candidate = await _get_candidate_row(candidate_id)
-    opportunity_type = _authoritative_candidate_opportunity_type(candidate)
-    from candidate_job_matching_service import (
-        refresh_stale_candidate_job_scores,
-        stored_recommendation_relevance,
-    )
-
-    await refresh_stale_candidate_job_scores(
-        candidate_id, candidate, SessionLocal, opportunity_type=opportunity_type
-    )
-
+    await _get_candidate_row(candidate_id)
     async with SessionLocal() as db:
         rows = await db.execute(
             text(f"""
@@ -19451,24 +18690,24 @@ async def get_tracked_jobs(
                     cjr.job_id,
                     cjr.match_score,
                     cjr.tracked_at,
-                    cjr.hidden_at,
-                    jd.*
+                    jd.title,
+                    jd.company_name,
+                    jd.location,
+                    jd.salary_range,
+                    jd.description,
+                    jd.requirements,
+                    jd.skills,
+                    jd.company_logo_url
                 FROM candidate_job_recommendations cjr
                 LEFT JOIN job_descriptions jd ON jd.id = cjr.job_id
                 WHERE cjr.candidate_id = :cid
                   AND cjr.tracked_at IS NOT NULL
-                  AND cjr.hidden_at IS NULL
                   AND {candidate_visible_where("jd")}
-                  AND COALESCE(jd.opportunity_type, 'jobs') = :opportunity_type
                 ORDER BY cjr.tracked_at DESC
             """),
-            {"cid": candidate_id, "opportunity_type": opportunity_type},
+            {"cid": candidate_id},
         )
-        results = [
-            dict(row)
-            for row in rows.mappings().fetchall()
-            if stored_recommendation_relevance(candidate, dict(row))["eligible"]
-        ]
+        results = rows.mappings().fetchall()
     return [
         {
             "id": str(r["rec_id"]),
@@ -20010,6 +19249,72 @@ def _consume_oauth_state(response: RedirectResponse, provider: str) -> None:
 async def exchange_oauth_session(exchange_code: str = Form(...)):
     return await _consume_oauth_exchange(exchange_code)
 
+
+async def _find_or_create_local_candidate(email: str) -> tuple[str, bool]:
+    """Find an allowlisted local candidate or create a pending candidate."""
+    async with SessionLocal() as db:
+        result = await db.execute(
+            text("""
+                SELECT id, name, phone, summary, parsing_status
+                FROM candidates
+                WHERE lower(email) = :email
+                LIMIT 1
+            """),
+            {"email": email},
+        )
+        existing = result.fetchone()
+        if existing:
+            if len(existing) == 1:
+                return str(existing[0]), False
+            complete = bool(
+                existing[1]
+                and existing[2]
+                and existing[3]
+                and existing[4] == "completed"
+            )
+            return str(existing[0]), not complete
+
+        candidate_id = str(uuid.uuid4())
+        await db.execute(
+            text("""
+                INSERT INTO candidates
+                    (id, email, source, created_by_source, updated_by_source,
+                     parsing_status, created_at, updated_at)
+                VALUES
+                    (:id, :email, 'eve', 'local_development',
+                     'local_development', 'pending', now(), now())
+            """),
+            {"id": candidate_id, "email": email},
+        )
+        await db.commit()
+        return candidate_id, True
+
+
+@api_router.post("/auth/local-development")
+async def local_development_login(email: str = Form(...)):
+    """Issue a normal candidate session for an explicitly allowlisted dev email."""
+    if _runtime_environment() not in _DEVELOPMENT_ENVIRONMENTS:
+        raise HTTPException(status_code=404, detail="Not found.")
+
+    normalized_email = email.strip().casefold()
+    allowed_emails = _local_dev_auth_emails()
+    if not normalized_email or normalized_email not in allowed_emails:
+        raise HTTPException(
+            status_code=403,
+            detail="Local development login is not enabled for this email.",
+        )
+
+    candidate_id, needs_onboarding = await _find_or_create_local_candidate(
+        normalized_email
+    )
+    profile = await _get_candidate_profile_payload(candidate_id)
+    profile["candidate_token"] = _issue_candidate_session_token(candidate_id)
+    return {
+        "candidate_id": candidate_id,
+        "candidate_token": profile.pop("candidate_token"),
+        "profile": profile,
+        "needs_onboarding": needs_onboarding,
+    }
 
 GOOGLE_CLIENT_ID = os.environ.get("GOOGLE_CLIENT_ID", "")
 GOOGLE_CLIENT_SECRET = os.environ.get("GOOGLE_CLIENT_SECRET", "")
@@ -20893,27 +20198,27 @@ async def vapi_webhook(request: StarletteRequest):
     # acknowledgements only.  VAPI's end-of-call-report is the terminal event.
     if event_type == "end-of-call-report":
         event = message if isinstance(message, dict) else payload
-        call = cast(dict[str, Any], event.get("call") if isinstance(event.get("call"), dict) else {})
+        call = event.get("call") if isinstance(event.get("call"), dict) else {}
         metadata = call.get("metadata") or event.get("metadata") or {}
-        overrides: dict[str, Any] = cast(dict[str, Any], (
+        overrides = (
             call.get("assistantOverrides")
             if isinstance(call.get("assistantOverrides"), dict)
             else {}
-        ))
-        variable_values: dict[str, Any] = cast(dict[str, Any], (
+        )
+        variable_values = (
             overrides.get("variableValues")
             if isinstance(overrides.get("variableValues"), dict)
             else {}
-        ))
+        )
         candidate_id = metadata.get("candidateId") or metadata.get("candidate_id")
         candidate_id = (
             candidate_id
             or variable_values.get("candidateId")
             or variable_values.get("candidate_id")
         )
-        artifact: dict[str, Any] = cast(dict[str, Any], (
+        artifact = (
             event.get("artifact") if isinstance(event.get("artifact"), dict) else {}
-        ))
+        )
         transcript = artifact.get("transcript") or event.get("transcript")
         call_id = str(call.get("id") or event.get("callId") or "").strip()
         transcript = transcript if isinstance(transcript, str) else ""
