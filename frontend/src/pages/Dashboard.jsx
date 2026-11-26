@@ -25,6 +25,12 @@ import { API, BACKEND_URL } from "../lib/apiConfig";
 
 export { getVoiceIntakeCenterView };
 
+export function resolveProfileVoiceIntakeResume(data, previousResume) {
+  return Object.hasOwn(data || {}, "voice_intake_resume")
+    ? data.voice_intake_resume
+    : (previousResume ?? null);
+}
+
 // Keep PDF.js out of Dashboard's initial dependency graph. The shared promise
 // also prevents multiple previews mounting at once from loading the library
 // and worker more than once.
@@ -82,9 +88,7 @@ function profilesAreEqual(left, right) {
 function mergeProfileUpdatesForDisplay(currentProfile, updates) {
   if (!updates || typeof updates !== "object") return currentProfile;
 
-  const merged = hydrateDisplayProfile(
-    mergeProfilesForDisplay(currentProfile, updates)
-  );
+  const merged = hydrateDisplayProfile(mergeProfilesForDisplay(currentProfile, updates));
 
   return profilesAreEqual(currentProfile, merged) ? currentProfile : merged;
 }
@@ -155,7 +159,11 @@ function ResumePagePreview({ previewUrl, onError }) {
     };
   }, [onError, previewUrl]);
 
-  return <div data-testid="resume-inline-preview" className="h-full w-full overflow-y-auto eve-scroll"><div ref={pagesRef} className="flex w-full flex-col" /></div>;
+  return (
+    <div data-testid="resume-inline-preview" className="h-full w-full overflow-y-auto eve-scroll">
+      <div ref={pagesRef} className="flex w-full flex-col" />
+    </div>
+  );
 }
 
 function ResumeContextPanel({ candidateId, candidateToken, documents, docsLoading }) {
@@ -171,19 +179,22 @@ function ResumeContextPanel({ candidateId, candidateToken, documents, docsLoadin
     setPreviewError(false);
     if (!candidateId || !resume) return undefined;
 
-    axios.get(`${API}/candidate/${candidateId}/resume/view`, {
-      responseType: "blob",
-      headers: candidateToken ? { Authorization: `Bearer ${candidateToken}` } : {},
-    }).then(({ data }) => {
-      if (!active || !data || data.type && data.type !== "application/pdf") {
+    axios
+      .get(`${API}/candidate/${candidateId}/resume/view`, {
+        responseType: "blob",
+        headers: candidateToken ? { Authorization: `Bearer ${candidateToken}` } : {},
+      })
+      .then(({ data }) => {
+        if (!active || !data || (data.type && data.type !== "application/pdf")) {
+          if (active) setPreviewError(true);
+          return;
+        }
+        objectUrl = URL.createObjectURL(data);
+        if (active) setPreviewUrl(objectUrl);
+      })
+      .catch(() => {
         if (active) setPreviewError(true);
-        return;
-      }
-      objectUrl = URL.createObjectURL(data);
-      if (active) setPreviewUrl(objectUrl);
-    }).catch(() => {
-      if (active) setPreviewError(true);
-    });
+      });
 
     return () => {
       active = false;
@@ -194,12 +205,25 @@ function ResumeContextPanel({ candidateId, candidateToken, documents, docsLoadin
   return (
     <aside data-testid="right-resume-context" className="h-full overflow-hidden bg-[#FDFDFC]">
       {docsLoading ? (
-        <p data-testid="resume-preview-loading" className="p-6 text-[13px] text-[#777571]">Loading resume preview…</p>
+        <p data-testid="resume-preview-loading" className="p-6 text-[13px] text-[#777571]">
+          Loading resume preview…
+        </p>
       ) : resume ? (
         <div className="h-full w-full">
-          {previewUrl ? <ResumePagePreview previewUrl={previewUrl} onError={handlePreviewError} /> : previewError ? (
-            <div data-testid="resume-preview-fallback" className="p-6 text-[13px] leading-6 text-[#777571]">This resume can’t be previewed here.</div>
-          ) : <p data-testid="resume-preview-loading" className="p-6 text-[13px] text-[#777571]">Loading resume preview…</p>}
+          {previewUrl ? (
+            <ResumePagePreview previewUrl={previewUrl} onError={handlePreviewError} />
+          ) : previewError ? (
+            <div
+              data-testid="resume-preview-fallback"
+              className="p-6 text-[13px] leading-6 text-[#777571]"
+            >
+              This resume can’t be previewed here.
+            </div>
+          ) : (
+            <p data-testid="resume-preview-loading" className="p-6 text-[13px] text-[#777571]">
+              Loading resume preview…
+            </p>
+          )}
         </div>
       ) : (
         <p data-testid="resume-context-empty" className="p-6 text-[13px] leading-6 text-[#777571]">
@@ -214,37 +238,90 @@ function BillingContextPanel({ candidateId }) {
   const [billing, setBilling] = React.useState(null);
   React.useEffect(() => {
     if (!candidateId) return;
-    axios.get(`${API}/candidate/${candidateId}/billing`).then(({ data }) => setBilling(data)).catch(() => setBilling({}));
+    axios
+      .get(`${API}/candidate/${candidateId}/billing`)
+      .then(({ data }) => setBilling(data))
+      .catch(() => setBilling({}));
   }, [candidateId]);
-  if (!billing) return <aside data-testid="billing-context" className="h-full p-6 text-sm text-[#777571]">Loading billing summary…</aside>;
+  if (!billing)
+    return (
+      <aside data-testid="billing-context" className="h-full p-6 text-sm text-[#777571]">
+        Loading billing summary…
+      </aside>
+    );
   const latest = billing.history?.[0];
-  return <aside data-testid="billing-context" className="h-full overflow-y-auto eve-scroll bg-[#FDFDFC] px-8 py-6">
-    <p className="text-[12px] font-semibold uppercase tracking-[.12em] text-[#7B6FB8]">Billing summary</p>
-    <h2 className="mt-1 text-[16px] font-medium text-[#1F1F1F]">{billing.status || "Subscription"}</h2>
-    <section className="mt-5 rounded-xl border border-black/[0.07] bg-white p-4">
-      <p className="text-[12px] font-medium text-[#777571]">Latest payment</p>
-      {latest ? <><p className="mt-2 text-sm font-medium capitalize text-[#1F1F1F]">{latest.status || "Payment"}</p><p className="mt-1 text-[13px] text-[#777571]">₹{((latest.amount_paise || 0) / 100).toLocaleString("en-IN")}</p></> : <p className="mt-2 text-[13px] text-[#777571]">No payment history yet.</p>}
-    </section>
-  </aside>;
+  return (
+    <aside
+      data-testid="billing-context"
+      className="h-full overflow-y-auto eve-scroll bg-[#FDFDFC] px-8 py-6"
+    >
+      <p className="text-[12px] font-semibold uppercase tracking-[.12em] text-[#7B6FB8]">
+        Billing summary
+      </p>
+      <h2 className="mt-1 text-[16px] font-medium text-[#1F1F1F]">
+        {billing.status || "Subscription"}
+      </h2>
+      <section className="mt-5 rounded-xl border border-black/[0.07] bg-white p-4">
+        <p className="text-[12px] font-medium text-[#777571]">Latest payment</p>
+        {latest ? (
+          <>
+            <p className="mt-2 text-sm font-medium capitalize text-[#1F1F1F]">
+              {latest.status || "Payment"}
+            </p>
+            <p className="mt-1 text-[13px] text-[#777571]">
+              ₹{((latest.amount_paise || 0) / 100).toLocaleString("en-IN")}
+            </p>
+          </>
+        ) : (
+          <p className="mt-2 text-[13px] text-[#777571]">No payment history yet.</p>
+        )}
+      </section>
+    </aside>
+  );
 }
 
 function SectionContextPanel({ tab, selectedJob, documents, opportunitiesCount }) {
-  const content = tab === "tracked"
-    ? { heading: "Tracked job details", body: selectedJob ? `${selectedJob.title || "Job"}${selectedJob.company ? ` at ${selectedJob.company}` : ""}` : "Select a tracked job to see its details." }
-    : tab === "documents"
-      ? { heading: "Document summary", body: documents?.resume ? `Current resume: ${documents.resume.filename}` : "No resume has been uploaded yet." }
-      : { heading: "Notifications", body: opportunitiesCount ? `${opportunitiesCount} notification${opportunitiesCount === 1 ? "" : "s"} available.` : "You’re all caught up." };
-  return <aside data-testid={`right-${tab}-context`} className="h-full overflow-y-auto eve-scroll bg-[#FDFDFC] px-8 py-6">
-    <p className="text-[12px] font-semibold uppercase tracking-[.12em] text-[#7B6FB8]">Context</p>
-    <h2 className="mt-1 text-[16px] font-medium text-[#1F1F1F]">{content.heading}</h2>
-    <p className="mt-5 rounded-xl border border-black/[0.07] bg-white p-4 text-[13px] leading-6 text-[#777571]">{content.body}</p>
-  </aside>;
+  const content =
+    tab === "tracked"
+      ? {
+          heading: "Tracked job details",
+          body: selectedJob
+            ? `${selectedJob.title || "Job"}${selectedJob.company ? ` at ${selectedJob.company}` : ""}`
+            : "Select a tracked job to see its details.",
+        }
+      : tab === "documents"
+        ? {
+            heading: "Document summary",
+            body: documents?.resume
+              ? `Current resume: ${documents.resume.filename}`
+              : "No resume has been uploaded yet.",
+          }
+        : {
+            heading: "Notifications",
+            body: opportunitiesCount
+              ? `${opportunitiesCount} notification${opportunitiesCount === 1 ? "" : "s"} available.`
+              : "You’re all caught up.",
+          };
+  return (
+    <aside
+      data-testid={`right-${tab}-context`}
+      className="h-full overflow-y-auto eve-scroll bg-[#FDFDFC] px-8 py-6"
+    >
+      <p className="text-[12px] font-semibold uppercase tracking-[.12em] text-[#7B6FB8]">Context</p>
+      <h2 className="mt-1 text-[16px] font-medium text-[#1F1F1F]">{content.heading}</h2>
+      <p className="mt-5 rounded-xl border border-black/[0.07] bg-white p-4 text-[13px] leading-6 text-[#777571]">
+        {content.body}
+      </p>
+    </aside>
+  );
 }
 
 function Dashboard() {
   const navigate = useNavigate();
   const stored = React.useMemo(() => loadOnboardingState(), []);
-  const [candidateId, setCandidateId] = React.useState(() => loadOnboardingState().candidateId ?? null);
+  const [candidateId, setCandidateId] = React.useState(
+    () => loadOnboardingState().candidateId ?? null,
+  );
   const [candidateToken] = React.useState(() => loadOnboardingState().candidateToken ?? null);
   const isOpenToMatches = stored.isOpenToMatches ?? true;
   const [settingsOpen, setSettingsOpen] = React.useState(false);
@@ -265,7 +342,7 @@ function Dashboard() {
     const VALID_TABS = ["jobs", "tracked", "profile", "documents", "opportunities", "billing"];
     const persisted = stored.activeTab;
     // Chat/Voice center views always show Profile in the right panel
-    const rightPanelTab = (persisted && VALID_TABS.includes(persisted)) ? persisted : "profile";
+    const rightPanelTab = persisted && VALID_TABS.includes(persisted) ? persisted : "profile";
     return rightPanelTab;
   });
   // The sidebar and the center-view toggle are independent controls. Keep the
@@ -282,13 +359,14 @@ function Dashboard() {
   }, []);
 
   const [userProfile, setUserProfile] = React.useState(() =>
-    hydrateDisplayProfile(buildFallbackProfile(isOpenToMatches))
+    hydrateDisplayProfile(buildFallbackProfile(isOpenToMatches)),
   );
   // Locked on first non-empty profile load; never updated by resume replacement.
   const footerIdentityRef = React.useRef({ name: "", email: "" });
   const [footerIdentity, setFooterIdentity] = React.useState({ name: "", email: "" });
   const voiceIntakeResume = userProfile.voice_intake_resume;
-  const voiceIntakeResumeQuestion = voiceIntakeResume?.current_question || voiceIntakeResume?.next_question || "";
+  const voiceIntakeResumeQuestion =
+    voiceIntakeResume?.current_question || voiceIntakeResume?.next_question || "";
   const voiceIntakeCurrentQuestion = voiceIntakeResume?.current_question || "";
   const voiceIntakeInProgress =
     voiceIntakeResume?.status === "in_progress" &&
@@ -299,14 +377,22 @@ function Dashboard() {
 
   // All state declarations up front so effects can reference them
   const [chats, setChats] = React.useState([
-    { id: "msg-1", sender: "eve", content: "Hi there — I'm Eve, your career partner on Pontis. How can I help you today?" },
+    {
+      id: "msg-1",
+      sender: "eve",
+      content: "Hi there — I'm Eve, your career partner on Pontis. How can I help you today?",
+    },
   ]);
   const [chatRestored, setChatRestored] = React.useState(false);
   const [inputValue, setInputValue] = React.useState("");
   const [composerFocusToken, setComposerFocusToken] = React.useState(0);
   const [availableJobs, setAvailableJobs] = React.useState([]);
   const [matchingJobsTotal, setMatchingJobsTotal] = React.useState(0);
-  const [documents, setDocuments] = React.useState({ resume: null, certificates: [], application_resumes: [] });
+  const [documents, setDocuments] = React.useState({
+    resume: null,
+    certificates: [],
+    application_resumes: [],
+  });
   const [docsLoading, setDocsLoading] = React.useState(false);
   const [selectedJob, setSelectedJob] = React.useState(null);
   const [sending, setSending] = React.useState(false);
@@ -328,16 +414,19 @@ function Dashboard() {
   const [voiceIntakeProfile, setVoiceIntakeProfile] = React.useState(null);
   const [opportunitiesCount, setOpportunitiesCount] = React.useState(0);
   const hasJobsAccess = userProfile.strengthPercent >= 90;
-  const handleSidebarTabChange = React.useCallback((tab) => {
-    setActiveTabPersisted(tab);
-    setRightPanelTab(tab);
-    // Profile is a conversational workspace.  Other sections own the middle
-    // panel and therefore do not alter the saved Jobs/Chat sub-tab selection.
-    if (tab === "profile") {
-      userChoseCenterViewRef.current = true;
-      setCenterView("chat");
-    }
-  }, [setActiveTabPersisted]);
+  const handleSidebarTabChange = React.useCallback(
+    (tab) => {
+      setActiveTabPersisted(tab);
+      setRightPanelTab(tab);
+      // Profile is a conversational workspace.  Other sections own the middle
+      // panel and therefore do not alter the saved Jobs/Chat sub-tab selection.
+      if (tab === "profile") {
+        userChoseCenterViewRef.current = true;
+        setCenterView("chat");
+      }
+    },
+    [setActiveTabPersisted],
+  );
 
   const handleProfileCompletionGuidanceClick = React.useCallback(() => {
     // strengthPercent is hydrated from the latest candidate profile response.
@@ -355,12 +444,17 @@ function Dashboard() {
     setCenterView("chat");
   }, [handleSidebarTabChange, setActiveTabPersisted, userProfile?.strengthPercent]);
 
-  const displayedRightPanelTab = activeSidebarTab === "jobs"
-    ? (centerView === "swipe" ? "resume" : "profile")
-    : activeSidebarTab;
+  const displayedRightPanelTab =
+    activeSidebarTab === "jobs"
+      ? centerView === "swipe"
+        ? "resume"
+        : "profile"
+      : activeSidebarTab;
   // These section interfaces already contain their complete workflows. Hide
   // their supplementary context panel so the content can use all remaining width.
-  const usesSingleContentPanel = ["tracked", "documents", "opportunities", "billing"].includes(activeSidebarTab);
+  const usesSingleContentPanel = ["tracked", "documents", "opportunities", "billing"].includes(
+    activeSidebarTab,
+  );
 
   const toggleSidebar = React.useCallback(() => {
     const leftPanel = leftPanelRef.current;
@@ -379,11 +473,18 @@ function Dashboard() {
       setResumeFixCreditBalance(null);
       return;
     }
-    axios.get(`${API}/candidate/${candidateId}/resume-fix-credits`)
-      .then(({ data }) => setResumeFixCreditBalance(data?.is_subscribed || data?.remaining_credits == null ? null : {
-        remaining: data.remaining_credits,
-        phase: data.credit_phase || "daily",
-      }))
+    axios
+      .get(`${API}/candidate/${candidateId}/resume-fix-credits`)
+      .then(({ data }) =>
+        setResumeFixCreditBalance(
+          data?.is_subscribed || data?.remaining_credits == null
+            ? null
+            : {
+                remaining: data.remaining_credits,
+                phase: data.credit_phase || "daily",
+              },
+        ),
+      )
       .catch(() => setResumeFixCreditBalance(null));
   }, [candidateId]);
 
@@ -432,11 +533,13 @@ function Dashboard() {
           // The persisted payload is authoritative.  In particular, do not
           // merge onboarding storage here: it can contain an older Bio and
           // profile-strength snapshot than the one Eve just saved.
-          const next = hydrateDisplayProfile(normalizeProfileForDisplay({
-            ...backendProfile,
-            isOpenToMatches: prev.isOpenToMatches,
-            voice_intake_resume: data.voice_intake_resume ?? null,
-          }));
+          const next = hydrateDisplayProfile(
+            normalizeProfileForDisplay({
+              ...backendProfile,
+              isOpenToMatches: prev.isOpenToMatches,
+              voice_intake_resume: data.voice_intake_resume ?? null,
+            }),
+          );
           return profilesAreEqual(prev, next) ? prev : next;
         });
         if (!footerIdentityRef.current.name && (backendProfile.name || backendProfile.email)) {
@@ -448,49 +551,47 @@ function Dashboard() {
       .catch(() => {
         const parsed = stored.parsedProfile ?? {};
         setUserProfile((prev) => {
-          const next = hydrateDisplayProfile(mergeProfilesForDisplay(buildFallbackProfile(prev.isOpenToMatches), {
-            candidate_id: candidateId,
-            candidateId,
-            avatar: null,
-            isOpenToMatches: prev.isOpenToMatches,
-            name: parsed.name ?? "",
-            email: parsed.email ?? "",
-            phone: parsed.phone ?? "",
-            headline: parsed.headline ?? "",
-            current_role: parsed.current_role ?? parsed.headline ?? "",
-            current_company: parsed.current_company ?? "",
-            location: parsed.location ?? "",
-            bio: parsed.bio ?? "",
-            experience: parsed.experience ?? [],
-            education: parsed.education ?? [],
-            keySkills: parsed.keySkills ?? [],
-            experience_years: parsed.experience_years ?? null,
-            availability: parsed.availability ?? "",
-            salary_expectation: parsed.salary_expectation ?? "",
-            preferred_roles: parsed.preferred_roles ?? [],
-            certifications: parsed.certifications ?? [],
-            additional_information: parsed.additional_information ?? "",
-            opportunity_type: parsed.opportunity_type ?? null,
-            voice_intake_resume: parsed.voice_intake_resume ?? null,
-            profile_strength_percent: parsed.profile_strength_percent ?? parsed.strengthPercent,
-            profile_strength_label: parsed.profile_strength_label ?? parsed.strength,
-            profile_strength_detail: parsed.profile_strength_detail ?? null,
-            recommendation_readiness: parsed.recommendation_readiness ?? null,
-          }));
+          const next = hydrateDisplayProfile(
+            mergeProfilesForDisplay(buildFallbackProfile(prev.isOpenToMatches), {
+              candidate_id: candidateId,
+              candidateId,
+              avatar: null,
+              isOpenToMatches: prev.isOpenToMatches,
+              name: parsed.name ?? "",
+              email: parsed.email ?? "",
+              phone: parsed.phone ?? "",
+              headline: parsed.headline ?? "",
+              current_role: parsed.current_role ?? parsed.headline ?? "",
+              current_company: parsed.current_company ?? "",
+              location: parsed.location ?? "",
+              bio: parsed.bio ?? "",
+              experience: parsed.experience ?? [],
+              education: parsed.education ?? [],
+              keySkills: parsed.keySkills ?? [],
+              experience_years: parsed.experience_years ?? null,
+              availability: parsed.availability ?? "",
+              salary_expectation: parsed.salary_expectation ?? "",
+              preferred_roles: parsed.preferred_roles ?? [],
+              certifications: parsed.certifications ?? [],
+              additional_information: parsed.additional_information ?? "",
+              opportunity_type: parsed.opportunity_type ?? null,
+              voice_intake_resume: parsed.voice_intake_resume ?? null,
+              profile_strength_percent: parsed.profile_strength_percent ?? parsed.strengthPercent,
+              profile_strength_label: parsed.profile_strength_label ?? parsed.strength,
+              profile_strength_detail: parsed.profile_strength_detail ?? null,
+              recommendation_readiness: parsed.recommendation_readiness ?? null,
+            }),
+          );
           return profilesAreEqual(prev, next) ? prev : next;
         });
       });
-  // eslint-disable-next-line react-hooks/exhaustive-deps
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [candidateId]); // isOpenToMatches intentionally excluded — toggle state is preserved via prev
 
   React.useEffect(() => {
     // Backend is the single source of truth for the initial view.
     // Skip if the user has already made an explicit navigation choice.
-    if (
-      hasJobsAccess &&
-      voiceIntakeCenterView !== null &&
-      !userChoseCenterViewRef.current
-    ) {
+    if (hasJobsAccess && voiceIntakeCenterView !== null && !userChoseCenterViewRef.current) {
       setCenterView(voiceIntakeCenterView);
       // Jobs for You keeps matching jobs in the middle panel; Chat and Voice
       // both use the candidate Profile as their supporting context.
@@ -527,29 +628,34 @@ function Dashboard() {
           candidateId: profileCandidateId ?? prev.candidate_id ?? prev.candidateId ?? null,
           avatar: data.photo_url ?? null,
           isOpenToMatches: prev.isOpenToMatches,
-          voice_intake_resume: data.voice_intake_resume ?? prev.voice_intake_resume ?? null,
+          voice_intake_resume: resolveProfileVoiceIntakeResume(data, prev.voice_intake_resume),
         };
         freshProfile = hydrateDisplayProfile(normalizeProfileForDisplay(backendFirst));
         return profilesAreEqual(prev, freshProfile) ? prev : freshProfile;
       });
-      const directFresh = hydrateDisplayProfile(normalizeProfileForDisplay({
-        ...data,
-        candidate_id: profileCandidateId,
-        candidateId: profileCandidateId,
-        avatar: data.photo_url ?? null,
-        voice_intake_resume: data.voice_intake_resume ?? null,
-      }));
+      const directFresh = hydrateDisplayProfile(
+        normalizeProfileForDisplay({
+          ...data,
+          candidate_id: profileCandidateId,
+          candidateId: profileCandidateId,
+          avatar: data.photo_url ?? null,
+          voice_intake_resume: data.voice_intake_resume ?? null,
+        }),
+      );
       return directFresh;
-    } catch (err) {
+    } catch {
       console.error("refreshProfile failed");
       return null;
     }
   }, [candidateId]);
 
-  const handlePhotoChange = React.useCallback((url) => {
-    setUserProfile((prev) => ({ ...prev, avatar: url }));
-    refreshProfile();
-  }, [refreshProfile]);
+  const handlePhotoChange = React.useCallback(
+    (url) => {
+      setUserProfile((prev) => ({ ...prev, avatar: url }));
+      refreshProfile();
+    },
+    [refreshProfile],
+  );
 
   const handleLogout = React.useCallback(() => {
     clearOnboardingState();
@@ -587,7 +693,7 @@ function Dashboard() {
         setChatRestored(true);
       })
       .catch(() => {});
-  // eslint-disable-next-line react-hooks/exhaustive-deps
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [candidateId]);
 
   // Update greeting once real profile loads - personalise with name, never ask for already-known info
@@ -605,12 +711,19 @@ function Dashboard() {
     });
     if (!greeting) return;
     setChats((prev) =>
-      prev[0]?.id === "msg-1"
-        ? [{ ...prev[0], content: greeting }, ...prev.slice(1)]
-        : prev
+      prev[0]?.id === "msg-1" ? [{ ...prev[0], content: greeting }, ...prev.slice(1)] : prev,
     );
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [chatRestored, voiceIntakeInProgress, voiceIntakeResumeQuestion, userProfile.name, userProfile.headline, userProfile.keySkills?.length, userProfile.missing_questions, documents?.resume]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [
+    chatRestored,
+    voiceIntakeInProgress,
+    voiceIntakeResumeQuestion,
+    userProfile.name,
+    userProfile.headline,
+    userProfile.keySkills?.length,
+    userProfile.missing_questions,
+    documents?.resume,
+  ]);
   // Opportunities count
   React.useEffect(() => {
     if (!candidateId || !hasJobsAccess) {
@@ -643,51 +756,60 @@ function Dashboard() {
       const t = setTimeout(() => setShowWeakProfilePopup(true), 800);
       return () => clearTimeout(t);
     }
-  // eslint-disable-next-line react-hooks/exhaustive-deps
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [userProfile.strengthPercent]);
 
   // Load real job recommendations from backend
-  const fetchJobs = React.useCallback((requestMore = false) => {
-    if (!candidateId || !hasJobsAccess) {
-      setAvailableJobs([]);
-      setMatchingJobsTotal(0);
-      setSelectedJob(null);
-      setJobsLoading(false);
-      return;
-    }
-    setJobsError(false);
-    axios
-      .get(`${API}/candidate/${candidateId}/jobs`, { params: {
-        ...(requestMore ? { request_more: true } : {}),
-        type: userProfile?.opportunity_type === "intern" ? "intern" : "jobs",
-      }})
-      .then((res) => {
-        setAvailableJobs(res.data || []);
-        const total = Number(res.headers?.["x-total-matching-jobs"]);
-        setMatchingJobsTotal(Number.isFinite(total) ? total : (res.data || []).length);
-        setSelectedJob((prev) => prev ?? (res.data?.[0] || null));
+  const fetchJobs = React.useCallback(
+    (requestMore = false) => {
+      if (!candidateId || !hasJobsAccess) {
+        setAvailableJobs([]);
+        setMatchingJobsTotal(0);
+        setSelectedJob(null);
         setJobsLoading(false);
-      })
-      .catch((error) => {
-        if (error?.response?.status === 403 && error.response.data?.detail?.code === "daily_job_limit_reached") {
-          setShowSubscriptionPopup(true);
+        return;
+      }
+      setJobsError(false);
+      axios
+        .get(`${API}/candidate/${candidateId}/jobs`, {
+          params: {
+            ...(requestMore ? { request_more: true } : {}),
+            type: userProfile?.opportunity_type === "intern" ? "intern" : "jobs",
+          },
+        })
+        .then((res) => {
+          setAvailableJobs(res.data || []);
+          const total = Number(res.headers?.["x-total-matching-jobs"]);
+          setMatchingJobsTotal(Number.isFinite(total) ? total : (res.data || []).length);
+          setSelectedJob((prev) => prev ?? (res.data?.[0] || null));
           setJobsLoading(false);
-          return;
-        }
-        setJobsError(true);
-        setJobsLoading(false);
-      });
-  }, [candidateId, hasJobsAccess, userProfile?.opportunity_type]);
+        })
+        .catch((error) => {
+          if (
+            error?.response?.status === 403 &&
+            error.response.data?.detail?.code === "daily_job_limit_reached"
+          ) {
+            setShowSubscriptionPopup(true);
+            setJobsLoading(false);
+            return;
+          }
+          setJobsError(true);
+          setJobsLoading(false);
+        });
+    },
+    [candidateId, hasJobsAccess, userProfile?.opportunity_type],
+  );
 
   const opportunityType = userProfile?.opportunity_type === "intern" ? "intern" : "jobs";
   // The selected center view and the candidate's primary opportunity preference
   // are intentionally separate: selection controls the visible panel, while
   // this controls the persistent emphasis in the tab labels.
-  const primaryCenterTab = userProfile?.opportunity_type === "jobs"
-    ? "jobs"
-    : userProfile?.opportunity_type === "intern"
-      ? "internships"
-      : "chat";
+  const primaryCenterTab =
+    userProfile?.opportunity_type === "jobs"
+      ? "jobs"
+      : userProfile?.opportunity_type === "intern"
+        ? "internships"
+        : "chat";
   // Active styling is driven only by the visible center view. Candidate
   // preference remains a separate, persistent font emphasis for inactive tabs.
   const isJobsTabActive = opportunityType === "jobs" && centerView === "swipe";
@@ -701,14 +823,21 @@ function Dashboard() {
         setShowSubscriptionPopup(true);
         return;
       }
-      if (event.data?.type !== "eve:candidate-profile-updated" || event.data.candidateId !== candidateId) return;
+      if (
+        event.data?.type !== "eve:candidate-profile-updated" ||
+        event.data.candidateId !== candidateId
+      )
+        return;
       // Resume Editor persists and re-scores the selected recommendation.
       // Reload both resources so the card and Apply Now gauge use that final
       // backend score, rather than any prior score or calculated delta.
       refreshProfile();
-      axios.get(`${API}/candidate/${candidateId}/documents`, {
-        headers: candidateToken ? { Authorization: `Bearer ${candidateToken}` } : {},
-      }).then((res) => setDocuments(res.data)).catch(() => {});
+      axios
+        .get(`${API}/candidate/${candidateId}/documents`, {
+          headers: candidateToken ? { Authorization: `Bearer ${candidateToken}` } : {},
+        })
+        .then((res) => setDocuments(res.data))
+        .catch(() => {});
       fetchJobs();
     };
     window.addEventListener("message", onProfileUpdated);
@@ -718,7 +847,8 @@ function Dashboard() {
   React.useEffect(() => {
     const showResumeFixSubscription = () => setShowSubscriptionPopup(true);
     window.addEventListener("eve:resume-fix-credits-insufficient", showResumeFixSubscription);
-    return () => window.removeEventListener("eve:resume-fix-credits-insufficient", showResumeFixSubscription);
+    return () =>
+      window.removeEventListener("eve:resume-fix-credits-insufficient", showResumeFixSubscription);
   }, []);
 
   React.useEffect(() => {
@@ -739,7 +869,8 @@ function Dashboard() {
       }
     };
     window.addEventListener("eve:resume-fix-credits-updated", updateResumeFixCredits);
-    return () => window.removeEventListener("eve:resume-fix-credits-updated", updateResumeFixCredits);
+    return () =>
+      window.removeEventListener("eve:resume-fix-credits-updated", updateResumeFixCredits);
   }, [refreshResumeFixCredits]);
 
   React.useEffect(() => {
@@ -764,66 +895,78 @@ function Dashboard() {
     refreshDocuments();
   }, [refreshDocuments]);
 
-  const sessionIdRef = React.useRef(
-    `sess-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
-  );
+  const sessionIdRef = React.useRef(`sess-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`);
   // Ignore a late response from an older request if a newer chat turn was
   // submitted before it completed. This prevents an old Eve reply being shown
   // under the newest candidate message.
   const latestChatTurnRef = React.useRef(0);
   const chatMessageSequenceRef = React.useRef(0);
 
-  const _sendToEve = React.useCallback(async (historyPayload, turnId) => {
-    setSending(true);
-    try {
-      const res = await axios.post(`${API}/chat`, {
-        messages: historyPayload,
-        session_id: sessionIdRef.current,
-        candidate_id: candidateId,
-      });
-      if (turnId !== latestChatTurnRef.current) return;
-      const reply = res?.data?.reply?.trim();
-      if (res?.data?.profile_updates) {
-        setUserProfile((previous) => {
-          const merged = mergeProfileUpdatesForDisplay(previous, res.data.profile_updates);
-          const updates = res.data.profile_updates;
-          if (!Array.isArray(updates.employment_types) || updates.employment_types.length === 0) {
-            return merged;
-          }
-          return {
-            ...merged,
-            missing_questions: (merged.missing_questions || []).filter(
-              (item) => item?.topic_id !== "employment_types" &&
-                !String(item?.question || "").toLowerCase().includes("full-time, part-time, contract, or freelance"),
-            ),
-          };
+  const _sendToEve = React.useCallback(
+    async (historyPayload, turnId) => {
+      setSending(true);
+      try {
+        const res = await axios.post(`${API}/chat`, {
+          messages: historyPayload,
+          session_id: sessionIdRef.current,
+          candidate_id: candidateId,
         });
+        if (turnId !== latestChatTurnRef.current) return;
+        const reply = res?.data?.reply?.trim();
+        if (res?.data?.profile_updates) {
+          setUserProfile((previous) => {
+            const merged = mergeProfileUpdatesForDisplay(previous, res.data.profile_updates);
+            const updates = res.data.profile_updates;
+            if (!Array.isArray(updates.employment_types) || updates.employment_types.length === 0) {
+              return merged;
+            }
+            return {
+              ...merged,
+              missing_questions: (merged.missing_questions || []).filter(
+                (item) =>
+                  item?.topic_id !== "employment_types" &&
+                  !String(item?.question || "")
+                    .toLowerCase()
+                    .includes("full-time, part-time, contract, or freelance"),
+              ),
+            };
+          });
+        }
+        if (reply) {
+          setChats((prev) => [
+            ...prev,
+            {
+              id: `e-${Date.now()}-${++chatMessageSequenceRef.current}`,
+              sender: "eve",
+              content: reply,
+            },
+          ]);
+        } else {
+          toast.error("Eve didn't respond. Try again?");
+        }
+        // Eve's reply is not a profile snapshot. Always reload after a
+        // successful turn so the meter, Jobs gate, and profile fields use the
+        // profile that was actually persisted by the backend.
+        if (candidateId) await refreshProfile();
+      } catch {
+        console.error("chat request failed");
+      } finally {
+        if (turnId === latestChatTurnRef.current) setSending(false);
       }
-      if (reply) {
-        setChats((prev) => [
-          ...prev,
-          { id: `e-${Date.now()}-${++chatMessageSequenceRef.current}`, sender: "eve", content: reply },
-        ]);
-      } else {
-        toast.error("Eve didn't respond. Try again?");
-      }
-      // Eve's reply is not a profile snapshot. Always reload after a
-      // successful turn so the meter, Jobs gate, and profile fields use the
-      // profile that was actually persisted by the backend.
-      if (candidateId) await refreshProfile();
-    } catch (err) {
-      console.error("chat request failed");
-    } finally {
-      if (turnId === latestChatTurnRef.current) setSending(false);
-    }
-  }, [candidateId, refreshProfile]);
+    },
+    [candidateId, refreshProfile],
+  );
 
   const handleSendMessage = async (e) => {
     e.preventDefault();
     const text = inputValue.trim();
     if (!text || sending) return;
 
-    const userMsg = { id: `u-${Date.now()}-${++chatMessageSequenceRef.current}`, sender: "user", content: text };
+    const userMsg = {
+      id: `u-${Date.now()}-${++chatMessageSequenceRef.current}`,
+      sender: "user",
+      content: text,
+    };
     const nextChats = [...chats, userMsg];
     setChats(nextChats);
     setInputValue("");
@@ -839,38 +982,56 @@ function Dashboard() {
     await _sendToEve(historyPayload, turnId);
   };
 
-  const handleSuggestionClick = React.useCallback((suggestion) => {
-    if (sending || !suggestion) return;
-    const question = String(suggestion).trim().replace(/[?:\s]+$/, "");
-    setInputValue(`${question}: `);
-    setComposerFocusToken((token) => token + 1);
-  }, [sending]);
+  const handleSuggestionClick = React.useCallback(
+    (suggestion) => {
+      if (sending || !suggestion) return;
+      const question = String(suggestion)
+        .trim()
+        .replace(/[?:\s]+$/, "");
+      setInputValue(`${question}: `);
+      setComposerFocusToken((token) => token + 1);
+    },
+    [sending],
+  );
 
-  const handleProfileGuidanceClick = React.useCallback((item) => {
-    const questions = {
-      "Tell Eve what kind of role you are targeting": "What job titles or roles are you targeting?",
-      "Upload your resume or add work experience": "Tell me about your most recent work experience, including your role, company, dates, and main responsibilities.",
-      "Add projects or responsibilities that demonstrate your skills": "Describe a project or responsibility that demonstrates your strongest skills and the outcome you achieved.",
-      "Add your key skills to your profile": "What are your strongest professional and technical skills?",
-      "Add projects, responsibilities, or portfolio links": "Tell me about a relevant project, responsibility, or portfolio link you want employers to see.",
-      "Share your availability / notice period": "What is your notice period, and when can you start a new role?",
-      "Share your preferred work mode (remote/hybrid/on-site)": "Do you prefer remote, hybrid, or on-site work?",
-      "Share your salary expectations": "What salary range are you targeting?",
-    };
-    const question = item?.question || questions[item?.action] || item?.action;
-    if (!question) return;
-    userChoseCenterViewRef.current = true;
-    setActiveSidebarTab("profile");
-    setRightPanelTab("profile");
-    setCenterView("chat");
-    handleSuggestionClick(question);
-  }, [handleSuggestionClick]);
+  const handleProfileGuidanceClick = React.useCallback(
+    (item) => {
+      const questions = {
+        "Tell Eve what kind of role you are targeting":
+          "What job titles or roles are you targeting?",
+        "Upload your resume or add work experience":
+          "Tell me about your most recent work experience, including your role, company, dates, and main responsibilities.",
+        "Add projects or responsibilities that demonstrate your skills":
+          "Describe a project or responsibility that demonstrates your strongest skills and the outcome you achieved.",
+        "Add your key skills to your profile":
+          "What are your strongest professional and technical skills?",
+        "Add projects, responsibilities, or portfolio links":
+          "Tell me about a relevant project, responsibility, or portfolio link you want employers to see.",
+        "Share your availability / notice period":
+          "What is your notice period, and when can you start a new role?",
+        "Share your preferred work mode (remote/hybrid/on-site)":
+          "Do you prefer remote, hybrid, or on-site work?",
+        "Share your salary expectations": "What salary range are you targeting?",
+      };
+      const question = item?.question || questions[item?.action] || item?.action;
+      if (!question) return;
+      userChoseCenterViewRef.current = true;
+      setActiveSidebarTab("profile");
+      setRightPanelTab("profile");
+      setCenterView("chat");
+      handleSuggestionClick(question);
+    },
+    [handleSuggestionClick],
+  );
 
-  const handleResumeReplaced = React.useCallback((filename, newProfile) => {
-    setDocuments((prev) => ({ ...prev, resume: { filename } }));
-    refreshProfile();
-    refreshDocuments();
-  }, [refreshProfile, refreshDocuments]);
+  const handleResumeReplaced = React.useCallback(
+    (filename) => {
+      setDocuments((prev) => ({ ...prev, resume: { filename } }));
+      refreshProfile();
+      refreshDocuments();
+    },
+    [refreshProfile, refreshDocuments],
+  );
 
   const handleCertUploaded = React.useCallback((cert) => {
     setDocuments((prev) => ({ ...prev, certificates: [...prev.certificates, cert] }));
@@ -879,9 +1040,7 @@ function Dashboard() {
   const handleCertReplaced = React.useCallback((certId, filename) => {
     setDocuments((prev) => ({
       ...prev,
-      certificates: prev.certificates.map((c) =>
-        c.id === certId ? { ...c, filename } : c
-      ),
+      certificates: prev.certificates.map((c) => (c.id === certId ? { ...c, filename } : c)),
     }));
   }, []);
 
@@ -901,7 +1060,7 @@ function Dashboard() {
     if (!job || job.locked || !candidateId) return;
     const willTrack = !job.tracked;
     setAvailableJobs((prev) =>
-      prev.map((j) => (j.id === jobId ? { ...j, tracked: willTrack } : j))
+      prev.map((j) => (j.id === jobId ? { ...j, tracked: willTrack } : j)),
     );
     try {
       if (willTrack) {
@@ -913,23 +1072,26 @@ function Dashboard() {
       }
     } catch {
       setAvailableJobs((prev) =>
-        prev.map((j) => (j.id === jobId ? { ...j, tracked: !willTrack } : j))
+        prev.map((j) => (j.id === jobId ? { ...j, tracked: !willTrack } : j)),
       );
       toast.error("Could not update tracking.");
     }
   };
 
-  const handleApplicationApplied = React.useCallback((jobId) => {
-    setAvailableJobs((prev) => prev.map((job) => (
-      job.id === jobId ? { ...job, tracked: true, applied: true } : job
-    )));
-    setSelectedJob((prev) => (
-      prev?.id === jobId ? { ...prev, tracked: true, applied: true } : prev
-    ));
-    // Reconcile server metadata in the background without making the local UI
-    // wait for a refresh before moving the job to Tracked Jobs.
-    fetchJobs();
-  }, [fetchJobs]);
+  const handleApplicationApplied = React.useCallback(
+    (jobId) => {
+      setAvailableJobs((prev) =>
+        prev.map((job) => (job.id === jobId ? { ...job, tracked: true, applied: true } : job)),
+      );
+      setSelectedJob((prev) =>
+        prev?.id === jobId ? { ...prev, tracked: true, applied: true } : prev,
+      );
+      // Reconcile server metadata in the background without making the local UI
+      // wait for a refresh before moving the job to Tracked Jobs.
+      fetchJobs();
+    },
+    [fetchJobs],
+  );
 
   const handleDismissJob = async (jobId, reason = null) => {
     const job = availableJobs.find((j) => j.id === jobId);
@@ -940,7 +1102,10 @@ function Dashboard() {
     }
     toast("Removed from feed", { description: "You won't see this again." });
     try {
-      await axios.post(`${API}/candidate/${candidateId}/jobs/${jobId}/dismiss`, reason ? { reason } : {});
+      await axios.post(
+        `${API}/candidate/${candidateId}/jobs/${jobId}/dismiss`,
+        reason ? { reason } : {},
+      );
     } catch {
       fetchJobs();
     }
@@ -950,18 +1115,50 @@ function Dashboard() {
     if (!candidateId || paymentStarting) return;
     setPaymentStarting(true);
     try {
-      const { data: order } = await axios.post(`${API}/candidate/${candidateId}/billing/orders`, { coupon_code: couponOffer ? couponCode : "", plan_id: "candidate_3_month" });
-      if (!window.Razorpay) await new Promise((resolve, reject) => {
-        const script = document.createElement("script"); script.src = "https://checkout.razorpay.com/v1/checkout.js";
-        script.onload = resolve; script.onerror = reject; document.body.appendChild(script);
+      const { data: order } = await axios.post(`${API}/candidate/${candidateId}/billing/orders`, {
+        coupon_code: couponOffer ? couponCode : "",
+        plan_id: "candidate_3_month",
       });
-      const checkout = new window.Razorpay({ key: order.key_id, amount: order.amount, currency: order.currency, name: order.name, description: order.description, order_id: order.order_id, prefill: order.prefill,
-        handler: async (payment) => { try { await axios.post(`${API}/candidate/${candidateId}/billing/verify`, payment); setShowSubscriptionPlanPopup(false); toast.success("Subscription activated"); refreshProfile(); fetchJobs(); } catch { toast.error("We could not verify the payment. It will be updated shortly if captured."); } finally { setPaymentStarting(false); } },
+      if (!window.Razorpay)
+        await new Promise((resolve, reject) => {
+          const script = document.createElement("script");
+          script.src = "https://checkout.razorpay.com/v1/checkout.js";
+          script.onload = resolve;
+          script.onerror = reject;
+          document.body.appendChild(script);
+        });
+      const checkout = new window.Razorpay({
+        key: order.key_id,
+        amount: order.amount,
+        currency: order.currency,
+        name: order.name,
+        description: order.description,
+        order_id: order.order_id,
+        prefill: order.prefill,
+        handler: async (payment) => {
+          try {
+            await axios.post(`${API}/candidate/${candidateId}/billing/verify`, payment);
+            setShowSubscriptionPlanPopup(false);
+            toast.success("Subscription activated");
+            refreshProfile();
+            fetchJobs();
+          } catch {
+            toast.error("We could not verify the payment. It will be updated shortly if captured.");
+          } finally {
+            setPaymentStarting(false);
+          }
+        },
         modal: { ondismiss: () => setPaymentStarting(false) },
       });
-      checkout.on("payment.failed", () => { setPaymentStarting(false); toast.error("Payment was not completed. No subscription was activated."); });
+      checkout.on("payment.failed", () => {
+        setPaymentStarting(false);
+        toast.error("Payment was not completed. No subscription was activated.");
+      });
       checkout.open();
-    } catch (error) { setPaymentStarting(false); toast.error(error?.response?.data?.detail || "Unable to start payment."); }
+    } catch (error) {
+      setPaymentStarting(false);
+      toast.error(error?.response?.data?.detail || "Unable to start payment.");
+    }
   };
 
   return (
@@ -970,35 +1167,86 @@ function Dashboard() {
       data-testid="app-shell"
     >
       {showSubscriptionPopup && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/35 p-4" role="dialog" aria-modal="true" aria-labelledby="job-limit-modal-title">
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/35 p-4"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="job-limit-modal-title"
+        >
           <div className="w-full max-w-md rounded-2xl border border-black/[0.06] bg-white p-7 shadow-2xl">
-            <div className="mx-auto flex h-11 w-11 items-center justify-center rounded-full bg-[#EEEAF8] text-[#62578F]" aria-hidden="true">
+            <div
+              className="mx-auto flex h-11 w-11 items-center justify-center rounded-full bg-[#EEEAF8] text-[#62578F]"
+              aria-hidden="true"
+            >
               <span className="text-lg font-semibold">{matchingJobsTotal}</span>
             </div>
             <div className="mt-4 text-center">
-              <p className="text-[12px] font-semibold uppercase tracking-[0.12em] text-[#7B6FB8]">Daily free limit of 3 jobs reached</p>
-              <h2 id="job-limit-modal-title" className="mt-2 text-xl font-semibold tracking-tight text-[#1F1F1F]">You’ve reached your 3 free job-match views for today</h2>
-              <p className="mt-3 text-sm leading-6 text-[#5D5D5A]">You have {matchingJobsTotal} jobs matching your profile. Employers are actively hiring for these roles. Upgrade now to unlock all {matchingJobsTotal} matches and apply before someone else does.</p>
+              <p className="text-[12px] font-semibold uppercase tracking-[0.12em] text-[#7B6FB8]">
+                Daily free limit of 3 jobs reached
+              </p>
+              <h2
+                id="job-limit-modal-title"
+                className="mt-2 text-xl font-semibold tracking-tight text-[#1F1F1F]"
+              >
+                You’ve reached your 3 free job-match views for today
+              </h2>
+              <p className="mt-3 text-sm leading-6 text-[#5D5D5A]">
+                You have {matchingJobsTotal} jobs matching your profile. Employers are actively
+                hiring for these roles. Upgrade now to unlock all {matchingJobsTotal} matches and
+                apply before someone else does.
+              </p>
             </div>
             <div className="mt-6 grid gap-2.5">
-              <button type="button" onClick={() => { setShowSubscriptionPopup(false); setShowSubscriptionPlanPopup(true); }} className="w-full rounded-xl bg-[#62578F] px-5 py-3 text-sm font-semibold text-white transition-colors hover:bg-[#514875] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#62578F]">Upgrade Now</button>
-              <button type="button" onClick={() => setShowSubscriptionPopup(false)} className="w-full rounded-xl px-5 py-3 text-sm font-medium text-[#4A4A48] transition-colors hover:bg-black/[0.04] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#62578F]">Remind Me Tomorrow</button>
+              <button
+                type="button"
+                onClick={() => {
+                  setShowSubscriptionPopup(false);
+                  setShowSubscriptionPlanPopup(true);
+                }}
+                className="w-full rounded-xl bg-[#62578F] px-5 py-3 text-sm font-semibold text-white transition-colors hover:bg-[#514875] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#62578F]"
+              >
+                Upgrade Now
+              </button>
+              <button
+                type="button"
+                onClick={() => setShowSubscriptionPopup(false)}
+                className="w-full rounded-xl px-5 py-3 text-sm font-medium text-[#4A4A48] transition-colors hover:bg-black/[0.04] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#62578F]"
+              >
+                Remind Me Tomorrow
+              </button>
             </div>
           </div>
         </div>
       )}
       {showSubscriptionPlanPopup && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/35 p-4" role="dialog" aria-modal="true" aria-labelledby="subscription-plan-modal-title">
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/35 p-4"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="subscription-plan-modal-title"
+        >
           <div className="w-full max-w-md rounded-2xl border border-black/[0.06] bg-white p-5 shadow-2xl sm:p-7">
-            <div className="mx-auto flex h-11 w-11 items-center justify-center rounded-full bg-[#EEEAF8] text-[#62578F]" aria-hidden="true">
+            <div
+              className="mx-auto flex h-11 w-11 items-center justify-center rounded-full bg-[#EEEAF8] text-[#62578F]"
+              aria-hidden="true"
+            >
               <span className="text-lg font-semibold">E</span>
             </div>
             <div className="mt-4 text-center">
-              <p className="text-[12px] font-semibold uppercase tracking-[0.12em] text-[#7B6FB8]">Eve subscription</p>
-              <h2 id="subscription-plan-modal-title" className="mt-2 text-xl font-semibold tracking-tight text-[#1F1F1F]">Unlock more opportunities</h2>
+              <p className="text-[12px] font-semibold uppercase tracking-[0.12em] text-[#7B6FB8]">
+                Eve subscription
+              </p>
+              <h2
+                id="subscription-plan-modal-title"
+                className="mt-2 text-xl font-semibold tracking-tight text-[#1F1F1F]"
+              >
+                Unlock more opportunities
+              </h2>
             </div>
             <div className="mt-5 rounded-xl border border-[#E7E3F0] bg-[#FAF9FD] p-4">
-              <p className="text-center text-xl font-semibold tracking-tight text-[#3E394E]">₹3,000 <span className="text-sm font-medium text-[#62578F]">/ 3 months</span></p>
+              <p className="text-center text-xl font-semibold tracking-tight text-[#3E394E]">
+                ₹3,000 <span className="text-sm font-medium text-[#62578F]">/ 3 months</span>
+              </p>
               <ul className="mt-4 list-disc space-y-2 pl-5 text-sm leading-5 text-[#4A4A48] marker:text-[#62578F]">
                 <li>Get at least 50 newly posted jobs every day.</li>
                 <li>Get a Priority Tag to make your profile more visible to employers.</li>
@@ -1008,11 +1256,67 @@ function Dashboard() {
             <div className="mt-6 grid gap-2.5 sm:grid-cols-2">
               <div className="sm:col-span-2">
                 <p className="mb-2 text-sm font-medium text-[#4A4A48]">Have a coupon code?</p>
-                <div className="flex gap-2"><input aria-label="Coupon code" value={couponCode} onChange={(e) => setCouponCode(e.target.value)} placeholder="Enter coupon code" className="min-w-0 flex-1 rounded-xl border px-3 py-2 text-sm" /><button type="button" disabled={couponApplying || !couponCode.trim()} onClick={async () => { setCouponApplying(true); try { const { data } = await axios.post(`${API}/candidate/${candidateId}/billing/coupons/apply`, { coupon_code: couponCode, plan_id: "candidate_3_month" }); setCouponOffer(data); toast.success("NEWUSER applied successfully."); } catch (e) { setCouponOffer(null); toast.error(e?.response?.data?.detail || "Unable to apply coupon. Please try again."); } finally { setCouponApplying(false); } }} className="rounded-xl border px-4 py-2 text-sm font-semibold">{couponApplying ? "Applying…" : "Apply"}</button></div>
-                {couponOffer && <p className="mt-2 text-sm text-green-700">✓ {couponOffer.coupon_code} applied — ₹{couponOffer.discounted_price} / {couponOffer.discounted_duration_months} months</p>}
+                <div className="flex gap-2">
+                  <input
+                    aria-label="Coupon code"
+                    value={couponCode}
+                    onChange={(e) => setCouponCode(e.target.value)}
+                    placeholder="Enter coupon code"
+                    className="min-w-0 flex-1 rounded-xl border px-3 py-2 text-sm"
+                  />
+                  <button
+                    type="button"
+                    disabled={couponApplying || !couponCode.trim()}
+                    onClick={async () => {
+                      setCouponApplying(true);
+                      try {
+                        const { data } = await axios.post(
+                          `${API}/candidate/${candidateId}/billing/coupons/apply`,
+                          { coupon_code: couponCode, plan_id: "candidate_3_month" },
+                        );
+                        setCouponOffer(data);
+                        toast.success("NEWUSER applied successfully.");
+                      } catch (e) {
+                        setCouponOffer(null);
+                        toast.error(
+                          e?.response?.data?.detail || "Unable to apply coupon. Please try again.",
+                        );
+                      } finally {
+                        setCouponApplying(false);
+                      }
+                    }}
+                    className="rounded-xl border px-4 py-2 text-sm font-semibold"
+                  >
+                    {couponApplying ? "Applying…" : "Apply"}
+                  </button>
+                </div>
+                {couponOffer && (
+                  <p className="mt-2 text-sm text-green-700">
+                    ✓ {couponOffer.coupon_code} applied — ₹{couponOffer.discounted_price} /{" "}
+                    {couponOffer.discounted_duration_months} months
+                  </p>
+                )}
               </div>
-              <button type="button" data-testid="subscription-pay-now" disabled={paymentStarting} onClick={startRazorpayPayment} className="w-full rounded-xl bg-[#62578F] px-5 py-3 text-sm font-semibold text-white transition-colors hover:bg-[#514875] disabled:opacity-60 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#62578F]">{paymentStarting ? "Opening secure checkout…" : couponOffer ? `Pay ₹${couponOffer.discounted_price}` : "Pay Now"}</button>
-              <button type="button" onClick={() => setShowSubscriptionPlanPopup(false)} className="w-full rounded-xl px-5 py-3 text-sm font-medium text-[#4A4A48] transition-colors hover:bg-black/[0.04] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#62578F]">Cancel</button>
+              <button
+                type="button"
+                data-testid="subscription-pay-now"
+                disabled={paymentStarting}
+                onClick={startRazorpayPayment}
+                className="w-full rounded-xl bg-[#62578F] px-5 py-3 text-sm font-semibold text-white transition-colors hover:bg-[#514875] disabled:opacity-60 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#62578F]"
+              >
+                {paymentStarting
+                  ? "Opening secure checkout…"
+                  : couponOffer
+                    ? `Pay ₹${couponOffer.discounted_price}`
+                    : "Pay Now"}
+              </button>
+              <button
+                type="button"
+                onClick={() => setShowSubscriptionPlanPopup(false)}
+                className="w-full rounded-xl px-5 py-3 text-sm font-medium text-[#4A4A48] transition-colors hover:bg-black/[0.04] focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#62578F]"
+              >
+                Cancel
+              </button>
             </div>
           </div>
         </div>
@@ -1045,11 +1349,16 @@ function Dashboard() {
         )}
         <div className="col-start-3 flex items-center justify-self-end gap-2 sm:gap-3">
           {resumeFixCreditBalance != null && (
-            <span data-testid="resume-fix-credit-nav-balance" className="whitespace-nowrap rounded-lg bg-[#EEEAF8] px-2.5 py-1 text-xs font-semibold text-[#62578F] sm:px-3">
-              {resumeFixCreditBalance.remaining} {resumeFixCreditBalance.phase === "starter" ? "Starter" : "Daily"} Credits
+            <span
+              data-testid="resume-fix-credit-nav-balance"
+              className="whitespace-nowrap rounded-lg bg-[#EEEAF8] px-2.5 py-1 text-xs font-semibold text-[#62578F] sm:px-3"
+            >
+              {resumeFixCreditBalance.remaining}{" "}
+              {resumeFixCreditBalance.phase === "starter" ? "Starter" : "Daily"} Credits
             </span>
           )}
           <button
+            type="button"
             data-testid="header-bell-btn"
             onClick={() => handleSidebarTabChange("opportunities")}
             className="relative p-1.5 rounded-lg text-[#4A4A48] hover:bg-black/[0.04] transition-colors"
@@ -1086,10 +1395,12 @@ function Dashboard() {
               </p>
             </div>
             <p className="text-[13px] text-[#4A4A48] leading-relaxed">
-              Your profile strength is {userProfile.strengthPercent}%. Complete a quick voice chat with Eve to unlock better job matches and reach a strong profile.
+              Your profile strength is {userProfile.strengthPercent}%. Complete a quick voice chat
+              with Eve to unlock better job matches and reach a strong profile.
             </p>
             <div className="flex gap-2">
               <button
+                type="button"
                 data-testid="weak-profile-chat-btn"
                 onClick={() => {
                   setShowWeakProfilePopup(false);
@@ -1101,6 +1412,7 @@ function Dashboard() {
                 Chat with Eve
               </button>
               <button
+                type="button"
                 data-testid="weak-profile-dismiss-btn"
                 onClick={() => {
                   setShowWeakProfilePopup(false);
@@ -1117,12 +1429,24 @@ function Dashboard() {
       )}
 
       <PanelGroup direction="horizontal" className="flex-1 min-h-0">
-        <Panel ref={leftPanelRef} id="left-panel" order={1} defaultSize={12} minSize={8} maxSize={28} className="h-full min-w-[44px] transition-[flex] duration-200 ease-in-out" data-testid="left-panel" data-collapsed={sidebarCollapsed ? "true" : "false"}>
+        <Panel
+          ref={leftPanelRef}
+          id="left-panel"
+          order={1}
+          defaultSize={12}
+          minSize={8}
+          maxSize={28}
+          className="h-full min-w-[44px] transition-[flex] duration-200 ease-in-out"
+          data-testid="left-panel"
+          data-collapsed={sidebarCollapsed ? "true" : "false"}
+        >
           <Sidebar
             activeTab={activeSidebarTab}
             setActiveTab={handleSidebarTabChange}
             userProfile={userProfile}
-            footerIdentity={footerIdentity.name || footerIdentity.email ? footerIdentity : undefined}
+            footerIdentity={
+              footerIdentity.name || footerIdentity.email ? footerIdentity : undefined
+            }
             jobsCount={matchingJobsTotal}
             opportunitiesCount={opportunitiesCount}
             onLogout={handleLogout}
@@ -1152,7 +1476,9 @@ function Dashboard() {
                 setInputValue={setInputValue}
                 onSend={handleSendMessage}
                 sending={sending}
-                quickActions={(userProfile.missing_questions || []).filter((item) => item.status !== "ANSWERED").map((item) => item.question)}
+                quickActions={(userProfile.missing_questions || [])
+                  .filter((item) => item.status !== "ANSWERED")
+                  .map((item) => item.question)}
                 onSuggestionClick={handleSuggestionClick}
                 composerFocusToken={composerFocusToken}
                 onMicClick={async () => {
@@ -1166,7 +1492,10 @@ function Dashboard() {
             </div>
           ) : activeSidebarTab !== "jobs" ? (
             activeSidebarTab === "billing" ? (
-              <BillingPage candidateId={candidateId} onUpgrade={() => setShowSubscriptionPlanPopup(true)} />
+              <BillingPage
+                candidateId={candidateId}
+                onUpgrade={() => setShowSubscriptionPlanPopup(true)}
+              />
             ) : (
               <LivingProfile
                 activeTab={activeSidebarTab}
@@ -1190,14 +1519,20 @@ function Dashboard() {
                 onInterested={handleApplicationApplied}
                 onPhotoChange={handlePhotoChange}
                 onProfileUpdated={refreshProfile}
-                onJobViewed={(jobId) => setAvailableJobs((prev) => prev.map((j) => (j.id === jobId ? { ...j, viewed: true } : j)))}
+                onJobViewed={(jobId) =>
+                  setAvailableJobs((prev) =>
+                    prev.map((j) => (j.id === jobId ? { ...j, viewed: true } : j)),
+                  )
+                }
                 onLockedJobClick={() => setShowSubscriptionPopup(true)}
               />
             )
-          ) : <div className="h-full flex flex-col bg-[#FBFBF9] min-h-0">
-            {/* Toggle bar */}
-            <div className="shrink-0 flex items-center gap-1 px-4 pt-3 pb-2 border-b border-black/[0.05]">
-              <button
+          ) : (
+            <div className="h-full flex flex-col bg-[#FBFBF9] min-h-0">
+              {/* Toggle bar */}
+              <div className="shrink-0 flex items-center gap-1 px-4 pt-3 pb-2 border-b border-black/[0.05]">
+                <button
+                  type="button"
                   data-testid="jobs-tab"
                   aria-disabled={opportunityType !== "jobs"}
                   disabled={opportunityType !== "jobs"}
@@ -1213,12 +1548,15 @@ function Dashboard() {
                   } ${
                     !isJobsTabActive && primaryCenterTab === "jobs"
                       ? "font-semibold"
-                      : !isJobsTabActive ? "font-normal" : ""
+                      : !isJobsTabActive
+                        ? "font-normal"
+                        : ""
                   }`}
                 >
                   New Jobs
-              </button>
-              <button
+                </button>
+                <button
+                  type="button"
                   data-testid="internships-tab"
                   aria-disabled={opportunityType !== "intern"}
                   disabled={opportunityType !== "intern"}
@@ -1236,164 +1574,203 @@ function Dashboard() {
                   } ${
                     !isInternshipsTabActive && primaryCenterTab === "internships"
                       ? "font-semibold"
-                      : !isInternshipsTabActive ? "font-normal" : ""
+                      : !isInternshipsTabActive
+                        ? "font-normal"
+                        : ""
                   }`}
                 >
                   Internships
-              </button>
-              <button
-                data-testid="chat-tab"
+                </button>
+                <button
+                  type="button"
+                  data-testid="chat-tab"
                   onClick={() => {
                     userChoseCenterViewRef.current = true;
                     setCenterView("chat");
                     setRightPanelTab("profile");
-                }}
-                className={`px-3 py-1.5 rounded-lg text-[12.5px] transition-colors ${
-                  isChatTabActive
-                    ? "bg-black/[0.06] text-[#1F1F1F] font-semibold"
-                    : "text-[#9A9A98] hover:text-[#4A4A48]"
-                } ${
-                  !isChatTabActive && primaryCenterTab === "chat"
-                    ? "font-semibold"
-                    : !isChatTabActive ? "font-normal" : ""
-                }`}
-              >
-                Chat with Eve
-              </button>
-            </div>
-
-            {centerView === "voice" ? (
-              <div className="flex-1 overflow-y-auto eve-scroll px-6 py-8">
-              <VoiceIntake
-                  firstName={(voiceIntakeProfile || userProfile).name?.split(" ")[0] || "there"}
-              candidateId={candidateId}
-              candidateProfile={voiceIntakeProfile || userProfile}
-              onComplete={async (result) => {
-                if (result?.profile || result?.profile_updates) {
-                  const updatePayload = result.profile || result.profile_updates || {};
-                  setUserProfile((prev) => mergeProfileUpdatesForDisplay(prev, updatePayload));
-                }
-                // Keep the candidate in Chat while the backend confirms the
-                // outcome. A local Voice Intake result is not authoritative.
-                setCenterView("chat");
-                const latest = await refreshProfile();
-                const completed = isVoiceIntakeCompleteStatus(latest?.voice_intake_resume?.status);
-                const s = loadOnboardingState();
-                saveOnboardingState({ ...s, voiceIntakeCompleted: completed });
-                if (completed && latest?.strengthPercent >= 90) {
-                  // Voice Intake is the completed navigation action. Release
-                  // its temporary view override only after the persisted
-                  // profile confirms completion, then restore Jobs.
-                  userChoseCenterViewRef.current = false;
-                  setRightPanelTab("profile");
-                  setCenterView("swipe");
-                }
-              }}
-            />
+                  }}
+                  className={`px-3 py-1.5 rounded-lg text-[12.5px] transition-colors ${
+                    isChatTabActive
+                      ? "bg-black/[0.06] text-[#1F1F1F] font-semibold"
+                      : "text-[#9A9A98] hover:text-[#4A4A48]"
+                  } ${
+                    !isChatTabActive && primaryCenterTab === "chat"
+                      ? "font-semibold"
+                      : !isChatTabActive
+                        ? "font-normal"
+                        : ""
+                  }`}
+                >
+                  Chat with Eve
+                </button>
               </div>
-            ) : hasJobsAccess && centerView === "swipe" ? (
-              jobsLoading ? (
-                <div className="flex-1 flex items-center justify-center">
-                  <div className="flex items-center gap-2 text-[#9A9A98]">
-                    <span className="w-2 h-2 rounded-full bg-[#B5B5B3] animate-pulse" />
-                    <span className="w-2 h-2 rounded-full bg-[#B5B5B3] animate-pulse" style={{ animationDelay: "120ms" }} />
-                    <span className="w-2 h-2 rounded-full bg-[#B5B5B3] animate-pulse" style={{ animationDelay: "240ms" }} />
-                  </div>
-                </div>
-              ) : jobsError ? (
-                <div className="flex-1 flex flex-col items-center justify-center gap-3 px-8 text-center">
-                  <p className="text-[14px] text-[#1F1F1F]">Couldn't load recommendations</p>
-                  <button
-                    onClick={fetchJobs}
-                    className="text-[12.5px] text-[#4A4A48] underline underline-offset-2 hover:text-[#1F1F1F]"
-                  >
-                    Try again
-                  </button>
-                </div>
-              ) : (
-                <div className="flex-1 overflow-y-auto eve-scroll px-4 py-5">
-                  <JobsTab
-                    jobs={availableJobs}
-                    matchingJobsTotal={matchingJobsTotal}
-                    onTrack={handleTrackJob}
-                    onDismiss={handleDismissJob}
-                    selectedJob={selectedJob}
-                    setSelectedJob={setSelectedJob}
+
+              {centerView === "voice" ? (
+                <div className="flex-1 overflow-y-auto eve-scroll px-6 py-8">
+                  <VoiceIntake
+                    firstName={(voiceIntakeProfile || userProfile).name?.split(" ")[0] || "there"}
                     candidateId={candidateId}
-                    onJobViewed={(jobId) =>
-                      setAvailableJobs((prev) =>
-                        prev.map((j) => (j.id === jobId ? { ...j, viewed: true } : j))
-                      )
-                    }
-                    onLockedJobClick={() => setShowSubscriptionPopup(true)}
-                    onApplied={handleApplicationApplied}
+                    candidateProfile={voiceIntakeProfile || userProfile}
+                    onComplete={async (result) => {
+                      if (result?.profile || result?.profile_updates) {
+                        const updatePayload = result.profile || result.profile_updates || {};
+                        setUserProfile((prev) =>
+                          mergeProfileUpdatesForDisplay(prev, updatePayload),
+                        );
+                      }
+                      // Keep the candidate in Chat while the backend confirms the
+                      // outcome. A local Voice Intake result is not authoritative.
+                      setCenterView("chat");
+                      const latest = await refreshProfile();
+                      const completed = isVoiceIntakeCompleteStatus(
+                        latest?.voice_intake_resume?.status,
+                      );
+                      const s = loadOnboardingState();
+                      saveOnboardingState({ ...s, voiceIntakeCompleted: completed });
+                      if (completed && latest?.strengthPercent >= 90) {
+                        // Voice Intake is the completed navigation action. Release
+                        // its temporary view override only after the persisted
+                        // profile confirms completion, then restore Jobs.
+                        userChoseCenterViewRef.current = false;
+                        setRightPanelTab("profile");
+                        setCenterView("swipe");
+                      }
+                    }}
                   />
                 </div>
-              )
-            ) : (
-              <ChatHub
-                chats={chats}
-                inputValue={inputValue}
-                setInputValue={setInputValue}
-                onSend={handleSendMessage}
-                sending={sending}
-                quickActions={(userProfile.missing_questions || [])
-                  .filter((item) => item.status !== "ANSWERED")
-                  .map((item) => item.question)
-                }
-                onSuggestionClick={handleSuggestionClick}
-                composerFocusToken={composerFocusToken}
-                onMicClick={async () => {
-                  userChoseCenterViewRef.current = true;
-                  const fresh = await refreshProfile();
-                  setRightPanelTab("profile");
-                  setVoiceIntakeProfile(fresh);
-                  setCenterView("voice");
-                }}
-              />
-            )}
-          </div>}
+              ) : hasJobsAccess && centerView === "swipe" ? (
+                jobsLoading ? (
+                  <div className="flex-1 flex items-center justify-center">
+                    <div className="flex items-center gap-2 text-[#9A9A98]">
+                      <span className="w-2 h-2 rounded-full bg-[#B5B5B3] animate-pulse" />
+                      <span
+                        className="w-2 h-2 rounded-full bg-[#B5B5B3] animate-pulse"
+                        style={{ animationDelay: "120ms" }}
+                      />
+                      <span
+                        className="w-2 h-2 rounded-full bg-[#B5B5B3] animate-pulse"
+                        style={{ animationDelay: "240ms" }}
+                      />
+                    </div>
+                  </div>
+                ) : jobsError ? (
+                  <div className="flex-1 flex flex-col items-center justify-center gap-3 px-8 text-center">
+                    <p className="text-[14px] text-[#1F1F1F]">Couldn't load recommendations</p>
+                    <button
+                      type="button"
+                      onClick={fetchJobs}
+                      className="text-[12.5px] text-[#4A4A48] underline underline-offset-2 hover:text-[#1F1F1F]"
+                    >
+                      Try again
+                    </button>
+                  </div>
+                ) : (
+                  <div className="flex-1 overflow-y-auto eve-scroll px-4 py-5">
+                    <JobsTab
+                      jobs={availableJobs}
+                      matchingJobsTotal={matchingJobsTotal}
+                      onTrack={handleTrackJob}
+                      onDismiss={handleDismissJob}
+                      selectedJob={selectedJob}
+                      setSelectedJob={setSelectedJob}
+                      candidateId={candidateId}
+                      onJobViewed={(jobId) =>
+                        setAvailableJobs((prev) =>
+                          prev.map((j) => (j.id === jobId ? { ...j, viewed: true } : j)),
+                        )
+                      }
+                      onLockedJobClick={() => setShowSubscriptionPopup(true)}
+                      onApplied={handleApplicationApplied}
+                    />
+                  </div>
+                )
+              ) : (
+                <ChatHub
+                  chats={chats}
+                  inputValue={inputValue}
+                  setInputValue={setInputValue}
+                  onSend={handleSendMessage}
+                  sending={sending}
+                  quickActions={(userProfile.missing_questions || [])
+                    .filter((item) => item.status !== "ANSWERED")
+                    .map((item) => item.question)}
+                  onSuggestionClick={handleSuggestionClick}
+                  composerFocusToken={composerFocusToken}
+                  onMicClick={async () => {
+                    userChoseCenterViewRef.current = true;
+                    const fresh = await refreshProfile();
+                    setRightPanelTab("profile");
+                    setVoiceIntakeProfile(fresh);
+                    setCenterView("voice");
+                  }}
+                />
+              )}
+            </div>
+          )}
         </Panel>
 
-        {!usesSingleContentPanel && <>
-        <ResizeHandle testId="resize-handle-right" subtle />
+        {!usesSingleContentPanel && (
+          <>
+            <ResizeHandle testId="resize-handle-right" subtle />
 
-        <Panel id="right-panel" order={3} defaultSize={50} minSize={40} className="h-full" data-testid="right-panel">
-          {displayedRightPanelTab === "resume" ? (
-            <ResumeContextPanel candidateId={candidateId} candidateToken={candidateToken} documents={documents} docsLoading={docsLoading} />
-          ) : displayedRightPanelTab === "billing" ? <BillingContextPanel candidateId={candidateId} />
-            : ["tracked", "documents", "opportunities"].includes(displayedRightPanelTab) ? <SectionContextPanel tab={displayedRightPanelTab} selectedJob={selectedJob} documents={documents} opportunitiesCount={opportunitiesCount} /> : <LivingProfile
-            activeTab={displayedRightPanelTab}
-            userProfile={userProfile}
-            jobs={availableJobs}
-            matchingJobsTotal={matchingJobsTotal}
-            documents={documents}
-            docsLoading={docsLoading}
-            candidateId={candidateId}
-            candidateToken={candidateToken}
-            selectedJob={selectedJob}
-            setSelectedJob={setSelectedJob}
-            onTrackJob={handleTrackJob}
-            onDismissJob={handleDismissJob}
-            onToggleOpenToMatches={handleToggleOpenToMatches}
-            onResumeReplaced={handleResumeReplaced}
-            onCertUploaded={handleCertUploaded}
-            onCertReplaced={handleCertReplaced}
-            onResumeDeleted={handleResumeDeleted}
-            onCertDeleted={handleCertDeleted}
-            onInterested={handleApplicationApplied}
-            onPhotoChange={handlePhotoChange}
-            onProfileUpdated={refreshProfile}
-            onJobViewed={(jobId) =>
-              setAvailableJobs((prev) =>
-                prev.map((j) => (j.id === jobId ? { ...j, viewed: true } : j))
-              )
-            }
-            onLockedJobClick={() => setShowSubscriptionPopup(true)}
-          />
-          }
-        </Panel>
-        </>}
+            <Panel
+              id="right-panel"
+              order={3}
+              defaultSize={50}
+              minSize={40}
+              className="h-full"
+              data-testid="right-panel"
+            >
+              {displayedRightPanelTab === "resume" ? (
+                <ResumeContextPanel
+                  candidateId={candidateId}
+                  candidateToken={candidateToken}
+                  documents={documents}
+                  docsLoading={docsLoading}
+                />
+              ) : displayedRightPanelTab === "billing" ? (
+                <BillingContextPanel candidateId={candidateId} />
+              ) : ["tracked", "documents", "opportunities"].includes(displayedRightPanelTab) ? (
+                <SectionContextPanel
+                  tab={displayedRightPanelTab}
+                  selectedJob={selectedJob}
+                  documents={documents}
+                  opportunitiesCount={opportunitiesCount}
+                />
+              ) : (
+                <LivingProfile
+                  activeTab={displayedRightPanelTab}
+                  userProfile={userProfile}
+                  jobs={availableJobs}
+                  matchingJobsTotal={matchingJobsTotal}
+                  documents={documents}
+                  docsLoading={docsLoading}
+                  candidateId={candidateId}
+                  candidateToken={candidateToken}
+                  selectedJob={selectedJob}
+                  setSelectedJob={setSelectedJob}
+                  onTrackJob={handleTrackJob}
+                  onDismissJob={handleDismissJob}
+                  onToggleOpenToMatches={handleToggleOpenToMatches}
+                  onResumeReplaced={handleResumeReplaced}
+                  onCertUploaded={handleCertUploaded}
+                  onCertReplaced={handleCertReplaced}
+                  onResumeDeleted={handleResumeDeleted}
+                  onCertDeleted={handleCertDeleted}
+                  onInterested={handleApplicationApplied}
+                  onPhotoChange={handlePhotoChange}
+                  onProfileUpdated={refreshProfile}
+                  onJobViewed={(jobId) =>
+                    setAvailableJobs((prev) =>
+                      prev.map((j) => (j.id === jobId ? { ...j, viewed: true } : j)),
+                    )
+                  }
+                  onLockedJobClick={() => setShowSubscriptionPopup(true)}
+                />
+              )}
+            </Panel>
+          </>
+        )}
       </PanelGroup>
       <CandidateSettingsModal
         open={settingsOpen}
@@ -1417,7 +1794,12 @@ export default function DashboardGuard() {
     const candidateToken = searchParams.get("candidate_token");
     if (fromUrl) {
       const s = loadOnboardingState();
-      saveOnboardingState({ ...s, authenticated: true, candidateId: fromUrl, candidateToken: candidateToken || s.candidateToken || null });
+      saveOnboardingState({
+        ...s,
+        authenticated: true,
+        candidateId: fromUrl,
+        candidateToken: candidateToken || s.candidateToken || null,
+      });
       return fromUrl;
     }
     return loadOnboardingState().candidateId ?? null;

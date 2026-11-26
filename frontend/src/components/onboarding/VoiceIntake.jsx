@@ -8,49 +8,108 @@ import { motion } from "framer-motion";
 import { Mic, MicOff, Radio, PhoneOff, RotateCcw } from "lucide-react";
 import { toast } from "sonner";
 import useVapi, { VAPI_STATES, buildTranscriptText } from "../../hooks/useVapi";
-import { loadOnboardingState, saveOnboardingState, isVoiceIntakeCompleteStatus } from "../../lib/onboardingStorage";
+import {
+  loadOnboardingState,
+  saveOnboardingState,
+  isVoiceIntakeCompleteStatus,
+} from "../../lib/onboardingStorage";
 import { API } from "../../lib/apiConfig";
 
 const PUBLIC_KEY = import.meta.env.VITE_VAPI_PUBLIC_KEY;
-const ASSISTANT_ID =
-  import.meta.env.VITE_EVE_VAPI_ASSISTANT_ID;
+const ASSISTANT_ID = import.meta.env.VITE_EVE_VAPI_ASSISTANT_ID;
 
 // Resume parsing creates the candidate before this step and returns its ID in
 // the parsed profile.  During the first onboarding render, React state can
 // briefly lag that response, so retain the profile ID as the authoritative
 // fallback.  Existing candidates continue to use the explicit prop.
 export function resolveVoiceIntakeCandidateId(candidateId, candidateProfile) {
-  return candidateId || candidateProfile?.candidate_id || candidateProfile?.candidateId || candidateProfile?.id || "";
+  return (
+    candidateId ||
+    candidateProfile?.candidate_id ||
+    candidateProfile?.candidateId ||
+    candidateProfile?.id ||
+    ""
+  );
 }
 
 export function canPersistVoiceProgress({ terminal, generation, currentGeneration }) {
   return !terminal && generation === currentGeneration;
 }
 
+// A successfully persisted final intake may still have unanswered questions.
+// Keep the backend's status authoritative: both states can show the summary,
+// while unknown statuses must never be treated as a successful submission.
+export function canNavigateToVoiceIntakeSummary(status) {
+  return ["completed", "in_progress"].includes(String(status || "").toLowerCase());
+}
+
+function normalizedQuestion(value) {
+  return String(value || "")
+    .trim()
+    .replace(/\s+/g, " ")
+    .toLowerCase();
+}
+
+export function resolveVoiceIntakeResumeQuestion(resume) {
+  const completed = Array.isArray(resume?.completed_turns) ? resume.completed_turns : [];
+  const answered = new Set(
+    completed.map((turn) => normalizedQuestion(turn?.question)).filter(Boolean),
+  );
+  const current = String(resume?.current_question || "").trim();
+  const next = String(resume?.next_question || "").trim();
+  const valid = (question) => Boolean(question) && !answered.has(normalizedQuestion(question));
+
+  return {
+    question: valid(current) ? current : valid(next) ? next : "",
+    recoveryRequired:
+      String(resume?.status || "").toLowerCase() === "in_progress" &&
+      completed.length > 0 &&
+      !valid(current) &&
+      !valid(next),
+  };
+}
+
 export function buildVoiceIntakeAssistantOverrides({ firstName, candidateId, candidateProfile }) {
   const p = candidateProfile || {};
   const resolvedCandidateId = resolveVoiceIntakeCandidateId(candidateId, p);
-  const mostRecentExp = Array.isArray(p.experience) && p.experience.length > 0 ? p.experience[0] : null;
-  const skills = Array.isArray(p.keySkills) && p.keySkills.length > 0
-    ? p.keySkills.slice(0, 15).join(", ")
-    : (Array.isArray(p.skills) && p.skills.length > 0 ? p.skills.slice(0, 15).join(", ") : "");
-  const workExp = Array.isArray(p.experience) && p.experience.length > 0
-    ? p.experience.slice(0, 5).map((e) => `${e.title || ""} at ${e.company || ""}${e.dates ? " (" + e.dates + ")" : ""}`).join("; ")
-    : "";
-  const education = Array.isArray(p.education) && p.education.length > 0
-    ? p.education.slice(0, 3).map((e) => `${e.degree || ""} at ${e.institution || ""}`).join("; ")
-    : "";
-  const preferredRoles = Array.isArray(p.preferred_roles) && p.preferred_roles.length > 0
-    ? p.preferred_roles.join(", ") : "";
+  const mostRecentExp =
+    Array.isArray(p.experience) && p.experience.length > 0 ? p.experience[0] : null;
+  const skills =
+    Array.isArray(p.keySkills) && p.keySkills.length > 0
+      ? p.keySkills.slice(0, 15).join(", ")
+      : Array.isArray(p.skills) && p.skills.length > 0
+        ? p.skills.slice(0, 15).join(", ")
+        : "";
+  const workExp =
+    Array.isArray(p.experience) && p.experience.length > 0
+      ? p.experience
+          .slice(0, 5)
+          .map(
+            (e) => `${e.title || ""} at ${e.company || ""}${e.dates ? " (" + e.dates + ")" : ""}`,
+          )
+          .join("; ")
+      : "";
+  const education =
+    Array.isArray(p.education) && p.education.length > 0
+      ? p.education
+          .slice(0, 3)
+          .map((e) => `${e.degree || ""} at ${e.institution || ""}`)
+          .join("; ")
+      : "";
+  const preferredRoles =
+    Array.isArray(p.preferred_roles) && p.preferred_roles.length > 0
+      ? p.preferred_roles.join(", ")
+      : "";
   const vir = p.voice_intake_resume || {};
 
   // Build structured intake context for LLM — no hardcoded question numbers
   const completedTopics = (vir.known_topics || []).join(", ");
   const missingTopics = (vir.missing_topics || []).join(", ");
-  const completedQA = Array.isArray(vir.completed_turns) && vir.completed_turns.length > 0
-    ? vir.completed_turns.map((t) => `Q: ${t.question} A: ${t.answer}`).join(" | ")
-    : "";
-  const currentQuestion = vir.current_question || vir.next_question || "";
+  const completedQA =
+    Array.isArray(vir.completed_turns) && vir.completed_turns.length > 0
+      ? vir.completed_turns.map((t) => `Q: ${t.question} A: ${t.answer}`).join(" | ")
+      : "";
+  const { question: currentQuestion, recoveryRequired } = resolveVoiceIntakeResumeQuestion(vir);
   const isResume = vir.status === "in_progress" && Boolean(currentQuestion);
 
   const overrides = {
@@ -84,6 +143,7 @@ export function buildVoiceIntakeAssistantOverrides({ firstName, candidateId, can
     metadata: {
       candidateId: resolvedCandidateId,
       source: "eve_candidate_voice_intake",
+      resumeRecoveryRequired: recoveryRequired,
     },
   };
 
@@ -91,11 +151,10 @@ export function buildVoiceIntakeAssistantOverrides({ firstName, candidateId, can
   // instructed to continue at the saved question, not restart from question 1.
   if (isResume) {
     const answeredCount = Array.isArray(vir.completed_turns) ? vir.completed_turns.length : 0;
-    const resumeName = p.name ? p.name.split(" ")[0] : (firstName || "");
-    overrides.firstMessage =
-      `Welcome back${resumeName ? `, ${resumeName}` : ""}! We were in the middle of your voice intake — you've answered ${answeredCount} question${answeredCount === 1 ? "" : "s"} so far. Let me continue where we left off. ${currentQuestion}`;
+    const resumeName = p.name ? p.name.split(" ")[0] : firstName || "";
+    overrides.firstMessage = `Welcome back${resumeName ? `, ${resumeName}` : ""}! We were in the middle of your voice intake — you've answered ${answeredCount} question${answeredCount === 1 ? "" : "s"} so far. Let me continue where we left off. ${currentQuestion}`;
   } else if (isVoiceIntakeCompleteStatus(vir.status)) {
-    const completedName = p.name ? p.name.split(" ")[0] : (firstName || "");
+    const completedName = p.name ? p.name.split(" ")[0] : firstName || "";
     overrides.firstMessage = `Welcome back${completedName ? `, ${completedName}` : ""}. How can I help you improve your profile?`;
   }
 
@@ -153,10 +212,16 @@ const STATE_LABELS = {
 };
 
 const NOT_CONFIGURED_MSG = "Voice intake is not configured. Please contact support.";
+export const VOICE_INACTIVITY_MS = 5000;
+export const VOICE_LOCAL_ACTIVITY_THRESHOLD = 0.02;
+const VOICE_LOCAL_ACTIVITY_DEBOUNCE_MS = 120;
 const VOICE_TIMING_KEY = "eve_voice_intake_timing";
 
 function newVoiceRequestId() {
-  return globalThis.crypto?.randomUUID?.() || `voice-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+  return (
+    globalThis.crypto?.randomUUID?.() ||
+    `voice-${Date.now()}-${Math.random().toString(16).slice(2)}`
+  );
 }
 
 function recordVoiceTiming(update) {
@@ -177,7 +242,15 @@ export default function VoiceIntake({ firstName, candidateId, onComplete, candid
   const terminalRef = React.useRef(false);
   const terminalRequestIdRef = React.useRef(null);
   const terminalTimerRef = React.useRef(null);
+  const inactivityTimerRef = React.useRef(null);
+  const inactivityGenerationRef = React.useRef(0);
+  const automaticTerminationRef = React.useRef(false);
+  const assistantHasSpokenRef = React.useRef(false);
+  const assistantSegmentActiveRef = React.useRef(false);
+  const awaitingAssistantRef = React.useRef(false);
+  const candidateActivityTimerRef = React.useRef(null);
   const transcriptRef = React.useRef([]);
+  const progressRequestsRef = React.useRef(new Set());
   const resolvedCandidateId = resolveVoiceIntakeCandidateId(candidateId, candidateProfile);
 
   // Vapi can deliver the final transcript message just after call-end. Keep
@@ -193,17 +266,115 @@ export default function VoiceIntake({ firstName, candidateId, onComplete, candid
   }, []);
 
   const assistantOverrides = React.useMemo(
-    () => buildVoiceIntakeAssistantOverrides({ firstName, candidateId: resolvedCandidateId, candidateProfile }),
-    [firstName, resolvedCandidateId, candidateProfile]
+    () =>
+      buildVoiceIntakeAssistantOverrides({
+        firstName,
+        candidateId: resolvedCandidateId,
+        candidateProfile,
+      }),
+    [firstName, resolvedCandidateId, candidateProfile],
   );
 
-  const { callState, transcript, error, terminationReason, startCall, stopCall, resetCall, isMuted, toggleMute, callId } = useVapi({
+  const {
+    callState,
+    transcript,
+    error,
+    terminationReason,
+    localVolumeLevel,
+    startCall,
+    stopCall,
+    resetCall,
+    isMuted,
+    toggleMute,
+    callId,
+  } = useVapi({
     publicKey: PUBLIC_KEY,
     assistantId: ASSISTANT_ID,
     assistantOverrides,
   });
 
   transcriptRef.current = transcript;
+
+  const clearInactivityTimer = React.useCallback(() => {
+    inactivityGenerationRef.current += 1;
+    if (inactivityTimerRef.current) {
+      clearTimeout(inactivityTimerRef.current);
+      inactivityTimerRef.current = null;
+    }
+  }, []);
+
+  const markCandidateActivity = React.useCallback(() => {
+    clearInactivityTimer();
+    awaitingAssistantRef.current = true;
+  }, [clearInactivityTimer]);
+
+  // Local volume is a microphone-activity signal, not speech recognition.
+  // Require a short sustained signal to avoid cancelling on a single noise
+  // spike; transcript messages provide a second, stronger cancellation path.
+  React.useEffect(() => {
+    if (localVolumeLevel < VOICE_LOCAL_ACTIVITY_THRESHOLD || terminalRef.current) return undefined;
+    if (candidateActivityTimerRef.current) clearTimeout(candidateActivityTimerRef.current);
+    candidateActivityTimerRef.current = setTimeout(() => {
+      candidateActivityTimerRef.current = null;
+      markCandidateActivity();
+    }, VOICE_LOCAL_ACTIVITY_DEBOUNCE_MS);
+    return () => {
+      if (candidateActivityTimerRef.current) {
+        clearTimeout(candidateActivityTimerRef.current);
+        candidateActivityTimerRef.current = null;
+      }
+    };
+  }, [localVolumeLevel, markCandidateActivity]);
+
+  React.useEffect(() => {
+    const lastTurn = transcript[transcript.length - 1];
+    if (lastTurn?.role === "user" && lastTurn.text?.trim()) markCandidateActivity();
+  }, [transcript, markCandidateActivity]);
+
+  // The SDK's speech events represent remote/assistant audio. Only begin the
+  // inactivity window after an observed assistant segment has ended.
+  React.useEffect(() => {
+    if (callState === VAPI_STATES.SPEAKING) {
+      assistantHasSpokenRef.current = true;
+      assistantSegmentActiveRef.current = true;
+      clearInactivityTimer();
+      return;
+    }
+    if (callState !== VAPI_STATES.LISTENING || !assistantSegmentActiveRef.current) return;
+    assistantSegmentActiveRef.current = false;
+    if (
+      awaitingAssistantRef.current ||
+      terminalRef.current ||
+      submitting ||
+      automaticTerminationRef.current
+    )
+      return;
+    clearInactivityTimer();
+    const generation = inactivityGenerationRef.current;
+    inactivityTimerRef.current = setTimeout(() => {
+      if (
+        generation !== inactivityGenerationRef.current ||
+        terminalRef.current ||
+        submitting ||
+        automaticTerminationRef.current ||
+        !assistantHasSpokenRef.current ||
+        awaitingAssistantRef.current
+      )
+        return;
+      automaticTerminationRef.current = true;
+      clearInactivityTimer();
+      stopCall();
+    }, VOICE_INACTIVITY_MS);
+    return clearInactivityTimer;
+  }, [callState, clearInactivityTimer, stopCall, submitting]);
+
+  React.useEffect(
+    () => () => {
+      clearInactivityTimer();
+      if (candidateActivityTimerRef.current) clearTimeout(candidateActivityTimerRef.current);
+    },
+    [clearInactivityTimer],
+  );
 
   // Persist progress whenever transcript grows
   React.useEffect(() => {
@@ -233,15 +404,26 @@ export default function VoiceIntake({ firstName, candidateId, onComplete, candid
 
     const generation = progressGenerationRef.current;
     progressTimerRef.current = setTimeout(() => {
-      if (!canPersistVoiceProgress({
-        terminal: terminalRef.current,
-        generation,
-        currentGeneration: progressGenerationRef.current,
-      })) return;
-      axios.post(`${API}/voice/candidate-intake/progress`, payload, {
-        headers: { "X-Request-ID": progressRequestId },
-        __eveSilentError: true,
-      }).catch(() => {});
+      if (
+        !canPersistVoiceProgress({
+          terminal: terminalRef.current,
+          generation,
+          currentGeneration: progressGenerationRef.current,
+        })
+      )
+        return;
+      const controller = new AbortController();
+      progressRequestsRef.current.add(controller);
+      axios
+        .post(`${API}/voice/candidate-intake/progress`, payload, {
+          headers: { "X-Request-ID": progressRequestId },
+          __eveSilentError: true,
+          signal: controller.signal,
+        })
+        .catch(() => {})
+        .finally(() => {
+          progressRequestsRef.current.delete(controller);
+        });
     }, 900);
 
     return () => {
@@ -259,7 +441,14 @@ export default function VoiceIntake({ firstName, candidateId, onComplete, candid
     // Invalidate both pending timers and callbacks that were already queued
     // before the terminal VAPI state was observed.
     terminalRef.current = true;
+    clearInactivityTimer();
     progressGenerationRef.current += 1;
+    // A queued snapshot is cleared below; abort requests already sent by this
+    // browser too, so they cannot race the authoritative final submission.
+    progressRequestsRef.current.forEach((controller) => {
+      controller.abort();
+    });
+    progressRequestsRef.current.clear();
     const terminalRequestId = terminalRequestIdRef.current || newVoiceRequestId();
     terminalRequestIdRef.current = terminalRequestId;
     recordVoiceTiming({
@@ -286,21 +475,25 @@ export default function VoiceIntake({ firstName, candidateId, onComplete, candid
       }
 
       try {
-        await axios.post(`${API}/voice/candidate-intake/progress`, {
-          transcript: buildTranscriptText(finalTranscript),
-          voice_notes: finalTranscript.map((turn) => ({
-            role: turn.role,
-            text: turn.text,
-            final: turn.final !== false,
-          })),
-          candidate_id: resolvedCandidateId,
-          vapi_call_id: callId.current || null,
-          transcript_revision: String(finalTranscript.length),
-          termination_reason: terminationReason || "disconnect",
-        }, {
-          headers: { "X-Request-ID": terminalRequestId },
-          __eveSilentError: true,
-        });
+        await axios.post(
+          `${API}/voice/candidate-intake/progress`,
+          {
+            transcript: buildTranscriptText(finalTranscript),
+            voice_notes: finalTranscript.map((turn) => ({
+              role: turn.role,
+              text: turn.text,
+              final: turn.final !== false,
+            })),
+            candidate_id: resolvedCandidateId,
+            vapi_call_id: callId.current || null,
+            transcript_revision: String(finalTranscript.length),
+            termination_reason: terminationReason || "disconnect",
+          },
+          {
+            headers: { "X-Request-ID": terminalRequestId },
+            __eveSilentError: true,
+          },
+        );
       } catch (err) {
         console.warn("[voice-intake] interrupted-state save failed");
       }
@@ -312,7 +505,9 @@ export default function VoiceIntake({ firstName, candidateId, onComplete, candid
     if (callState === VAPI_STATES.PROCESSING) {
       terminalTimerRef.current = setTimeout(() => {
         const settledTranscript = transcriptRef.current;
-        const hasCandidateSpeech = settledTranscript.some((t) => t.role === "user" && t.text?.trim());
+        const hasCandidateSpeech = settledTranscript.some(
+          (t) => t.role === "user" && t.text?.trim(),
+        );
         if (!hasCandidateSpeech) {
           finalizeCall();
           return;
@@ -328,18 +523,26 @@ export default function VoiceIntake({ firstName, candidateId, onComplete, candid
         }
         setSubmitting(true);
         if (progressTimerRef.current) clearTimeout(progressTimerRef.current);
-        axios.post(`${API}/voice/candidate-intake`, {
-          transcript: transcriptText,
-          voice_notes: settledTranscript.map((t) => ({ role: t.role, text: t.text })),
-          candidate_id: resolvedCandidateId,
-          vapi_call_id: callId.current || null,
-          termination_reason: terminationReason || "disconnect",
-          transcript_revision: String(settledTranscript.length),
-        }, { headers: { "X-Request-ID": terminalRequestId } })
+        axios
+          .post(
+            `${API}/voice/candidate-intake`,
+            {
+              transcript: transcriptText,
+              voice_notes: settledTranscript.map((t) => ({ role: t.role, text: t.text })),
+              candidate_id: resolvedCandidateId,
+              vapi_call_id: callId.current || null,
+              termination_reason: terminationReason || "disconnect",
+              transcript_revision: String(settledTranscript.length),
+            },
+            { headers: { "X-Request-ID": terminalRequestId } },
+          )
           .then((res) => {
             recordVoiceTiming({ response_at_ms: performance.now(), outcome: "success" });
-            if (isVoiceIntakeCompleteStatus(res.data?.status)) onComplete(res.data);
-            else { toast.info("Your intake is saved and can be resumed from here."); resetCall?.(); }
+            if (canNavigateToVoiceIntakeSummary(res.data?.status)) onComplete(res.data);
+            else {
+              toast.info("Your intake is saved and can be resumed from here.");
+              resetCall?.();
+            }
           })
           .catch(() => {
             recordVoiceTiming({ response_at_ms: performance.now(), outcome: "error" });
@@ -383,17 +586,21 @@ export default function VoiceIntake({ firstName, candidateId, onComplete, candid
       progressTimerRef.current = null;
     }
     axios
-      .post(`${API}/voice/candidate-intake`, {
-        transcript: transcriptText,
-        voice_notes: finalTranscript.map((t) => ({ role: t.role, text: t.text })),
-        candidate_id: resolvedCandidateId,
+      .post(
+        `${API}/voice/candidate-intake`,
+        {
+          transcript: transcriptText,
+          voice_notes: finalTranscript.map((t) => ({ role: t.role, text: t.text })),
+          candidate_id: resolvedCandidateId,
           vapi_call_id: callId.current || null,
           termination_reason: terminationReason || "disconnect",
-        transcript_revision: String(finalTranscript.length),
-      }, { headers: { "X-Request-ID": terminalRequestId } })
+          transcript_revision: String(finalTranscript.length),
+        },
+        { headers: { "X-Request-ID": terminalRequestId } },
+      )
       .then((res) => {
         recordVoiceTiming({ response_at_ms: performance.now(), outcome: "success" });
-        if (isVoiceIntakeCompleteStatus(res.data?.status)) {
+        if (canNavigateToVoiceIntakeSummary(res.data?.status)) {
           onComplete(res.data);
         } else {
           toast.info("Your intake is saved and can be resumed from here.");
@@ -408,10 +615,23 @@ export default function VoiceIntake({ firstName, candidateId, onComplete, candid
       })
       .finally(() => setSubmitting(false));
 
-  // eslint-disable-next-line react-hooks/exhaustive-deps
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [callState, terminationReason]);
 
   const handleStartCall = () => {
+    const resume = candidateProfile?.voice_intake_resume;
+    const resumeQuestion = resolveVoiceIntakeResumeQuestion(resume);
+    if (resumeQuestion.recoveryRequired) {
+      toast.error(
+        "Your saved intake needs to be refreshed before it can be resumed. Please return to Dashboard and try again.",
+      );
+      return;
+    }
+    clearInactivityTimer();
+    automaticTerminationRef.current = false;
+    assistantHasSpokenRef.current = false;
+    assistantSegmentActiveRef.current = false;
+    awaitingAssistantRef.current = false;
     terminalRef.current = false;
     terminalRequestIdRef.current = null;
     progressGenerationRef.current += 1;
@@ -426,12 +646,16 @@ export default function VoiceIntake({ firstName, candidateId, onComplete, candid
     startCall();
   };
 
-  const isActive =
-    callState === VAPI_STATES.LISTENING || callState === VAPI_STATES.SPEAKING;
+  const handleStopCall = () => {
+    clearInactivityTimer();
+    automaticTerminationRef.current = true;
+    stopCall();
+  };
+
+  const isActive = callState === VAPI_STATES.LISTENING || callState === VAPI_STATES.SPEAKING;
   const isIdle = callState === VAPI_STATES.IDLE;
   const isError = callState === VAPI_STATES.ERROR;
-  const isProcessing =
-    callState === VAPI_STATES.PROCESSING || submitting;
+  const isProcessing = callState === VAPI_STATES.PROCESSING || submitting;
 
   return (
     <div className="flex flex-col items-center gap-8 text-center">
@@ -443,8 +667,8 @@ export default function VoiceIntake({ firstName, candidateId, onComplete, candid
         </h1>
         {isIdle && (
           <p className="text-[13px] text-[#9A9A98] max-w-xs mx-auto leading-relaxed">
-            Talk with Eve for 3–5 minutes about what you're looking for. She'll
-            enrich your profile as you speak.
+            Talk with Eve for 3–5 minutes about what you're looking for. She'll enrich your profile
+            as you speak.
           </p>
         )}
         {isError && error && (
@@ -459,7 +683,9 @@ export default function VoiceIntake({ firstName, candidateId, onComplete, candid
           className="text-[12.5px] text-[#4A4A48] max-w-sm mx-auto leading-relaxed"
           data-testid="voice-end-call-instruction"
         >
-          Once you&apos;ve completed your voice intake, click <span className="font-medium text-[#1F1F1F]">End Call</span> to finish and save your responses.
+          Once you&apos;ve completed your voice intake, click{" "}
+          <span className="font-medium text-[#1F1F1F]">End Call</span> to finish and save your
+          responses.
         </p>
       )}
 
@@ -478,7 +704,7 @@ export default function VoiceIntake({ firstName, candidateId, onComplete, candid
 
         {isActive && (
           <button
-            onClick={stopCall}
+            onClick={handleStopCall}
             data-testid="voice-end-call"
             className="inline-flex items-center gap-2 text-[13px] font-medium px-5 py-2.5 rounded-full bg-[#E11D48] text-white hover:bg-red-700 transition-colors"
           >

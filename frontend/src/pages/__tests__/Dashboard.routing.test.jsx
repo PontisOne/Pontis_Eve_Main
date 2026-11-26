@@ -4,68 +4,110 @@ import axios from "axios";
 import { MemoryRouter } from "react-router-dom";
 import { render } from "@testing-library/react";
 
-import Dashboard from "../Dashboard";
+import Dashboard, { resolveProfileVoiceIntakeResume } from "../Dashboard";
 import { saveOnboardingState } from "../../lib/onboardingStorage";
 
 globalThis.IS_REACT_ACT_ENVIRONMENT = true;
 
+describe("Dashboard resume state semantics", () => {
+  it("clears resume state when the backend explicitly returns null", () => {
+    expect(
+      resolveProfileVoiceIntakeResume({ voice_intake_resume: null }, { status: "in_progress" }),
+    ).toBeNull();
+  });
+
+  it("preserves compatibility when a legacy response omits the resume property", () => {
+    const previous = { status: "in_progress", current_question: "Q3" };
+    expect(resolveProfileVoiceIntakeResume({}, previous)).toBe(previous);
+  });
+});
+
 let lastLivingProfileProps = null;
 let mockVoiceIntakeOnComplete = null;
 
-vi.mock("../../components/Sidebar", () => ({ default: (props) => (
-  <div data-testid="sidebar">
-    <button data-testid="sidebar-jobs" onClick={() => props.setActiveTab?.("jobs")}>Jobs</button>
-    <button data-testid="sidebar-profile" onClick={() => props.setActiveTab?.("profile")}>Profile</button>
-  </div>
-)}));
+vi.mock("../../components/Sidebar", () => ({
+  default: (props) => (
+    <div data-testid="sidebar">
+      <button type="button" data-testid="sidebar-jobs" onClick={() => props.setActiveTab?.("jobs")}>
+        Jobs
+      </button>
+      <button
+        type="button"
+        data-testid="sidebar-profile"
+        onClick={() => props.setActiveTab?.("profile")}
+      >
+        Profile
+      </button>
+    </div>
+  ),
+}));
 let mockChatHubOnMicClick = null;
-vi.mock("../../components/ChatHub", () => ({ default: (props) => (
-  <div data-testid="chat-hub">
-    <div data-testid="chat-feed">
-      {(props.chats || []).map((chat) => (
-        <div key={chat.id} data-testid={`chat-message-${chat.id}`}>
-          {chat.content}
-        </div>
-      ))}
-      {(props.quickActions || []).map((question) => (
-        <button key={question} data-testid="chat-suggestion" onClick={() => props.onSuggestionClick?.(question)}>
-          {question}
+vi.mock("../../components/ChatHub", () => ({
+  default: (props) => (
+    <div data-testid="chat-hub">
+      <div data-testid="chat-feed">
+        {(props.chats || []).map((chat) => (
+          <div key={chat.id} data-testid={`chat-message-${chat.id}`}>
+            {chat.content}
+          </div>
+        ))}
+        {(props.quickActions || []).map((question) => (
+          <button
+            type="button"
+            key={question}
+            data-testid="chat-suggestion"
+            onClick={() => props.onSuggestionClick?.(question)}
+          >
+            {question}
+          </button>
+        ))}
+      </div>
+      <input
+        data-testid="chat-text-input"
+        value={props.inputValue || ""}
+        onChange={(e) => props.setInputValue?.(e.target.value)}
+      />
+      <button type="button" data-testid="chat-send-btn" onClick={(e) => props.onSend?.(e)}>
+        send
+      </button>
+      {props.onMicClick && (
+        <button type="button" data-testid="chat-mic-btn" onClick={props.onMicClick}>
+          Mic
         </button>
-      ))}
+      )}
     </div>
-    <input
-      data-testid="chat-text-input"
-      value={props.inputValue || ""}
-      onChange={(e) => props.setInputValue?.(e.target.value)}
-    />
-    <button data-testid="chat-send-btn" onClick={(e) => props.onSend?.(e)}>
-      send
-    </button>
-    {props.onMicClick && (
-      <button data-testid="chat-mic-btn" onClick={props.onMicClick}>
-        Mic
-      </button>
-    )}
-  </div>
-)}));
+  ),
+}));
 let mockVoiceIntakeCompletionResult = null;
-vi.mock("../../components/LivingProfile", () => ({ __esModule: true, default: (props) => {
-  lastLivingProfileProps = props;
-  return (
-    <div data-testid="living-profile" data-candidate-id={props.userProfile?.candidate_id || ""}>
-      <button data-testid="refresh-profile-btn" onClick={() => props.onPhotoChange("new-photo-url")}>
-        Refresh profile
-      </button>
-    </div>
-  );
-}, JobsTab: () => <div data-testid="jobs-deck" /> }));
-vi.mock("../../components/SwipeJobCard", () => ({ default: () => <div data-testid="jobs-deck" /> }));
+vi.mock("../../components/LivingProfile", () => ({
+  __esModule: true,
+  default: (props) => {
+    lastLivingProfileProps = props;
+    return (
+      <div data-testid="living-profile" data-candidate-id={props.userProfile?.candidate_id || ""}>
+        <button
+          type="button"
+          data-testid="refresh-profile-btn"
+          onClick={() => props.onPhotoChange("new-photo-url")}
+        >
+          Refresh profile
+        </button>
+      </div>
+    );
+  },
+  JobsTab: () => <div data-testid="jobs-deck" />,
+}));
+vi.mock("../../components/SwipeJobCard", () => ({
+  default: () => <div data-testid="jobs-deck" />,
+}));
 let capturedVoiceIntakeCandidateProfile = null;
-vi.mock("../../components/onboarding/VoiceIntake", () => ({ default: (props) => {
-  mockVoiceIntakeOnComplete = props.onComplete;
-  capturedVoiceIntakeCandidateProfile = props.candidateProfile;
-  return <div data-testid="voice-intake" />;
-}}));
+vi.mock("../../components/onboarding/VoiceIntake", () => ({
+  default: (props) => {
+    mockVoiceIntakeOnComplete = props.onComplete;
+    capturedVoiceIntakeCandidateProfile = props.candidateProfile;
+    return <div data-testid="voice-intake" />;
+  },
+}));
 vi.mock("react-resizable-panels", () => ({
   PanelGroup: ({ children }) => <div>{children}</div>,
   Panel: ({ children }) => <div>{children}</div>,
@@ -117,8 +159,13 @@ function makeProfile(overrides = {}) {
     },
     ...overrides,
   };
-  if (profile.voice_intake_resume?.status === "in_progress" && profile.voice_intake_resume.current_question) {
-    profile.missing_questions = [{ question: profile.voice_intake_resume.current_question, status: "OPEN" }];
+  if (
+    profile.voice_intake_resume?.status === "in_progress" &&
+    profile.voice_intake_resume.current_question
+  ) {
+    profile.missing_questions = [
+      { question: profile.voice_intake_resume.current_question, status: "OPEN" },
+    ];
   }
   return profile;
 }
@@ -163,7 +210,9 @@ function renderDashboard() {
 
 async function waitForSelector(container, selector) {
   for (let i = 0; i < 20; i += 1) {
-    await act(async () => { await Promise.resolve(); });
+    await act(async () => {
+      await Promise.resolve();
+    });
     const node = container.querySelector(selector);
     if (node) return node;
   }
@@ -172,7 +221,9 @@ async function waitForSelector(container, selector) {
 
 async function waitForCondition(predicate) {
   for (let i = 0; i < 20; i += 1) {
-    await act(async () => { await Promise.resolve(); });
+    await act(async () => {
+      await Promise.resolve();
+    });
     if (predicate()) return true;
   }
   throw new Error("Timed out waiting for condition");
@@ -181,17 +232,23 @@ async function waitForCondition(predicate) {
 async function mountVoiceIntakeFromChat(container) {
   const jobsSidebar = container.querySelector('[data-testid="sidebar-jobs"]');
   if (jobsSidebar) {
-    act(() => { jobsSidebar.click(); });
+    act(() => {
+      jobsSidebar.click();
+    });
   }
   const chatTab = container.querySelector('[data-testid="chat-tab"]');
   if (chatTab) {
-    act(() => { chatTab.click(); });
+    act(() => {
+      chatTab.click();
+    });
   }
   const chatHub = await waitForSelector(container, '[data-testid="chat-hub"]');
   expect(chatHub).toBeTruthy();
   const mic = container.querySelector('[data-testid="chat-mic-btn"]');
   expect(mic).toBeTruthy();
-  act(() => { mic.click(); });
+  act(() => {
+    mic.click();
+  });
   await waitForSelector(container, '[data-testid="voice-intake"]');
   expect(mockVoiceIntakeOnComplete).toEqual(expect.any(Function));
 }
@@ -327,7 +384,12 @@ describe("Dashboard voice intake routing", () => {
       makeProfile({
         strengthPercent: 62,
         profile_strength_percent: 62,
-        voice_intake_resume: { status: "completed", has_open_question: false, current_question: "", next_question: "" },
+        voice_intake_resume: {
+          status: "completed",
+          has_open_question: false,
+          current_question: "",
+          next_question: "",
+        },
       }),
       makeProfile({
         strengthPercent: 62,
@@ -361,7 +423,12 @@ describe("Dashboard voice intake routing", () => {
       makeProfile({
         strengthPercent: 62,
         profile_strength_percent: 62,
-        voice_intake_resume: { status: "completed", has_open_question: false, current_question: "", next_question: "" },
+        voice_intake_resume: {
+          status: "completed",
+          has_open_question: false,
+          current_question: "",
+          next_question: "",
+        },
       }),
       makeProfile({
         strengthPercent: 90,
@@ -418,18 +485,32 @@ describe("Dashboard voice intake routing", () => {
             description: "Led platform expansion.",
           },
         ],
-        voice_intake_resume: { status: "completed", has_open_question: false, current_question: "", next_question: "" },
+        voice_intake_resume: {
+          status: "completed",
+          has_open_question: false,
+          current_question: "",
+          next_question: "",
+        },
       }),
     ]);
 
     renderResult = renderDashboard();
     await waitForCondition(
-      () => Array.isArray(lastLivingProfileProps?.userProfile?.keySkills) &&
-        lastLivingProfileProps.userProfile.keySkills.length > 0
+      () =>
+        Array.isArray(lastLivingProfileProps?.userProfile?.keySkills) &&
+        lastLivingProfileProps.userProfile.keySkills.length > 0,
     );
-    expect(lastLivingProfileProps.userProfile.keySkills).toEqual(["Product", "Strategy", "Leadership"]);
-    expect(lastLivingProfileProps.userProfile.certifications).toEqual(["AWS Certified Solutions Architect - Associate"]);
-    expect(lastLivingProfileProps.userProfile.experience.map((exp) => exp.company)).toEqual(["VoiceCo"]);
+    expect(lastLivingProfileProps.userProfile.keySkills).toEqual([
+      "Product",
+      "Strategy",
+      "Leadership",
+    ]);
+    expect(lastLivingProfileProps.userProfile.certifications).toEqual([
+      "AWS Certified Solutions Architect - Associate",
+    ]);
+    expect(lastLivingProfileProps.userProfile.experience.map((exp) => exp.company)).toEqual([
+      "VoiceCo",
+    ]);
   });
 });
 
@@ -442,7 +523,12 @@ describe("Voice Intake completion/routing regression tests", () => {
     lastLivingProfileProps = null;
     mockVoiceIntakeOnComplete = null;
     mockChatHubOnMicClick = null;
-    saveOnboardingState({ candidateId: "cand-123", voiceIntakeCompleted: false, isOpenToMatches: true, activeTab: "jobs" });
+    saveOnboardingState({
+      candidateId: "cand-123",
+      voiceIntakeCompleted: false,
+      isOpenToMatches: true,
+      activeTab: "jobs",
+    });
   });
 
   afterEach(() => {
@@ -476,7 +562,11 @@ describe("Voice Intake completion/routing regression tests", () => {
 
   it("backend returns completed while voice_intake_resume says in_progress → Jobs for you", async () => {
     // First profile call returns in_progress, second (after refresh) returns completed
-    saveOnboardingState({ candidateId: "cand-123", voiceIntakeCompleted: false, activeTab: "jobs" });
+    saveOnboardingState({
+      candidateId: "cand-123",
+      voiceIntakeCompleted: false,
+      activeTab: "jobs",
+    });
     mockDashboardRequests([
       makeProfile({
         voice_intake_resume: {
@@ -503,7 +593,9 @@ describe("Voice Intake completion/routing regression tests", () => {
 
     // Trigger refresh (simulates VoiceIntake onComplete calling refreshProfile)
     const refreshBtn = renderResult.container.querySelector('[data-testid="refresh-profile-btn"]');
-    act(() => { refreshBtn.click(); });
+    act(() => {
+      refreshBtn.click();
+    });
 
     // After refresh with completed status → Jobs for you
     expect(await waitForSelector(renderResult.container, '[data-testid="jobs-deck"]')).toBeTruthy();
@@ -531,7 +623,11 @@ describe("Voice Intake completion/routing regression tests", () => {
   });
 
   it("completed Voice Intake onComplete → refreshProfile → Jobs for you (never bypasses via local status)", async () => {
-    saveOnboardingState({ candidateId: "cand-123", voiceIntakeCompleted: false, activeTab: "jobs" });
+    saveOnboardingState({
+      candidateId: "cand-123",
+      voiceIntakeCompleted: false,
+      activeTab: "jobs",
+    });
     mockDashboardRequests([
       makeProfile({ voice_intake_resume: inProgressResume }),
       makeProfile({
@@ -631,7 +727,12 @@ describe("Voice Intake completion/routing regression tests", () => {
         strengthPercent: 60,
         profile_strength_percent: 60,
         profile_strength_label: "Developing",
-        voice_intake_resume: { status: "completed", has_open_question: false, current_question: "", next_question: "" },
+        voice_intake_resume: {
+          status: "completed",
+          has_open_question: false,
+          current_question: "",
+          next_question: "",
+        },
       }),
       makeProfile({
         strengthPercent: 60,
@@ -648,7 +749,10 @@ describe("Voice Intake completion/routing regression tests", () => {
       jest.advanceTimersByTime(900);
     });
 
-    const popupChatBtn = await waitForSelector(renderResult.container, '[data-testid="weak-profile-chat-btn"]');
+    const popupChatBtn = await waitForSelector(
+      renderResult.container,
+      '[data-testid="weak-profile-chat-btn"]',
+    );
     act(() => {
       popupChatBtn.click();
     });
@@ -667,7 +771,9 @@ describe("Voice Intake completion/routing regression tests", () => {
 
     await waitForSelector(renderResult.container, '[data-testid="voice-intake"]');
     expect(capturedVoiceIntakeCandidateProfile?.voice_intake_resume?.status).toBe("in_progress");
-    expect(capturedVoiceIntakeCandidateProfile?.voice_intake_resume?.current_question).toBe(currentQuestion);
+    expect(capturedVoiceIntakeCandidateProfile?.voice_intake_resume?.current_question).toBe(
+      currentQuestion,
+    );
     jest.useRealTimers();
   });
 
@@ -690,7 +796,12 @@ describe("Voice Intake completion/routing regression tests", () => {
         strengthPercent: 60,
         profile_strength_percent: 60,
         profile_strength_label: "Developing",
-        voice_intake_resume: { status: "completed", has_open_question: false, current_question: "", next_question: "" },
+        voice_intake_resume: {
+          status: "completed",
+          has_open_question: false,
+          current_question: "",
+          next_question: "",
+        },
       }),
       makeProfile({
         strengthPercent: 60,
@@ -707,7 +818,10 @@ describe("Voice Intake completion/routing regression tests", () => {
       jest.advanceTimersByTime(900);
     });
 
-    const dismissBtn = await waitForSelector(renderResult.container, '[data-testid="weak-profile-dismiss-btn"]');
+    const dismissBtn = await waitForSelector(
+      renderResult.container,
+      '[data-testid="weak-profile-dismiss-btn"]',
+    );
     act(() => {
       dismissBtn.click();
     });
@@ -724,7 +838,9 @@ describe("Voice Intake completion/routing regression tests", () => {
     expect(await waitForSelector(renderResult.container, '[data-testid="chat-hub"]')).toBeTruthy();
     await mountVoiceIntakeFromChat(renderResult.container);
     expect(capturedVoiceIntakeCandidateProfile?.voice_intake_resume?.status).toBe("in_progress");
-    expect(capturedVoiceIntakeCandidateProfile?.voice_intake_resume?.current_question).toBe(currentQuestion);
+    expect(capturedVoiceIntakeCandidateProfile?.voice_intake_resume?.current_question).toBe(
+      currentQuestion,
+    );
     jest.useRealTimers();
   });
 
@@ -893,7 +1009,9 @@ describe("Dashboard mic button — voice intake from chat panel", () => {
       renderResult.container.querySelector('[data-testid="chat-mic-btn"]').click();
     });
 
-    expect(await waitForSelector(renderResult.container, '[data-testid="voice-intake"]')).toBeTruthy();
+    expect(
+      await waitForSelector(renderResult.container, '[data-testid="voice-intake"]'),
+    ).toBeTruthy();
     expect(renderResult.container.querySelector('[data-testid="chat-hub"]')).toBeNull();
     expect(renderResult.container.querySelector('[data-testid="jobs-deck"]')).toBeNull();
   });
@@ -923,7 +1041,10 @@ describe("Dashboard mic button — voice intake from chat panel", () => {
     await mountVoiceIntakeFromChat(renderResult.container);
 
     await act(async () => {
-      mockVoiceIntakeOnComplete?.({ status: "completed", profile: { bio: "Updated bio from voice" } });
+      mockVoiceIntakeOnComplete?.({
+        status: "completed",
+        profile: { bio: "Updated bio from voice" },
+      });
       await Promise.resolve();
     });
 
@@ -965,12 +1086,14 @@ describe("Dashboard mic button — voice intake from chat panel", () => {
       await Promise.resolve();
     });
 
-    act(() => { renderResult.container.querySelector('[data-testid="sidebar-profile"]').click(); });
+    act(() => {
+      renderResult.container.querySelector('[data-testid="sidebar-profile"]').click();
+    });
 
     await waitForCondition(
       () =>
         Array.isArray(lastLivingProfileProps?.userProfile?.keySkills) &&
-        lastLivingProfileProps.userProfile.keySkills.length >= 3
+        lastLivingProfileProps.userProfile.keySkills.length >= 3,
     );
     expect(lastLivingProfileProps.userProfile.keySkills).toContain("Leadership");
   });
@@ -1043,7 +1166,9 @@ describe("Dashboard mic button — voice intake from chat panel", () => {
       await Promise.resolve();
     });
 
-    act(() => { renderResult.container.querySelector('[data-testid="sidebar-profile"]').click(); });
+    act(() => {
+      renderResult.container.querySelector('[data-testid="sidebar-profile"]').click();
+    });
 
     expect(await waitForSelector(renderResult.container, '[data-testid="chat-hub"]')).toBeTruthy();
     expect(renderResult.container.querySelector('[data-testid="voice-intake"]')).toBeNull();
@@ -1131,10 +1256,12 @@ describe("Mic button always visible in Chat with Eve", () => {
     // Wait for profile to load (jobs-deck is the default view for completed intake)
     await waitForSelector(renderResult.container, '[data-testid="jobs-deck"]');
 
-    const chatBtn = Array.from(renderResult.container.querySelectorAll("button")).find(
-      (b) => b.textContent?.includes("Chat with Eve")
+    const chatBtn = Array.from(renderResult.container.querySelectorAll("button")).find((b) =>
+      b.textContent?.includes("Chat with Eve"),
     );
-    act(() => { chatBtn.click(); });
+    act(() => {
+      chatBtn.click();
+    });
 
     await waitForSelector(renderResult.container, '[data-testid="chat-hub"]');
     expect(renderResult.container.querySelector('[data-testid="chat-mic-btn"]')).toBeTruthy();
@@ -1167,10 +1294,12 @@ describe("Mic button always visible in Chat with Eve", () => {
 
     await waitForSelector(renderResult.container, '[data-testid="jobs-deck"]');
 
-    const chatBtn = Array.from(renderResult.container.querySelectorAll("button")).find(
-      (b) => b.textContent?.includes("Chat with Eve")
+    const chatBtn = Array.from(renderResult.container.querySelectorAll("button")).find((b) =>
+      b.textContent?.includes("Chat with Eve"),
     );
-    act(() => { chatBtn.click(); });
+    act(() => {
+      chatBtn.click();
+    });
 
     await waitForSelector(renderResult.container, '[data-testid="chat-hub"]');
     expect(renderResult.container.querySelector('[data-testid="chat-mic-btn"]')).toBeTruthy();
@@ -1191,10 +1320,12 @@ describe("Mic button always visible in Chat with Eve", () => {
 
     await waitForSelector(renderResult.container, '[data-testid="jobs-deck"]');
 
-    const chatBtn = Array.from(renderResult.container.querySelectorAll("button")).find(
-      (b) => b.textContent?.includes("Chat with Eve")
+    const chatBtn = Array.from(renderResult.container.querySelectorAll("button")).find((b) =>
+      b.textContent?.includes("Chat with Eve"),
     );
-    act(() => { chatBtn.click(); });
+    act(() => {
+      chatBtn.click();
+    });
 
     await waitForSelector(renderResult.container, '[data-testid="chat-hub"]');
 
@@ -1235,9 +1366,7 @@ describe("Dashboard mic — returning candidate behavior", () => {
       has_open_question: false,
       current_question: "",
       next_question: "",
-      completed_turns: [
-        { question: "Tell me about yourself.", answer: "I build APIs." },
-      ],
+      completed_turns: [{ question: "Tell me about yourself.", answer: "I build APIs." }],
       known_topics: ["background_experience", "skills_technologies"],
       missing_topics: [],
     };
@@ -1251,10 +1380,12 @@ describe("Dashboard mic — returning candidate behavior", () => {
     await waitForSelector(renderResult.container, '[data-testid="jobs-deck"]');
 
     // Navigate to Chat with Eve
-    const chatBtn = Array.from(renderResult.container.querySelectorAll("button")).find(
-      (b) => b.textContent?.includes("Chat with Eve")
+    const chatBtn = Array.from(renderResult.container.querySelectorAll("button")).find((b) =>
+      b.textContent?.includes("Chat with Eve"),
     );
-    act(() => { chatBtn.click(); });
+    act(() => {
+      chatBtn.click();
+    });
     await waitForSelector(renderResult.container, '[data-testid="chat-hub"]');
 
     // Click mic
@@ -1289,10 +1420,12 @@ describe("Dashboard mic — returning candidate behavior", () => {
     renderResult = renderDashboard();
 
     await waitForSelector(renderResult.container, '[data-testid="jobs-deck"]');
-    const chatBtn = Array.from(renderResult.container.querySelectorAll("button")).find(
-      (b) => b.textContent?.includes("Chat with Eve")
+    const chatBtn = Array.from(renderResult.container.querySelectorAll("button")).find((b) =>
+      b.textContent?.includes("Chat with Eve"),
     );
-    act(() => { chatBtn.click(); });
+    act(() => {
+      chatBtn.click();
+    });
     await waitForSelector(renderResult.container, '[data-testid="chat-hub"]');
 
     capturedVoiceIntakeCandidateProfile = null;
@@ -1350,9 +1483,7 @@ describe("Dashboard mic — returning candidate behavior", () => {
       has_open_question: true,
       current_question: "What is your availability?",
       next_question: "",
-      completed_turns: [
-        { question: "Tell me about yourself.", answer: "I am a developer." },
-      ],
+      completed_turns: [{ question: "Tell me about yourself.", answer: "I am a developer." }],
       known_topics: ["background_experience"],
       missing_topics: ["availability_location"],
     };
@@ -1373,7 +1504,7 @@ describe("Dashboard mic — returning candidate behavior", () => {
 
     // current_question must not be empty — a non-empty value means VAPI will resume, not restart
     expect(capturedVoiceIntakeCandidateProfile?.voice_intake_resume?.current_question).toBe(
-      "What is your availability?"
+      "What is your availability?",
     );
     expect(capturedVoiceIntakeCandidateProfile?.voice_intake_resume?.current_question).not.toBe("");
   });
@@ -1404,7 +1535,12 @@ describe("Maybe Later → Chat with Eve regression tests", () => {
       makeProfile({
         profile_strength_percent: 90,
         profile_strength_label: "Developing",
-        voice_intake_resume: { status: "completed", has_open_question: false, current_question: "", next_question: "" },
+        voice_intake_resume: {
+          status: "completed",
+          has_open_question: false,
+          current_question: "",
+          next_question: "",
+        },
       }),
     ]);
     renderResult = renderDashboard();
@@ -1412,7 +1548,9 @@ describe("Maybe Later → Chat with Eve regression tests", () => {
     await waitForSelector(renderResult.container, '[data-testid="jobs-deck"]');
 
     // Navigate to Chat with Eve tab
-    act(() => { renderResult.container.querySelector('[data-testid="chat-tab"]').click(); });
+    act(() => {
+      renderResult.container.querySelector('[data-testid="chat-tab"]').click();
+    });
 
     // Must show ChatHub — never VoiceIntake
     expect(await waitForSelector(renderResult.container, '[data-testid="chat-hub"]')).toBeTruthy();
@@ -1425,18 +1563,30 @@ describe("Maybe Later → Chat with Eve regression tests", () => {
       makeProfile({
         profile_strength_percent: 90,
         profile_strength_label: "Developing",
-        voice_intake_resume: { status: "completed", has_open_question: false, current_question: "", next_question: "" },
+        voice_intake_resume: {
+          status: "completed",
+          has_open_question: false,
+          current_question: "",
+          next_question: "",
+        },
       }),
       makeProfile({
         profile_strength_percent: 90,
         profile_strength_label: "Developing",
-        voice_intake_resume: { status: "completed", has_open_question: false, current_question: "", next_question: "" },
+        voice_intake_resume: {
+          status: "completed",
+          has_open_question: false,
+          current_question: "",
+          next_question: "",
+        },
       }),
     ]);
     renderResult = renderDashboard();
 
     await waitForSelector(renderResult.container, '[data-testid="jobs-deck"]');
-    act(() => { renderResult.container.querySelector('[data-testid="chat-tab"]').click(); });
+    act(() => {
+      renderResult.container.querySelector('[data-testid="chat-tab"]').click();
+    });
 
     await waitForSelector(renderResult.container, '[data-testid="chat-hub"]');
     expect(renderResult.container.querySelector('[data-testid="chat-mic-btn"]')).toBeTruthy();
@@ -1447,18 +1597,30 @@ describe("Maybe Later → Chat with Eve regression tests", () => {
       makeProfile({
         profile_strength_percent: 90,
         profile_strength_label: "Developing",
-        voice_intake_resume: { status: "completed", has_open_question: false, current_question: "", next_question: "" },
+        voice_intake_resume: {
+          status: "completed",
+          has_open_question: false,
+          current_question: "",
+          next_question: "",
+        },
       }),
       makeProfile({
         profile_strength_percent: 90,
         profile_strength_label: "Developing",
-        voice_intake_resume: { status: "completed", has_open_question: false, current_question: "", next_question: "" },
+        voice_intake_resume: {
+          status: "completed",
+          has_open_question: false,
+          current_question: "",
+          next_question: "",
+        },
       }),
     ]);
     renderResult = renderDashboard();
 
     await waitForSelector(renderResult.container, '[data-testid="jobs-deck"]');
-    act(() => { renderResult.container.querySelector('[data-testid="chat-tab"]').click(); });
+    act(() => {
+      renderResult.container.querySelector('[data-testid="chat-tab"]').click();
+    });
 
     await waitForSelector(renderResult.container, '[data-testid="chat-hub"]');
 
@@ -1467,7 +1629,9 @@ describe("Maybe Later → Chat with Eve regression tests", () => {
       renderResult.container.querySelector('[data-testid="chat-mic-btn"]').click();
     });
 
-    expect(await waitForSelector(renderResult.container, '[data-testid="voice-intake"]')).toBeTruthy();
+    expect(
+      await waitForSelector(renderResult.container, '[data-testid="voice-intake"]'),
+    ).toBeTruthy();
     expect(renderResult.container.querySelector('[data-testid="chat-hub"]')).toBeNull();
   });
 
@@ -1477,13 +1641,23 @@ describe("Maybe Later → Chat with Eve regression tests", () => {
         profile_strength_percent: 90,
         profile_strength_label: "Developing",
         keySkills: ["JavaScript"],
-        voice_intake_resume: { status: "completed", has_open_question: false, current_question: "", next_question: "" },
+        voice_intake_resume: {
+          status: "completed",
+          has_open_question: false,
+          current_question: "",
+          next_question: "",
+        },
       }),
       makeProfile({
         profile_strength_percent: 90,
         profile_strength_label: "Developing",
         keySkills: ["JavaScript"],
-        voice_intake_resume: { status: "completed", has_open_question: false, current_question: "", next_question: "" },
+        voice_intake_resume: {
+          status: "completed",
+          has_open_question: false,
+          current_question: "",
+          next_question: "",
+        },
       }),
       makeProfile({
         profile_strength_percent: 90,
@@ -1501,7 +1675,9 @@ describe("Maybe Later → Chat with Eve regression tests", () => {
     renderResult = renderDashboard();
 
     await waitForSelector(renderResult.container, '[data-testid="jobs-deck"]');
-    act(() => { renderResult.container.querySelector('[data-testid="chat-tab"]').click(); });
+    act(() => {
+      renderResult.container.querySelector('[data-testid="chat-tab"]').click();
+    });
 
     await waitForSelector(renderResult.container, '[data-testid="chat-hub"]');
     act(() => {
@@ -1521,13 +1697,15 @@ describe("Maybe Later → Chat with Eve regression tests", () => {
       await Promise.resolve();
     });
 
-    act(() => { renderResult.container.querySelector('[data-testid="sidebar-profile"]').click(); });
+    act(() => {
+      renderResult.container.querySelector('[data-testid="sidebar-profile"]').click();
+    });
 
     // Profile section must reflect the new data from voice intake
     await waitForCondition(
       () =>
         Array.isArray(lastLivingProfileProps?.userProfile?.keySkills) &&
-        lastLivingProfileProps.userProfile.keySkills.length >= 3
+        lastLivingProfileProps.userProfile.keySkills.length >= 3,
     );
     expect(lastLivingProfileProps.userProfile.keySkills).toContain("React");
     expect(lastLivingProfileProps.userProfile.keySkills).toContain("Node.js");
@@ -1539,24 +1717,38 @@ describe("Maybe Later → Chat with Eve regression tests", () => {
       makeProfile({
         profile_strength_percent: 90,
         profile_strength_label: "Developing",
-        voice_intake_resume: { status: "completed", has_open_question: false, current_question: "", next_question: "" },
+        voice_intake_resume: {
+          status: "completed",
+          has_open_question: false,
+          current_question: "",
+          next_question: "",
+        },
       }),
       makeProfile({
         profile_strength_percent: 90,
         profile_strength_label: "Developing",
-        voice_intake_resume: { status: "completed", has_open_question: false, current_question: "", next_question: "" },
+        voice_intake_resume: {
+          status: "completed",
+          has_open_question: false,
+          current_question: "",
+          next_question: "",
+        },
       }),
     ]);
     renderResult = renderDashboard();
 
     await waitForSelector(renderResult.container, '[data-testid="jobs-deck"]');
-    act(() => { renderResult.container.querySelector('[data-testid="chat-tab"]').click(); });
+    act(() => {
+      renderResult.container.querySelector('[data-testid="chat-tab"]').click();
+    });
 
     await waitForSelector(renderResult.container, '[data-testid="chat-hub"]');
 
     // Simulate a profile refresh
     const refreshBtn = renderResult.container.querySelector('[data-testid="refresh-profile-btn"]');
-    act(() => { refreshBtn.click(); });
+    act(() => {
+      refreshBtn.click();
+    });
     await flush();
 
     // Must still show ChatHub — not voice-intake, not jobs-deck
@@ -1565,6 +1757,8 @@ describe("Maybe Later → Chat with Eve regression tests", () => {
   });
 
   async function flush() {
-    await act(async () => { await Promise.resolve(); });
+    await act(async () => {
+      await Promise.resolve();
+    });
   }
 });
