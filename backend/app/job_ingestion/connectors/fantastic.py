@@ -23,7 +23,7 @@ class FantasticConfig:
     limit: int = 25
     max_pages: int = 1
     max_jobs_per_run: int = 25
-    max_requests_per_run: int = 1
+    max_requests_per_run: int = 2
     timeout: float = 20.0
 
     @classmethod
@@ -44,7 +44,7 @@ class FantasticConfig:
             limit=integer("FANTASTIC_LIMIT", 25),
             max_pages=integer("FANTASTIC_MAX_PAGES", 1),
             max_jobs_per_run=integer("FANTASTIC_MAX_JOBS_PER_RUN", 25),
-            max_requests_per_run=integer("FANTASTIC_MAX_REQUESTS_PER_RUN", 1),
+            max_requests_per_run=integer("FANTASTIC_MAX_REQUESTS_PER_RUN", 2),
             timeout=timeout,
         )
 
@@ -93,7 +93,11 @@ class FantasticClient:
                     "limit": min(self.config.limit, remaining),
                     "offset": page * self.config.limit,
                     "description_format": "text",
-                    "location": "India",
+                    "location": '"India" OR '
+                                '"United States" OR '
+                                '"Canada" OR '
+                                '"United Kingdom" OR '
+                                '"Germany"',
                 }
                 logger.info(
                     "[fantastic] requesting %s page=%d request=%d",

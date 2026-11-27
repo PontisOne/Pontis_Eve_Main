@@ -5,6 +5,7 @@ import axios from "axios";
 import {
   buildVoiceIntakeAssistantOverrides,
   canPersistVoiceProgress,
+  isSuccessfulVoiceIntakeResponse,
   resolveVoiceIntakeCandidateId,
 } from "../VoiceIntake";
 import VoiceIntake from "../VoiceIntake";
@@ -98,6 +99,13 @@ describe("VoiceIntake transcript visibility", () => {
 });
 
 describe("VoiceIntake completion boundary", () => {
+  it("accepts both completed and successfully saved partial responses", () => {
+    expect(isSuccessfulVoiceIntakeResponse("completed")).toBe(true);
+    expect(isSuccessfulVoiceIntakeResponse("in_progress")).toBe(true);
+    expect(isSuccessfulVoiceIntakeResponse("error")).toBe(false);
+    expect(isSuccessfulVoiceIntakeResponse(undefined)).toBe(false);
+  });
+
   it("starts the VAPI call without completing onboarding", () => {
     mockCallState = "idle";
     const onComplete = vi.fn();

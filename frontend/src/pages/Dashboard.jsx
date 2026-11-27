@@ -1146,6 +1146,27 @@ function Dashboard() {
         >
           {activeSidebarTab === "profile" ? (
             <div className="h-full flex flex-col bg-[#FBFBF9] min-h-0">
+              {voiceIntakeInProgress && (
+                <div className="shrink-0 flex items-center justify-between gap-3 px-4 py-3 border-b border-black/[0.05] bg-[#FFF7E6]">
+                  <p className="text-[12.5px] text-[#8A5A12]">
+                    Your voice intake is saved and ready to continue.
+                  </p>
+                  <button
+                    type="button"
+                    data-testid="resume-voice-intake"
+                    onClick={async () => {
+                      userChoseCenterViewRef.current = true;
+                      const fresh = await refreshProfile();
+                      setRightPanelTab("profile");
+                      setVoiceIntakeProfile(fresh);
+                      setCenterView("voice");
+                    }}
+                    className="shrink-0 rounded-full bg-[#1F1F1F] px-3 py-1.5 text-[12px] font-medium text-white hover:bg-black"
+                  >
+                    Resume voice intake
+                  </button>
+                </div>
+              )}
               <ChatHub
                 chats={chats}
                 inputValue={inputValue}

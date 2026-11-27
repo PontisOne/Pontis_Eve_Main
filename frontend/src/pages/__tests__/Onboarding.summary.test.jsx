@@ -252,6 +252,7 @@ describe("post-Voice-Intake navigation flow", () => {
     act(() => { root.render(<Onboarding />); });
     const summary = await waitForElement(container, '[data-testid="onboarding-step-5"]');
     expect(summary).toBeTruthy();
+    expect(container.querySelector('[data-testid="voice-intake-partial-banner"]')).toBeTruthy();
     expect(mockNavigate).not.toHaveBeenCalledWith("/dashboard", expect.anything());
     act(() => { root.unmount(); }); container.remove();
   });
@@ -465,7 +466,7 @@ describe("buildSummary", () => {
 
     expect(summary.find((item) => item.label === "Current role")?.value).toBe("Python Developer at Viral Bug");
     expect(summary.find((item) => item.label === "Skills")?.value).toBe("Python, FastAPI");
-    expect(summary.find((item) => item.label === "Certifications")).toBeUndefined();
+    expect(summary.find((item) => item.label === "Certifications")?.value).toBe("Resume Certification");
     expect(summary.find((item) => item.label === "Summary")?.value).toBe(
       "Python Developer at Viral Bug I build APIs for the payments platform. Looking for Backend Developer."
     );

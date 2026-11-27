@@ -622,9 +622,10 @@ export function buildSummary(profile = {}) {
     current?.company,
   );
   const roleAndCompany = [role, company].filter(Boolean).join(" at ");
-  const responsibilities = hasVoiceSource
-    ? currentWorkSummary(voice).trim()
-    : currentWorkSummary(profile);
+  const responsibilities = firstNonEmpty(
+    hasVoiceSource ? currentWorkSummary(voice).trim() : "",
+    currentWorkSummary(profile),
+  );
   const lookingFor = listValue(
     voice.preferred_roles?.length ? voice.preferred_roles : voice.raw_data?.preferred_roles?.length
       ? voice.raw_data.preferred_roles
@@ -638,7 +639,7 @@ export function buildSummary(profile = {}) {
   const certifications = listValue(
     voice.certifications?.length ? voice.certifications : voice.raw_data?.certifications?.length
       ? voice.raw_data.certifications
-      : hasVoiceSource ? [] : (profile.certifications || profile.raw_data?.certifications),
+      : (profile.certifications || profile.raw_data?.certifications),
   );
   const additionalInformation = firstNonEmpty(
     voice.additional_information,
@@ -697,7 +698,7 @@ function StepBridge({ profile, voiceIntakeCompleted }) {
         this later.
       </p>
 
-      {voiceIntakeCompleted && (
+      {voiceIntakeCompleted ? (
         <div
           className="flex items-center gap-2 bg-[#E7F2E4] rounded-xl px-4 py-3 mb-6"
           data-testid="voice-intake-complete-banner"
@@ -705,6 +706,16 @@ function StepBridge({ profile, voiceIntakeCompleted }) {
           <span className="w-2 h-2 rounded-full bg-[#2E7538] shrink-0" />
           <p className="text-[12.5px] text-[#2E7538] font-medium">
             Voice intake complete — your profile has been updated.
+          </p>
+        </div>
+      ) : (
+        <div
+          className="flex items-center gap-2 bg-[#FFF7E6] rounded-xl px-4 py-3 mb-6"
+          data-testid="voice-intake-partial-banner"
+        >
+          <span className="w-2 h-2 rounded-full bg-[#B7791F] shrink-0" />
+          <p className="text-[12.5px] text-[#8A5A12] font-medium">
+            You can continue your voice intake later from the dashboard.
           </p>
         </div>
       )}

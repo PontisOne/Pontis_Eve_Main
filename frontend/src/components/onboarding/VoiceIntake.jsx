@@ -23,6 +23,10 @@ export function resolveVoiceIntakeCandidateId(candidateId, candidateProfile) {
   return candidateId || candidateProfile?.candidate_id || candidateProfile?.candidateId || candidateProfile?.id || "";
 }
 
+export function isSuccessfulVoiceIntakeResponse(status) {
+  return isVoiceIntakeCompleteStatus(status) || String(status || "").toLowerCase() === "in_progress";
+}
+
 export function canPersistVoiceProgress({ terminal, generation, currentGeneration }) {
   return !terminal && generation === currentGeneration;
 }
@@ -338,7 +342,7 @@ export default function VoiceIntake({ firstName, candidateId, onComplete, candid
         }, { headers: { "X-Request-ID": terminalRequestId } })
           .then((res) => {
             recordVoiceTiming({ response_at_ms: performance.now(), outcome: "success" });
-            if (isVoiceIntakeCompleteStatus(res.data?.status)) onComplete(res.data);
+            if (isSuccessfulVoiceIntakeResponse(res.data?.status)) onComplete(res.data);
             else { toast.info("Your intake is saved and can be resumed from here."); resetCall?.(); }
           })
           .catch(() => {
@@ -393,7 +397,7 @@ export default function VoiceIntake({ firstName, candidateId, onComplete, candid
       }, { headers: { "X-Request-ID": terminalRequestId } })
       .then((res) => {
         recordVoiceTiming({ response_at_ms: performance.now(), outcome: "success" });
-        if (isVoiceIntakeCompleteStatus(res.data?.status)) {
+        if (isSuccessfulVoiceIntakeResponse(res.data?.status)) {
           onComplete(res.data);
         } else {
           toast.info("Your intake is saved and can be resumed from here.");
