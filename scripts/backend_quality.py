@@ -15,6 +15,8 @@ BASELINE = BACKEND / "ruff-baseline.json"
 def tool_python() -> str:
     """Prefer the backend virtual environment for developer tools."""
     candidates = (
+        BACKEND / ".venv311" / "Scripts" / "python.exe",
+        BACKEND / ".venv311" / "bin" / "python",
         BACKEND / ".venv" / "Scripts" / "python.exe",
         BACKEND / ".venv" / "bin" / "python",
     )

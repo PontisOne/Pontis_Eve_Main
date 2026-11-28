@@ -10,6 +10,19 @@ from scripts import backend_quality
 
 
 class RuffBaselineTests(unittest.TestCase):
+    def test_tool_python_prefers_venv311(self):
+        with tempfile.TemporaryDirectory() as directory:
+            backend = Path(directory)
+            preferred = backend / ".venv311" / "Scripts" / "python.exe"
+            fallback = backend / ".venv" / "Scripts" / "python.exe"
+            preferred.parent.mkdir(parents=True)
+            fallback.parent.mkdir(parents=True)
+            preferred.touch()
+            fallback.touch()
+
+            with patch.object(backend_quality, "BACKEND", backend):
+                self.assertEqual(backend_quality.tool_python(), str(preferred))
+
     @patch.object(
         backend_quality,
         "subprocess",
