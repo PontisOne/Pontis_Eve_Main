@@ -46,7 +46,7 @@ from openai import RateLimitError as OpenAIRateLimitError
 from pydantic import BaseModel, Field
 from sqlalchemy import text
 from sqlalchemy.exc import IntegrityError
-from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+from app.database_config import create_async_database_runtime
 from starlette.middleware.cors import CORSMiddleware
 from starlette.requests import Request as StarletteRequest
 
@@ -99,13 +99,16 @@ except (
 ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / ".env")
 
-DATABASE_URL = os.environ["DATABASE_URL"]
-engine = create_async_engine(DATABASE_URL, pool_pre_ping=True)
-SessionLocal = async_sessionmaker(bind=engine, expire_on_commit=False)
+DATABASE_URL = os.environ.get("DATABASE_URL")
+_database_runtime = create_async_database_runtime(DATABASE_URL)
+engine = _database_runtime.engine
+SessionLocal = _database_runtime.session_local
+from app.runtime_dependencies import configure_database as _configure_runtime_database
 
 openai_client = GroqClientPool(base_url="https://api.groq.com/openai/v1")
 
 GROQ_MODEL = os.environ.get("GROQ_MODEL", "llama-3.3-70b-versatile")
+_configure_runtime_database(SessionLocal, engine)
 
 # Deployments should set EVE_DOCS_DIR to a mounted/persistent document volume.
 # Keep the development default outside the OS temporary directory as well: the
@@ -13267,6 +13270,7 @@ async def on_shutdown():
     from app.job_ingestion.scheduler import stop_scheduler
 
     stop_scheduler()
+    await engine.dispose()
 
 
 # ---------- Voice extraction prompt ----------
